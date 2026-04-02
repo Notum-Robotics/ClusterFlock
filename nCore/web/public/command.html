@@ -38,9 +38,6 @@
             <button class="cf-btn" id="btn-gc" data-flash data-lockout="2000">
                 <i class="ph ph-broom"></i> GC
             </button>
-            <button class="cf-btn" id="btn-toggle-access" data-flash>
-                <i class="ph ph-shield-check"></i> <span id="access-label">APPROVE</span>
-            </button>
         </div>
 
         <!-- Nodes -->
@@ -123,30 +120,12 @@
 
 <!-- HuggingFace Import Overlay -->
 <div class="cf-overlay" id="hf-overlay">
-    <div class="cf-overlay-panel" style="max-width:520px;">
+    <div class="cf-overlay-panel">
         <span class="corner corner-tl">⌜</span>
         <span class="corner corner-tr">⌝</span>
         <span class="corner corner-bl">⌞</span>
         <span class="corner corner-br">⌟</span>
         <div class="cf-overlay-title">IMPORT FROM HUGGINGFACE</div>
-
-        <!-- Device selector -->
-        <div class="cf-section-label" style="font-size:.55rem;margin:0;">TARGET DEVICE</div>
-        <select class="cf-select" id="hf-device" style="width:100%;">
-            <option value="">Select target device...</option>
-        </select>
-
-        <!-- Model list (populated when device selected) -->
-        <div id="hf-model-list" style="display:none;">
-            <div class="cf-section-label" style="font-size:.55rem;margin:0;">MODELS THAT FIT</div>
-            <div id="hf-model-items" style="max-height:240px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;"></div>
-        </div>
-
-        <!-- Divider -->
-        <div style="border-top:1px solid rgba(244,244,244,0.08);margin:4px 0;"></div>
-
-        <!-- Manual URL entry (always available) -->
-        <div class="cf-section-label" style="font-size:.55rem;margin:0;">MANUAL URL</div>
         <input class="cf-input" id="hf-url" placeholder="HuggingFace URL or org/model">
         <select class="cf-select" id="hf-agent" style="width:100%;">
             <option value="">Select target agent...</option>
@@ -372,7 +351,6 @@
                     var cls = ep.status === 'ready' ? 'ready' : ep.status === 'loading' ? 'loading' : ep.status === 'error' ? 'error' : '';
                     var tps = ep.tokens_per_sec ? Math.round(ep.tokens_per_sec) + ' t/s' : '';
                     html += '<span class="endpoint-tag ' + cls + '" data-action="unload" data-model="' + escHtml(ep.model) + '" data-flash style="cursor:pointer;">';
-                    if (ep.graylisted) html += '⚠️ ';
                     html += escHtml(ep.model || '?');
                     if (tps) html += ' <span class="ep-tps">' + tps + '</span>';
                     html += '</span>';
@@ -381,9 +359,12 @@
             }
 
             // GPU info (compact)
-            gpus.forEach(function(gpu) {
+            var gpuMetricsCompact = (n.metrics && n.metrics.gpu) || [];
+            gpus.forEach(function(gpu, i) {
                 var vt = gpu.vram_total_mb || gpu.vramTotal || 0;
-                var vu = gpu.vram_used_mb || gpu.vramUsed || 0;
+                var gm = gpuMetricsCompact[i];
+                var vf = gm && gm.vram_free_mb != null ? gm.vram_free_mb : (gpu.vram_free_mb != null ? gpu.vram_free_mb : vt);
+                var vu = vt - vf;
                 var pct = vt > 0 ? Math.round((vu / vt) * 100) : 0;
                 html += '<div class="metric-row">';
                 html += '<span class="metric-label">' + escHtml(gpu.name || gpu.device || 'GPU') + '</span>';
@@ -479,9 +460,12 @@
         var gpus = (node.hardware && node.hardware.gpu) || [];
         if (gpus.length) {
             html += '<div class="cf-section-label" style="font-size:.55rem;margin-top:8px;">GPUs</div>';
+            var gpuMetricsDetail = (node.metrics && node.metrics.gpu) || [];
             gpus.forEach(function(gpu, i) {
                 var vt = gpu.vram_total_mb || gpu.vramTotal || 0;
-                var vu = gpu.vram_used_mb || gpu.vramUsed || 0;
+                var gm = gpuMetricsDetail[i];
+                var vf = gm && gm.vram_free_mb != null ? gm.vram_free_mb : (gpu.vram_free_mb != null ? gpu.vram_free_mb : vt);
+                var vu = vt - vf;
                 var pct = vt > 0 ? Math.round((vu / vt) * 100) : 0;
                 var filled = Math.round(pct / 10);
                 html += '<div class="status-row"><span class="status-label">GPU ' + i + ': ' + escHtml(gpu.name || '?') + '</span><span class="status-val">' + fmtBytes(vu) + ' / ' + fmtBytes(vt) + '</span></div>';
@@ -492,8 +476,6 @@
                 html += '</div>';
 
                 // GPU utilization
-                var gpuMetrics = (node.metrics && node.metrics.gpu) || [];
-                var gm = gpuMetrics[i];
                 if (gm && gm.utilization_pct != null) {
                     var uFilled = Math.round(gm.utilization_pct / 10);
                     html += '<div class="metric-row" style="margin:0 0 4px;">';
@@ -555,46 +537,10 @@
             dlHtml += '<div class="cf-section-label" style="font-size:.55rem;">DOWNLOADED ON THIS NODE</div>';
             nodeDownloads.forEach(function(m) {
                 var sz = m.file_size ? fmtBytes(m.file_size / (1024*1024)) : '';
-                var mid = escHtml(m.id || m.name || '?');
-                dlHtml += '<div class="status-row" style="align-items:center;"><span class="status-label" style="font-size:.55rem;flex:1;">' + mid + '</span><span class="status-val" style="margin-right:6px;">' + sz + '</span>';
-                dlHtml += '<span class="cf-btn-del" data-del-model="' + mid + '" title="Delete model" style="cursor:pointer;color:#ff4444;font-size:.6rem;font-weight:700;padding:0 4px;opacity:.6;">✕</span>';
-                dlHtml += '</div>';
+                dlHtml += '<div class="status-row"><span class="status-label" style="font-size:.55rem;">' + escHtml(m.id || m.name || '?') + '</span><span class="status-val">' + sz + '</span></div>';
             });
         }
         document.getElementById('no-downloaded').innerHTML = dlHtml;
-
-        // Wire up delete buttons
-        document.querySelectorAll('.cf-btn-del[data-del-model]').forEach(function(btn) {
-            btn.addEventListener('click', function() {
-                var mid = this.getAttribute('data-del-model');
-                if (!confirm('Delete ' + mid + ' from ' + (node.hostname || nodeId) + '?')) return;
-                var self = this;
-                self.style.opacity = '0.3';
-                self.style.pointerEvents = 'none';
-                fetch(BASE + '/api/v1/nodes/' + encodeURIComponent(nodeId) + '/delete_model', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ model_id: mid })
-                })
-                .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
-                .then(function(res) {
-                    if (res.ok && res.data.ok) {
-                        toast('DELETED ' + mid + ' — freed ' + (res.data.freed_gb || 0) + ' GB', 'ok', 4000);
-                        var row = self.closest('.status-row');
-                        if (row) row.remove();
-                    } else {
-                        toast('DELETE FAILED: ' + (res.data.error || 'unknown'), 'error', 5000);
-                        self.style.opacity = '.6';
-                        self.style.pointerEvents = '';
-                    }
-                })
-                .catch(function() {
-                    toast('DELETE FAILED: connection error', 'error', 5000);
-                    self.style.opacity = '.6';
-                    self.style.pointerEvents = '';
-                });
-            });
-        });
 
         // Populate load-model dropdown with downloaded models
         var loadSel = document.getElementById('no-load-model');
@@ -637,10 +583,6 @@
     document.getElementById('an-btn-cancel').addEventListener('click', function() {
         closeOverlay('addnode-overlay');
     });
-    var hfCatalogCache = null;
-
-    function fmtGB(bytes) { return (bytes / 1073741824).toFixed(1); }
-
     document.getElementById('btn-hf-import').addEventListener('click', function() {
         // Populate agent dropdown
         var sel = document.getElementById('hf-agent');
@@ -654,98 +596,9 @@
         document.getElementById('hf-gpu').innerHTML = '<option value="">GPU: auto</option>';
         document.getElementById('hf-status').textContent = '';
         document.getElementById('hf-progress').style.display = 'none';
-
-        // Populate device selector with all GPUs across all nodes
-        var devSel = document.getElementById('hf-device');
-        devSel.innerHTML = '<option value="">Select target device...</option>';
-        nodesCache.forEach(function(n) {
-            if (n.status !== 'healthy') return;
-            var gpus = (n.hardware && n.hardware.gpu) || [];
-            var mgpus = (n.metrics && n.metrics.gpu) || [];
-            gpus.forEach(function(g, i) {
-                var mg = mgpus[i] || {};
-                var freeMB = mg.vram_free_mb || 0;
-                var totalMB = g.vram_total_mb || 0;
-                var label = (n.hostname || n.node_id) + ' — ' + (g.name || 'GPU ' + i) + ' [' + (freeMB / 1024).toFixed(1) + ' / ' + (totalMB / 1024).toFixed(1) + ' GB]';
-                devSel.innerHTML += '<option value="' + escHtml(n.node_id) + ':' + i + ':' + freeMB + '">' + escHtml(label) + '</option>';
-            });
-        });
-        // Reset model list
-        document.getElementById('hf-model-list').style.display = 'none';
-        document.getElementById('hf-model-items').innerHTML = '';
-
-        // Fetch catalog if not cached
-        if (!hfCatalogCache) {
-            fetch(BASE + '/api/v1/catalog').then(function(r) { return r.json(); }).then(function(d) {
-                hfCatalogCache = (d.models || []).filter(function(m) { return m.file_size > 0; });
-            });
-        }
-
         document.getElementById('hf-overlay').classList.add('open');
     });
-
-    // Device selector -> populate model list
-    document.getElementById('hf-device').addEventListener('change', function() {
-        var listDiv = document.getElementById('hf-model-list');
-        var itemsDiv = document.getElementById('hf-model-items');
-        itemsDiv.innerHTML = '';
-        if (!this.value) { listDiv.style.display = 'none'; return; }
-
-        var parts = this.value.split(':');
-        var nodeId = parts[0], gpuIdx = parseInt(parts[1]), freeMB = parseInt(parts[2]);
-        var freeBytes = freeMB * 1048576;
-
-        // Auto-set agent + GPU from device selection
-        var agentSel = document.getElementById('hf-agent');
-        agentSel.value = nodeId;
-        var gpuSel = document.getElementById('hf-gpu');
-        gpuSel.innerHTML = '<option value="">GPU: auto</option>';
-        var selNode = nodesCache.find(function(n) { return n.node_id === nodeId; });
-        if (selNode && selNode.hardware && selNode.hardware.gpu) {
-            selNode.hardware.gpu.forEach(function(g, i) {
-                gpuSel.innerHTML += '<option value="' + i + '">GPU ' + i + ': ' + escHtml(g.name || 'GPU') + '</option>';
-            });
-        }
-        gpuSel.value = String(gpuIdx);
-
-        if (!hfCatalogCache) {
-            itemsDiv.innerHTML = '<div style="color:#f4f4f4aa;font-size:.55rem;padding:6px;">Loading catalog...</div>';
-            listDiv.style.display = '';
-            return;
-        }
-
-        // Filter models that fit (file_size within 92.5% of free VRAM) and sort largest first
-        var fits = hfCatalogCache.filter(function(m) { return m.file_size <= freeBytes * 0.925; });
-        fits.sort(function(a, b) { return b.total_mem - a.total_mem; });
-
-        // Limit to top 50
-        fits = fits.slice(0, 50);
-
-        if (fits.length === 0) {
-            itemsDiv.innerHTML = '<div style="color:#f4f4f4aa;font-size:.55rem;padding:6px;">No models fit this device.</div>';
-            listDiv.style.display = '';
-            return;
-        }
-
-        fits.forEach(function(m) {
-            var row = document.createElement('div');
-            row.className = 'hf-model-row';
-            row.innerHTML = '<span class="hf-model-name">' + escHtml(m.name) + '</span>' +
-                '<span class="hf-model-meta">' + fmtGB(m.file_size) + ' GB · ' + (m.params_b || '?') + 'B params · ' + (m.max_ctx / 1024).toFixed(0) + 'K ctx</span>';
-            row.addEventListener('click', function() {
-                // Auto-fill URL field (agent+GPU already set by device selector)
-                document.getElementById('hf-url').value = m.id;
-                // Highlight selected
-                itemsDiv.querySelectorAll('.hf-model-row').forEach(function(r) { r.classList.remove('selected'); });
-                row.classList.add('selected');
-                document.getElementById('hf-status').textContent = '→ ' + m.name + ' selected — click DOWNLOAD & LOAD';
-            });
-            itemsDiv.appendChild(row);
-        });
-        listDiv.style.display = '';
-    });
-
-    // Populate GPU dropdown when agent changes (manual flow)
+    // Populate GPU dropdown when agent changes
     document.getElementById('hf-agent').addEventListener('change', function() {
         var gpuSel = document.getElementById('hf-gpu');
         gpuSel.innerHTML = '<option value="">GPU: auto</option>';
@@ -866,29 +719,6 @@
             .catch(function() { toast('TOGGLE FAILED', 'error'); });
     });
 
-    document.getElementById('btn-toggle-access').addEventListener('click', function() {
-        var btn = this;
-        fetch(BASE + '/api/v1/config')
-            .then(function(r) { return r.json(); })
-            .then(function(cfg) {
-                var newMode = cfg.access_mode === 'open' ? 'approve' : 'open';
-                return fetch(BASE + '/api/v1/config', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ access_mode: newMode })
-                });
-            })
-            .then(function(r) { return r.json(); })
-            .then(function(d) {
-                var mode = d.access_mode || 'approve';
-                var isApprove = mode === 'approve';
-                btn.classList.toggle('active-state', isApprove);
-                document.getElementById('access-label').textContent = isApprove ? 'APPROVE' : 'OPEN';
-                toast(isApprove ? 'ACCESS: APPROVAL REQUIRED' : 'ACCESS: OPEN TO ALL', 'ok');
-            })
-            .catch(function() { toast('TOGGLE FAILED', 'error'); });
-    });
-
     document.getElementById('btn-gc').addEventListener('click', function() {
         fetch(BASE + '/api/v1/gc', { method: 'POST' })
             .then(function(r) { return r.json(); })
@@ -940,10 +770,6 @@
         if (!match) {
             // Try plain org/model format (e.g. "FieldMouse-AI/Qwen3.5-Sovereign-Titan-9B-GGUF")
             match = url.match(/^([^\/\s]+\/[^\/\s]+)$/);
-        }
-        if (!match) {
-            // Accept bare model name from catalog (no slash) — agent will search HF
-            match = url.match(/^([a-zA-Z0-9._-]+)$/);
         }
         if (!match) {
             toast('Invalid URL — use huggingface.co/org/model or org/model format', 'error', 5000);
@@ -1368,9 +1194,6 @@
                 document.getElementById('tight-label').textContent = d.tight_pack ? 'TIGHT PACK ON' : 'TIGHT PACK';
                 document.getElementById('btn-toggle-lock').classList.toggle('active-state', !!d.locked);
                 document.getElementById('btn-toggle-tight').classList.toggle('active-state', !!d.tight_pack);
-                var isApprove = d.access_mode === 'approve';
-                document.getElementById('access-label').textContent = isApprove ? 'APPROVE' : 'OPEN';
-                document.getElementById('btn-toggle-access').classList.toggle('active-state', isApprove);
             })
             .catch(function() {});
 

@@ -347,9 +347,12 @@
             }
 
             // GPUs
+            var gpuMetrics = (n.metrics && n.metrics.gpu) || [];
             gpus.forEach(function(gpu, gi) {
                 var vt = gpu.vram_total_mb || gpu.vramTotal || 0;
-                var vu = gpu.vram_used_mb || gpu.vramUsed || 0;
+                var gm = gpuMetrics[gi];
+                var vf = gm && gm.vram_free_mb != null ? gm.vram_free_mb : (gpu.vram_free_mb != null ? gpu.vram_free_mb : vt);
+                var vu = vt - vf;
                 totalVram += vt;
                 var pct = vt > 0 ? Math.round((vu / vt) * 100) : 0;
                 var filled = Math.round(pct / 10);
@@ -367,8 +370,6 @@
                 html += '</div>';
 
                 // GPU utilization
-                var gpuMetrics = (n.metrics && n.metrics.gpu) || [];
-                var gm = gpuMetrics[gi];
                 if (gm && gm.utilization_pct != null) {
                     var uFilled = Math.round(gm.utilization_pct / 10);
                     html += '<div class="metric-row">';
