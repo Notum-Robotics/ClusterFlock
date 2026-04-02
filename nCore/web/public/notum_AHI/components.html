@@ -1,0 +1,753 @@
+<!--
+  Notum AHI — Component Showcase
+  Copyright © 2026 Notum Robotics. Licensed under the MIT License.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0a0a0a">
+    <title>Components — Notum AHI</title>
+    <link rel="stylesheet" href="css/phosphor.css?v=20260228">
+    <link rel="stylesheet" href="css/style.css?v=20260228">
+    <link rel="stylesheet" href="css/notum.css?v=20260228">
+</head>
+<body>
+
+    <div id="demo-app">
+
+        <header>
+            <h1>Notum<span>Components</span></h1>
+            <div class="header-meta"><a href="index.html">← HOME</a> · <a href="dynamic.html">DYNAMIC</a> · NOTUM ROBOTICS · <a href="https://n-r.hr" target="_blank" rel="noopener">N-R.HR</a></div>
+        </header>
+
+        <main id="demo-main">
+
+            <!-- ═══════════ SECTION: nbeep AUDIO ═══════════ -->
+            <section class="demo-section">
+                <div class="section-label">00 // nbeep AUDIO ENGINE</div>
+                <p class="section-hint">Procedural UI audio — deterministic, seeded, computed on the fly. Same string = same sound, always.</p>
+
+                <div class="panel">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="slider-header">
+                        <span class="panel-label">MASTER VOLUME</span>
+                        <span class="slider-readout" id="nbeep-vol-val">[ 20% ]</span>
+                    </div>
+                    <div class="seg-slider" id="nbeep-vol" data-value="4" data-max="20" data-color="accent"></div>
+                </div>
+
+                <div class="panel">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="slider-header">
+                        <span class="panel-label">MAX DURATION</span>
+                        <span class="slider-readout" id="nbeep-dur-val">[ 80% ]</span>
+                    </div>
+                    <div class="seg-slider" id="nbeep-dur" data-value="16" data-max="20" data-color="accent"></div>
+                </div>
+
+                <div class="panel">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="panel-label">MUSICAL SCALE</div>
+                    <div class="toggle-group" id="tg-scale">
+                        <div class="tg-option active" data-val="pentatonic">PENTA</div>
+                        <div class="tg-option" data-val="minor_pentatonic">MINOR</div>
+                        <div class="tg-option" data-val="lydian">LYDIAN</div>
+                        <div class="tg-option" data-val="dorian">DORIAN</div>
+                        <div class="tg-option" data-val="whole_tone">WHOLE</div>
+                        <div class="tg-option" data-val="chromatic">CHROM</div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="panel-label">SOUNDSCAPE</div>
+                    <div class="toggle-group" id="tg-musical">
+                        <div class="tg-option" data-val="standard">RETRO</div>
+                        <div class="tg-option" data-val="harmonic">HARMONIC</div>
+                        <div class="tg-option active" data-val="ncars">nCARS</div>
+                        <div class="tg-option" data-val="ncars2">nCARS 2</div>
+                    </div>
+                </div>
+
+                <div class="panel nbeep-test-panel">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="panel-label">TEST INPUT</div>
+                    <div class="nbeep-input-row">
+                        <input type="text" id="nbeep-input" class="nbeep-input" value="submit_btn" maxlength="512" spellcheck="false" autocomplete="off" placeholder="TYPE ANY STRING...">
+                        <div class="action-btn primary nbeep-play-btn" id="nbeep-play" data-flash><i class="ph ph-play"></i> PLAY</div>
+                    </div>
+                    <div class="nbeep-hash-row">
+                        <span class="status-label">HASH</span>
+                        <span class="status-val accent" id="nbeep-hash-val">—</span>
+                    </div>
+                </div>
+
+                <div class="demo-row">
+                    <div class="action-btn" data-flash data-nbeep="nav_click"><i class="ph ph-cursor-click"></i> NAV</div>
+                    <div class="action-btn primary" data-flash data-nbeep="confirm_action"><i class="ph ph-check"></i> CONFIRM</div>
+                    <div class="action-btn warning" data-flash data-nbeep="warning_alert"><i class="ph ph-warning"></i> WARN</div>
+                    <div class="action-btn danger" data-flash data-nbeep="error_critical"><i class="ph ph-x-circle"></i> ERROR</div>
+                </div>
+
+                <div class="panel">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="slider-header">
+                        <span class="panel-label">GLOBAL SEED</span>
+                        <span class="slider-readout" id="nbeep-seed-val">[ 2026 ]</span>
+                    </div>
+                    <div class="stepper" id="stepper-seed">
+                        <div class="stepper-btn" data-dir="-1">−</div>
+                        <div class="stepper-val">2026</div>
+                        <div class="stepper-btn" data-dir="+1">+</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ═══════════ SECTION: AUTO-FIT GRID ═══════════ -->
+            <section class="demo-section grid-section">
+                <div class="section-label">01 // AUTO-FIT GRID</div>
+                <p class="section-hint">Bin-packed layout — components sized proportionally to their function.</p>
+                <div class="grid-wrap">
+                    <div id="auto-grid"></div>
+                </div>
+            </section>
+
+            <!-- ═══════════ SECTION: BUTTONS ═══════════ -->
+            <section class="demo-section">
+                <div class="section-label">02 // BUTTONS</div>
+
+                <div class="demo-row">
+                    <div class="action-btn" data-flash>DEFAULT</div>
+                    <div class="action-btn primary" data-flash><i class="ph ph-power"></i> PRIMARY</div>
+                    <div class="action-btn warning" data-flash><i class="ph ph-warning"></i> WARNING</div>
+                    <div class="action-btn danger" data-flash><i class="ph ph-trash"></i> DANGER</div>
+                </div>
+
+                <div class="demo-row">
+                    <div class="action-btn primary" data-flash style="grid-column:1/-1"><i class="ph ph-check"></i> FULL WIDTH PRIMARY</div>
+                </div>
+
+                <div class="demo-row">
+                    <div class="action-btn warning" data-flash style="grid-column:1/-1"><i class="ph ph-shield-warning"></i> FULL WIDTH AMBER WARNING</div>
+                </div>
+
+                <div class="demo-row">
+                    <div class="action-btn" data-flash style="grid-column:1/-1">
+                        <i class="ph ph-arrows-clockwise"></i> SYNC ALL DEVICES
+                    </div>
+                </div>
+
+                <p class="section-hint">Icon-only buttons — compact controls for toolbars and dense layouts. Toggle buttons flip on/off on click.</p>
+                <div class="demo-row" style="display:flex; flex-wrap:wrap; gap:8px">
+                    <div class="icon-btn" data-flash><i class="ph ph-gear"></i></div>
+                    <div class="icon-btn" data-flash><i class="ph ph-magnifying-glass"></i></div>
+                    <div class="icon-btn" data-flash><i class="ph ph-funnel"></i></div>
+                    <div class="icon-btn" data-flash><i class="ph ph-arrows-clockwise"></i></div>
+                    <div class="icon-btn is-on icon-toggle" data-flash><i class="ph ph-power"></i></div>
+                    <div class="icon-btn is-on icon-toggle" data-flash><i class="ph ph-wifi-high"></i></div>
+                    <div class="icon-btn is-off icon-toggle" data-flash><i class="ph ph-bluetooth"></i></div>
+                    <div class="icon-btn" data-flash><i class="ph ph-download"></i></div>
+                    <div class="icon-btn" data-flash><i class="ph ph-upload"></i></div>
+                    <div class="icon-btn is-on icon-toggle" data-flash><i class="ph ph-microphone"></i></div>
+                    <div class="icon-btn is-off icon-toggle" data-flash><i class="ph ph-speaker-simple-x"></i></div>
+                    <div class="icon-btn" data-flash><i class="ph ph-copy"></i></div>
+                    <div class="icon-btn" data-flash><i class="ph ph-clipboard-text"></i></div>
+                    <div class="icon-btn" data-flash><i class="ph ph-floppy-disk"></i></div>
+                    <div class="icon-btn is-on icon-toggle" data-flash><i class="ph ph-eye"></i></div>
+                    <div class="icon-btn primary" data-flash><i class="ph ph-play"></i></div>
+                    <div class="icon-btn primary" data-flash><i class="ph ph-pause"></i></div>
+                    <div class="icon-btn primary" data-flash><i class="ph ph-stop"></i></div>
+                    <div class="icon-btn primary" data-flash><i class="ph ph-skip-forward"></i></div>
+                    <div class="icon-btn primary" data-flash><i class="ph ph-check"></i></div>
+                    <div class="icon-btn is-on icon-toggle" data-flash><i class="ph ph-lock-open"></i></div>
+                    <div class="icon-btn is-off icon-toggle" data-flash><i class="ph ph-lock"></i></div>
+                    <div class="icon-btn warning" data-flash><i class="ph ph-warning"></i></div>
+                    <div class="icon-btn warning" data-flash><i class="ph ph-bell"></i></div>
+                    <div class="icon-btn is-on icon-toggle" data-flash><i class="ph ph-bell-ringing"></i></div>
+                    <div class="icon-btn danger" data-flash><i class="ph ph-trash"></i></div>
+                    <div class="icon-btn danger" data-flash><i class="ph ph-x"></i></div>
+                    <div class="icon-btn danger" data-flash><i class="ph ph-prohibit"></i></div>
+                    <div class="icon-btn is-off icon-toggle" data-flash><i class="ph ph-shield-slash"></i></div>
+                </div>
+            </section>
+
+            <!-- ═══════════ SECTION: DIALOGS ═══════════ -->
+            <section class="demo-section">
+                <div class="section-label">03 // DIALOGS</div>
+
+                <div class="demo-row">
+                    <div class="action-btn" data-flash id="dlg-confirm"><i class="ph ph-check-circle"></i> YES / NO</div>
+                    <div class="action-btn warning" data-flash id="dlg-warning"><i class="ph ph-warning-octagon"></i> WARNING</div>
+                    <div class="action-btn danger" data-flash id="dlg-danger"><i class="ph ph-prohibit"></i> DANGER</div>
+                </div>
+
+                <div class="demo-row">
+                    <div class="action-btn primary" data-flash id="dlg-multi"><i class="ph ph-list-bullets"></i> MULTI OPTION</div>
+                    <div class="action-btn" data-flash id="dlg-info"><i class="ph ph-info"></i> INFO ONLY</div>
+                </div>
+            </section>
+
+            <!-- ═══════════ SECTION: TOGGLE GROUPS ═══════════ -->
+            <section class="demo-section">
+                <div class="section-label">04 // TOGGLE GROUPS</div>
+
+                <div class="panel">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="panel-label">MODE SELECT</div>
+                    <div class="toggle-group" id="tg-mode">
+                        <div class="tg-option active" data-val="auto">AUTO</div>
+                        <div class="tg-option" data-val="manual">MANUAL</div>
+                        <div class="tg-option" data-val="sched">SCHEDULE</div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="panel-label">FAN SPEED</div>
+                    <div class="toggle-group" id="tg-fan">
+                        <div class="tg-option" data-val="off">OFF</div>
+                        <div class="tg-option" data-val="low">LOW</div>
+                        <div class="tg-option active" data-val="med">MED</div>
+                        <div class="tg-option" data-val="high">HIGH</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ═══════════ SECTION: SLIDERS ═══════════ -->
+            <section class="demo-section">
+                <div class="section-label">05 // SEGMENTED SLIDERS</div>
+
+                <div class="panel">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="slider-header">
+                        <span class="panel-label">BRIGHTNESS</span>
+                        <span class="slider-readout" id="slider-brightness-val">[ 70% ]</span>
+                    </div>
+                    <div class="seg-slider" id="slider-brightness" data-value="7" data-max="10" data-color="accent"></div>
+                </div>
+
+                <div class="panel">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="slider-header">
+                        <span class="panel-label">TEMPERATURE</span>
+                        <span class="slider-readout" id="slider-temp-val">[ 22°C ]</span>
+                    </div>
+                    <div class="seg-slider" id="slider-temp" data-value="10" data-min="16" data-max="30" data-color="amber"></div>
+                </div>
+
+                <div class="panel">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="slider-header">
+                        <span class="panel-label">CPU LOAD</span>
+                        <span class="slider-readout" id="slider-cpu-val">[ 84% ]</span>
+                    </div>
+                    <div class="seg-slider" id="slider-cpu" data-value="17" data-max="20" data-color="danger"></div>
+                </div>
+            </section>
+
+            <!-- ═══════════ SECTION: STEPPERS ═══════════ -->
+            <section class="demo-section">
+                <div class="section-label">06 // NUMERIC STEPPERS</div>
+
+                <div class="demo-row">
+                    <div class="panel" style="grid-column:span 2">
+                        <span class="corner corner-tl">⌜</span>
+                        <span class="corner corner-tr">⌝</span>
+                        <span class="corner corner-bl">⌞</span>
+                        <span class="corner corner-br">⌟</span>
+                        <div class="panel-label">TIMER (MIN)</div>
+                        <div class="stepper" id="stepper-timer">
+                            <div class="stepper-btn" data-dir="-1">−</div>
+                            <div class="stepper-val">15</div>
+                            <div class="stepper-btn" data-dir="+1">+</div>
+                        </div>
+                    </div>
+
+                    <div class="panel" style="grid-column:span 2">
+                        <span class="corner corner-tl">⌜</span>
+                        <span class="corner corner-tr">⌝</span>
+                        <span class="corner corner-bl">⌞</span>
+                        <span class="corner corner-br">⌟</span>
+                        <div class="panel-label">THRESHOLD</div>
+                        <div class="stepper" id="stepper-thresh">
+                            <div class="stepper-btn" data-dir="-1">−</div>
+                            <div class="stepper-val">42</div>
+                            <div class="stepper-btn" data-dir="+1">+</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ═══════════ SECTION: SUB-MENUS ═══════════ -->
+            <section class="demo-section">
+                <div class="section-label">07 // SUB-MENUS (ALWAYS VISIBLE)</div>
+
+                <div class="panel submenu-panel">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="panel-label">NETWORK CONFIG</div>
+                    <div class="submenu">
+                        <div class="submenu-item" data-flash>
+                            <i class="ph ph-wifi-high"></i>
+                            <div class="submenu-info">
+                                <span class="submenu-name">WI-FI</span>
+                                <span class="submenu-value">[ CONNECTED ]</span>
+                            </div>
+                            <span class="submenu-chevron">›</span>
+                        </div>
+                        <div class="submenu-item warning" data-flash>
+                            <i class="ph ph-cloud"></i>
+                            <div class="submenu-info">
+                                <span class="submenu-name">CLOUD SYNC</span>
+                                <span class="submenu-value amber">[ DEGRADED ]</span>
+                            </div>
+                            <span class="submenu-chevron">›</span>
+                        </div>
+                        <div class="submenu-item" data-flash>
+                            <i class="ph ph-shield-check"></i>
+                            <div class="submenu-info">
+                                <span class="submenu-name">FIREWALL</span>
+                                <span class="submenu-value accent">[ ACTIVE ]</span>
+                            </div>
+                            <span class="submenu-chevron">›</span>
+                        </div>
+                        <div class="submenu-item danger" data-flash>
+                            <i class="ph ph-plugs"></i>
+                            <div class="submenu-info">
+                                <span class="submenu-name">GATEWAY</span>
+                                <span class="submenu-value danger">[ OFFLINE ]</span>
+                            </div>
+                            <span class="submenu-chevron">›</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ═══════════ SECTION: STATUS INDICATORS ═══════════ -->
+            <section class="demo-section">
+                <div class="section-label">08 // STATUS INDICATORS</div>
+
+                <div class="panel">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="panel-label">SYSTEM STATUS</div>
+                    <div class="status-grid">
+                        <div class="status-row">
+                            <span class="status-label">UPTIME</span>
+                            <span class="status-val" id="stat-uptime">14D 07:32:19</span>
+                        </div>
+                        <div class="status-row">
+                            <span class="status-label">MEMORY</span>
+                            <span class="status-val accent">[ 2.4 / 4.0 GB ]</span>
+                        </div>
+                        <div class="status-row">
+                            <span class="status-label">DISK</span>
+                            <span class="status-val amber">[ 87% USED ]</span>
+                        </div>
+                        <div class="status-row">
+                            <span class="status-label">NETWORK</span>
+                            <span class="status-val danger">[ 3 ERRORS ]</span>
+                        </div>
+                        <div class="status-row">
+                            <span class="status-label">FIRMWARE</span>
+                            <span class="status-val">V2.4.1-RC3</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ═══════════ SECTION: SEGMENTED PROGRESS ═══════════ -->
+            <section class="demo-section">
+                <div class="section-label">09 // SEGMENTED BARS</div>
+
+                <div class="panel">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="slider-header">
+                        <span class="panel-label">DOWNLOAD PROGRESS</span>
+                        <span class="slider-readout" id="progress-val">[ 68% ]</span>
+                    </div>
+                    <div class="seg-bar" id="seg-progress" data-value="17" data-max="25" data-color="accent"></div>
+                </div>
+
+                <div class="panel">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="slider-header">
+                        <span class="panel-label">BATTERY</span>
+                        <span class="slider-readout" id="battery-val">[ 23% ]</span>
+                    </div>
+                    <div class="seg-bar" id="seg-battery" data-value="5" data-max="20" data-color="danger"></div>
+                </div>
+
+                <div class="panel">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="slider-header">
+                        <span class="panel-label">FIRMWARE UPDATE</span>
+                        <span class="slider-readout">[ 100% ]</span>
+                    </div>
+                    <div class="seg-bar" data-value="20" data-max="20" data-color="accent"></div>
+                </div>
+            </section>
+
+            <!-- ═══════════ SECTION: COLOR PALETTE ═══════════ -->
+            <section class="demo-section">
+                <div class="section-label">10 // COLOR PALETTE</div>
+                <div class="demo-row palette-row">
+                    <div class="swatch" style="background:#0a0a0a"><span>BG<br>#0A0A0A</span></div>
+                    <div class="swatch" style="background:#141414"><span>SURFACE<br>#141414</span></div>
+                    <div class="swatch" style="background:#F4F4F4; color:#0a0a0a"><span>TEXT<br>#F4F4F4</span></div>
+                    <div class="swatch" style="background:#00e5ff; color:#0a0a0a"><span>ACCENT<br>#00E5FF</span></div>
+                    <div class="swatch" style="background:#FFB300; color:#0a0a0a"><span>AMBER<br>#FFB300</span></div>
+                    <div class="swatch" style="background:#FF3333; color:#0a0a0a"><span>DANGER<br>#FF3333</span></div>
+                </div>
+            </section>
+
+            <!-- ═══════════ SECTION: ACTIVE STATE ═══════════ -->
+            <section class="demo-section">
+                <div class="section-label">11 // ACTIVE STATE</div>
+                <p class="section-hint">Click cards to toggle — observe icon fill, border glow, corner strobe, and state label.</p>
+                <div class="demo-row">
+                    <div class="card is-on demo-card" data-on="ACTIVE" data-off="INACTIVE" style="grid-column:span 2">
+                        <span class="corner corner-tl">⌜</span>
+                        <span class="corner corner-tr">⌝</span>
+                        <span class="corner corner-bl">⌞</span>
+                        <span class="corner corner-br">⌟</span>
+                        <div class="card-icon"><i class="ph ph-lightbulb"></i></div>
+                        <div class="card-info">
+                            <div class="card-name">MAIN LIGHT</div>
+                            <div class="card-state">[ ACTIVE ]</div>
+                        </div>
+                        <div class="card-status">ON</div>
+                    </div>
+                    <div class="card is-off demo-card" data-on="ENABLED" data-off="DISABLED" style="grid-column:span 2">
+                        <span class="corner corner-tl">⌜</span>
+                        <span class="corner corner-tr">⌝</span>
+                        <span class="corner corner-bl">⌞</span>
+                        <span class="corner corner-br">⌟</span>
+                        <div class="card-icon"><i class="ph ph-fan"></i></div>
+                        <div class="card-info">
+                            <div class="card-name">EXHAUST FAN</div>
+                            <div class="card-state">[ DISABLED ]</div>
+                        </div>
+                        <div class="card-status">OFF</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ═══════════ SECTION: CARD SIZE VARIANTS ═══════════ -->
+            <section class="demo-section">
+                <div class="section-label">11b // CARD SIZE VARIANTS</div>
+                <p class="section-hint">Same card element, dynamically adapted via data-size attribute. Sizes follow grid logic: 2×2 (full), 2×1 (half-height), 1×2 (half-width), 1×1 (quarter, icon only). Smaller variants progressively hide text and status elements.</p>
+
+                <div class="demo-row" style="grid-template-columns: repeat(4, 1fr); grid-auto-rows: 80px; grid-auto-flow: dense;">
+                    <!-- Full 2×2 — all elements visible -->
+                    <div class="card is-on demo-card" data-size="2x2" data-on="LOCKED" data-off="UNLOCKED" style="grid-column: span 2; grid-row: span 2;">
+                        <span class="corner corner-tl">⌜</span>
+                        <span class="corner corner-tr">⌝</span>
+                        <span class="corner corner-bl">⌞</span>
+                        <span class="corner corner-br">⌟</span>
+                        <div class="card-icon"><i class="ph ph-lock"></i></div>
+                        <div class="card-info">
+                            <div class="card-name">DOOR LOCK</div>
+                            <div class="card-state">[ LOCKED ]</div>
+                        </div>
+                        <div class="card-status">ON</div>
+                    </div>
+
+                    <!-- Half 2×1 — icon + name, no state text or status tag -->
+                    <div class="card is-on demo-card" data-size="2x1" data-on="LOCKED" data-off="UNLOCKED" style="grid-column: span 2; grid-row: span 1;">
+                        <span class="corner corner-tl">⌜</span>
+                        <span class="corner corner-tr">⌝</span>
+                        <span class="corner corner-bl">⌞</span>
+                        <span class="corner corner-br">⌟</span>
+                        <div class="card-icon"><i class="ph ph-lock"></i></div>
+                        <div class="card-info">
+                            <div class="card-name">DOOR LOCK</div>
+                            <div class="card-state">[ LOCKED ]</div>
+                        </div>
+                        <div class="card-status">ON</div>
+                    </div>
+
+                    <!-- Half 1×2 — vertical, icon + name stacked, no status tag -->
+                    <div class="card is-off demo-card" data-size="1x2" data-on="LOCKED" data-off="UNLOCKED" style="grid-column: span 1; grid-row: span 2;">
+                        <span class="corner corner-tl">⌜</span>
+                        <span class="corner corner-tr">⌝</span>
+                        <span class="corner corner-bl">⌞</span>
+                        <span class="corner corner-br">⌟</span>
+                        <div class="card-icon"><i class="ph ph-lock-open"></i></div>
+                        <div class="card-info">
+                            <div class="card-name">DOOR LOCK</div>
+                            <div class="card-state">[ UNLOCKED ]</div>
+                        </div>
+                        <div class="card-status">OFF</div>
+                    </div>
+
+                    <!-- Quarter 1×1 — icon only -->
+                    <div class="card is-on demo-card" data-size="1x1" data-on="LOCKED" data-off="UNLOCKED" style="grid-column: span 1; grid-row: span 1;">
+                        <span class="corner corner-tl">⌜</span>
+                        <span class="corner corner-tr">⌝</span>
+                        <span class="corner corner-bl">⌞</span>
+                        <span class="corner corner-br">⌟</span>
+                        <div class="card-icon"><i class="ph ph-lock"></i></div>
+                        <div class="card-info">
+                            <div class="card-name">DOOR LOCK</div>
+                            <div class="card-state">[ LOCKED ]</div>
+                        </div>
+                        <div class="card-status">ON</div>
+                    </div>
+
+                    <!-- Quarter 1×1 — icon only (off state) -->
+                    <div class="card is-off demo-card" data-size="1x1" data-on="LOCKED" data-off="UNLOCKED" style="grid-column: span 1; grid-row: span 1;">
+                        <span class="corner corner-tl">⌜</span>
+                        <span class="corner corner-tr">⌝</span>
+                        <span class="corner corner-bl">⌞</span>
+                        <span class="corner corner-br">⌟</span>
+                        <div class="card-icon"><i class="ph ph-lock-open"></i></div>
+                        <div class="card-info">
+                            <div class="card-name">DOOR LOCK</div>
+                            <div class="card-state">[ UNLOCKED ]</div>
+                        </div>
+                        <div class="card-status">OFF</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ═══════════ SECTION: COMPONENT PROPERTIES ═══════════ -->
+            <section class="demo-section">
+                <div class="section-label">12 // COMPONENT PROPERTIES</div>
+                <p class="section-hint">Universal component properties — lockout, progress, status, active state. API: nComp.progress(el, 0–100), nComp.status(el, 'ok'|'warn'|'error'|'busy'), nComp.active(el, bool).</p>
+
+                <div class="panel">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="panel-label">PROGRESS</div>
+                    <p class="section-hint">Click buttons to trigger simulated async operations with progress + status feedback.</p>
+                    <div class="demo-row">
+                        <div class="action-btn primary" data-flash id="cp-upload" style="grid-column:span 2"><i class="ph ph-cloud-arrow-up"></i> UPLOAD</div>
+                        <div class="action-btn" data-flash id="cp-scan-btn" style="grid-column:span 2"><i class="ph ph-magnifying-glass"></i> SCAN NETWORK</div>
+                    </div>
+                    <div class="demo-row">
+                        <div class="action-btn warning" data-flash id="cp-firmware" style="grid-column:span 4"><i class="ph ph-cpu"></i> FIRMWARE UPDATE</div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="panel-label">STATUS</div>
+                    <p class="section-hint">Each button shows a persistent status pip (top-right) and status-colored border.</p>
+                    <div class="demo-row">
+                        <div class="action-btn" data-flash id="cp-stat-ok"><i class="ph ph-check"></i> OK</div>
+                        <div class="action-btn" data-flash id="cp-stat-warn"><i class="ph ph-warning"></i> WARN</div>
+                        <div class="action-btn" data-flash id="cp-stat-error"><i class="ph ph-x-circle"></i> ERROR</div>
+                        <div class="action-btn" data-flash id="cp-stat-busy"><i class="ph ph-spinner"></i> BUSY</div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="panel-label">LOCKOUT</div>
+                    <p class="section-hint">Configurable cooldown per element via data-lockout attribute. Button dims during extended lockout.</p>
+                    <div class="demo-row">
+                        <div class="action-btn" data-flash data-lockout="200">200MS</div>
+                        <div class="action-btn" data-flash data-lockout="1000">1000MS</div>
+                        <div class="action-btn warning" data-flash data-lockout="2000">2000MS</div>
+                        <div class="action-btn danger" data-flash data-lockout="5000">5000MS</div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="panel-label">COMBINED — LOCKOUT + PROGRESS + STATUS</div>
+                    <p class="section-hint">Each button locks out for the duration of its operation, drives progress, and reports status. All three properties active simultaneously.</p>
+                    <div class="demo-row">
+                        <div class="action-btn primary" data-flash data-lockout="8000" id="cp-deploy" style="grid-column:span 2"><i class="ph ph-rocket-launch"></i> DEPLOY BUILD</div>
+                        <div class="action-btn warning" data-flash data-lockout="12000" id="cp-backup" style="grid-column:span 2"><i class="ph ph-database"></i> FULL BACKUP</div>
+                    </div>
+                    <div class="demo-row">
+                        <div class="action-btn danger" data-flash data-lockout="6000" id="cp-purge" style="grid-column:span 2"><i class="ph ph-trash"></i> PURGE CACHE</div>
+                        <div class="action-btn" data-flash data-lockout="15000" id="cp-diagnostics" style="grid-column:span 2"><i class="ph ph-heartbeat"></i> DIAGNOSTICS</div>
+                    </div>
+                    <div class="demo-row">
+                        <div class="action-btn primary" data-flash data-lockout="10000" id="cp-ota" style="grid-column:span 4"><i class="ph ph-cloud-arrow-down"></i> OTA UPDATE — SLOW TRANSFER</div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="panel-label">ACTIVE / INACTIVE</div>
+                    <p class="section-hint">Click TOGGLE PAIR to swap active state between the two target buttons.</p>
+                    <div class="demo-row">
+                        <div class="action-btn primary" data-flash id="cp-active-toggle" style="grid-column:span 2"><i class="ph ph-arrows-left-right"></i> TOGGLE PAIR</div>
+                        <div class="action-btn" data-flash id="cp-target-a" data-active="true">TARGET A</div>
+                        <div class="action-btn" data-flash id="cp-target-b" data-active="false">TARGET B</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ═══════════ SECTION: VERTICAL GAUGES ═══════════ -->
+            <section class="demo-section">
+                <div class="section-label">13 // VERTICAL GAUGES</div>
+                <p class="section-hint">Vertical segmented bars (read-only) and vertical sliders (interactive). Drag up/down to adjust sliders.</p>
+
+                <div class="demo-row" style="display:flex; gap:12px; flex-wrap:wrap">
+                    <!-- Vertical Bars (read-only) -->
+                    <div class="panel v-gauge-panel" style="min-width:70px; height:200px">
+                        <span class="corner corner-tl">⌜</span>
+                        <span class="corner corner-tr">⌝</span>
+                        <span class="corner corner-bl">⌞</span>
+                        <span class="corner corner-br">⌟</span>
+                        <div class="panel-label">SIGNAL</div>
+                        <div class="seg-bar-v" id="vbar-signal" data-value="14" data-max="20" data-color="accent" style="flex:1; width:14px"></div>
+                        <span class="slider-readout" id="vbar-signal-val">[ 70% ]</span>
+                    </div>
+
+                    <div class="panel v-gauge-panel" style="min-width:70px; height:200px">
+                        <span class="corner corner-tl">⌜</span>
+                        <span class="corner corner-tr">⌝</span>
+                        <span class="corner corner-bl">⌞</span>
+                        <span class="corner corner-br">⌟</span>
+                        <div class="panel-label">BATTERY</div>
+                        <div class="seg-bar-v" id="vbar-battery" data-value="4" data-max="20" data-color="danger" style="flex:1; width:14px"></div>
+                        <span class="slider-readout" id="vbar-battery-val">[ 20% ]</span>
+                    </div>
+
+                    <div class="panel v-gauge-panel" style="min-width:70px; height:200px">
+                        <span class="corner corner-tl">⌜</span>
+                        <span class="corner corner-tr">⌝</span>
+                        <span class="corner corner-bl">⌞</span>
+                        <span class="corner corner-br">⌟</span>
+                        <div class="panel-label">FUEL</div>
+                        <div class="seg-bar-v" data-value="20" data-max="20" data-color="accent" style="flex:1; width:14px"></div>
+                        <span class="slider-readout">[ 100% ]</span>
+                    </div>
+
+                    <!-- Vertical Sliders (interactive) -->
+                    <div class="panel v-gauge-panel" style="min-width:70px; height:200px">
+                        <span class="corner corner-tl">⌜</span>
+                        <span class="corner corner-tr">⌝</span>
+                        <span class="corner corner-bl">⌞</span>
+                        <span class="corner corner-br">⌟</span>
+                        <div class="panel-label">VOLUME</div>
+                        <div class="seg-slider-v" id="vslider-volume" data-value="6" data-max="10" data-color="accent" style="flex:1; width:28px"></div>
+                        <span class="slider-readout" id="vslider-volume-val">[ 60% ]</span>
+                    </div>
+
+                    <div class="panel v-gauge-panel" style="min-width:70px; height:200px">
+                        <span class="corner corner-tl">⌜</span>
+                        <span class="corner corner-tr">⌝</span>
+                        <span class="corner corner-bl">⌞</span>
+                        <span class="corner corner-br">⌟</span>
+                        <div class="panel-label">THROTTLE</div>
+                        <div class="seg-slider-v" id="vslider-throttle" data-value="3" data-max="15" data-color="amber" style="flex:1; width:28px"></div>
+                        <span class="slider-readout" id="vslider-throttle-val">[ 20% ]</span>
+                    </div>
+
+                    <div class="panel v-gauge-panel" style="min-width:70px; height:200px">
+                        <span class="corner corner-tl">⌜</span>
+                        <span class="corner corner-tr">⌝</span>
+                        <span class="corner corner-bl">⌞</span>
+                        <span class="corner corner-br">⌟</span>
+                        <div class="panel-label">PRESSURE</div>
+                        <div class="seg-slider-v" id="vslider-pressure" data-value="18" data-max="20" data-color="danger" style="flex:1; width:28px"></div>
+                        <span class="slider-readout" id="vslider-pressure-val">[ 90% ]</span>
+                    </div>
+                </div>
+            </section>
+
+        </main>
+
+    </div>
+
+    <!-- Dialog overlay -->
+    <div id="dialog-overlay" class="dialog-overlay">
+        <div id="dialog-box" class="dialog-box"></div>
+    </div>
+
+    <script src="js/nRegistry.js?v=20260228"></script>
+    <script src="js/nbeep.js?v=20260228"></script>
+    <script src="js/nUtils.js?v=20260228"></script>
+    <script src="js/nComp.js?v=20260228"></script>
+    <script src="js/nCatalog.js?v=20260228"></script>
+    <script src="js/nNotify.js?v=20260228"></script>
+    <script src="js/nStore.js?v=20260228"></script>
+    <script src="js/notumDemo.js?v=20260228"></script>
+    <script>
+    /* Show a demo notification after the grid renders */
+    (function () {
+        setTimeout(function () {
+            nNotify.init('#auto-grid');
+            nNotify.config({ rateLimit: 30000 });
+            nNotify.show({
+                icon:     'ph-info',
+                title:    'COMPONENT SHOWCASE',
+                subtitle: 'All AHI elements on one page',
+                linger:   5000
+            });
+        }, 800);
+    })();
+    </script>
+</body>
+</html>

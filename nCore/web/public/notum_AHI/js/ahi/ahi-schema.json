@@ -1,0 +1,332 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://n-r.hr/notum-ahi/schema/v1",
+  "title": "Notum AHI — Automatic Human Interface Schema",
+  "description": "Complete JSON Schema for the Notum AHI framework by Notum Robotics (n-r.hr). Defines control definitions, layout configuration, dialog definitions, flow steps, and event structures for autonomous agents driving human interfaces.",
+  "version": "1.0.0",
+
+  "definitions": {
+
+    "ControlBase": {
+      "type": "object",
+      "description": "Common fields shared by all control types.",
+      "properties": {
+        "id":       { "type": "string",  "description": "Stable identifier assigned by the agent. Survives re-renders. Used for patch/lock/read." },
+        "type":     { "type": "string",  "enum": ["card", "slider", "toggle", "button", "stepper", "bar", "status"], "description": "Control type." },
+        "cols":     { "type": "integer", "minimum": 1, "maximum": 6, "description": "Column span in the grid." },
+        "rows":     { "type": "integer", "minimum": 1, "maximum": 4, "description": "Row span in the grid." },
+        "disabled": { "type": "boolean", "default": false, "description": "If true, control is grayed out and non-interactive." },
+        "hidden":   { "type": "boolean", "default": false, "description": "If true, control occupies grid space but is invisible." },
+        "badge":    { "oneOf": [{"type": "string"}, {"type": "number"}, {"type": "null"}], "description": "Small overlay badge (e.g., notification count, 'NEW')." },
+        "tooltip":  { "type": "string",  "description": "Hover text explaining the control's purpose." },
+        "confirm":  { "$ref": "#/definitions/DialogDefinition", "description": "Auto-show this dialog before firing the event. Event only fires on confirmation." },
+        "onEvent":  { "type": "string",  "description": "Custom event name override. If set, this name is used in the event's 'event' field instead of the default." },
+        "progress": { "oneOf": [{"type": "number", "minimum": -1, "maximum": 100}, {"type": "null"}], "description": "Inline progress bar. 0-100 for determinate, -1 for indeterminate, null to remove." },
+        "status":   { "oneOf": [{"type": "string", "enum": ["ok", "warn", "error", "busy"]}, {"type": "null"}], "description": "Status pip indicator." }
+      },
+      "required": ["type", "cols", "rows"]
+    },
+
+    "CardControl": {
+      "allOf": [
+        { "$ref": "#/definitions/ControlBase" },
+        {
+          "type": "object",
+          "properties": {
+            "type":  { "const": "card" },
+            "size":  { "type": "string", "enum": ["2x2", "2x1", "1x2", "1x1"], "default": "2x2", "description": "Card size variant." },
+            "state": { "type": "string", "enum": ["on", "off"], "description": "Initial toggle state." },
+            "icon":  { "type": "string", "description": "Phosphor icon class (e.g., 'ph-lightbulb')." },
+            "name":  { "type": "string", "description": "Display name on the card." },
+            "on":    { "type": "string", "default": "ON",  "description": "Label text when state is 'on'." },
+            "off":   { "type": "string", "default": "OFF", "description": "Label text when state is 'off'." }
+          },
+          "required": ["state", "icon", "name"]
+        }
+      ]
+    },
+
+    "SliderControl": {
+      "allOf": [
+        { "$ref": "#/definitions/ControlBase" },
+        {
+          "type": "object",
+          "properties": {
+            "type":  { "const": "slider" },
+            "label": { "type": "string", "description": "Display label." },
+            "max":   { "type": "integer", "minimum": 1, "default": 10, "description": "Number of segments." },
+            "value": { "type": "integer", "minimum": 0, "description": "Current value (0 to max)." },
+            "color": { "type": "string", "enum": ["accent", "amber", "danger"], "default": "accent", "description": "Color theme." }
+          },
+          "required": ["label"]
+        }
+      ]
+    },
+
+    "ToggleControl": {
+      "allOf": [
+        { "$ref": "#/definitions/ControlBase" },
+        {
+          "type": "object",
+          "properties": {
+            "type":    { "const": "toggle" },
+            "label":   { "type": "string", "description": "Group label." },
+            "options": { "type": "array", "items": { "type": "string" }, "minItems": 2, "description": "Available options." },
+            "active":  { "type": "integer", "minimum": 0, "description": "Index of the active option (0-based)." }
+          },
+          "required": ["label", "options"]
+        }
+      ]
+    },
+
+    "ButtonControl": {
+      "allOf": [
+        { "$ref": "#/definitions/ControlBase" },
+        {
+          "type": "object",
+          "properties": {
+            "type":   { "const": "button" },
+            "label":  { "type": "string", "description": "Button text." },
+            "style":  { "type": "string", "enum": ["", "primary", "warning", "danger"], "default": "", "description": "Visual style variant." },
+            "icon":   { "type": "string", "description": "Phosphor icon class." },
+            "dialog": { "$ref": "#/definitions/DialogDefinition", "description": "If set, clicking this button opens this dialog." }
+          },
+          "required": ["label"]
+        }
+      ]
+    },
+
+    "StepperControl": {
+      "allOf": [
+        { "$ref": "#/definitions/ControlBase" },
+        {
+          "type": "object",
+          "properties": {
+            "type":  { "const": "stepper" },
+            "label": { "type": "string", "description": "Display label." },
+            "value": { "type": "integer", "minimum": 0, "default": 0, "description": "Current value." }
+          },
+          "required": ["label"]
+        }
+      ]
+    },
+
+    "BarControl": {
+      "allOf": [
+        { "$ref": "#/definitions/ControlBase" },
+        {
+          "type": "object",
+          "properties": {
+            "type":  { "const": "bar" },
+            "label": { "type": "string", "description": "Display label." },
+            "max":   { "type": "integer", "minimum": 1, "default": 10, "description": "Number of segments." },
+            "value": { "type": "integer", "minimum": 0, "description": "Current filled segments." },
+            "color": { "type": "string", "enum": ["accent", "amber", "danger"], "default": "accent" }
+          },
+          "required": ["label"]
+        }
+      ]
+    },
+
+    "StatusControl": {
+      "allOf": [
+        { "$ref": "#/definitions/ControlBase" },
+        {
+          "type": "object",
+          "properties": {
+            "type":  { "const": "status" },
+            "label": { "type": "string", "description": "Panel label." },
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "k": { "type": "string", "description": "Key/label." },
+                  "v": { "type": "string", "description": "Value text." },
+                  "c": { "type": "string", "enum": ["", "accent", "amber", "danger"], "description": "CSS color class." }
+                },
+                "required": ["k", "v"]
+              },
+              "description": "Array of key-value rows."
+            }
+          },
+          "required": ["label", "items"]
+        }
+      ]
+    },
+
+    "Control": {
+      "oneOf": [
+        { "$ref": "#/definitions/CardControl" },
+        { "$ref": "#/definitions/SliderControl" },
+        { "$ref": "#/definitions/ToggleControl" },
+        { "$ref": "#/definitions/ButtonControl" },
+        { "$ref": "#/definitions/StepperControl" },
+        { "$ref": "#/definitions/BarControl" },
+        { "$ref": "#/definitions/StatusControl" }
+      ]
+    },
+
+    "LayoutConfig": {
+      "type": "object",
+      "description": "Grid layout configuration.",
+      "properties": {
+        "cols":      { "type": "integer", "minimum": 1, "maximum": 12, "description": "Force column count. Default: auto (2/4/6 by width breakpoint)." },
+        "rowHeight": { "type": "integer", "minimum": 20, "maximum": 200, "description": "Row height in px. Default: auto-computed to fill viewport." },
+        "gap":       { "type": "integer", "minimum": 0, "default": 6, "description": "Grid gap in px." },
+        "padding":   { "type": "integer", "minimum": 0, "default": 16, "description": "Container padding in px." },
+        "order":     { "type": "array", "items": { "type": "integer" }, "description": "Render order by control index." },
+        "pinned":    {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "col": { "type": "integer", "minimum": 0 },
+              "row": { "type": "integer", "minimum": 0 }
+            },
+            "required": ["col", "row"]
+          },
+          "description": "Pin controls to specific grid positions. Key = control index as string."
+        }
+      }
+    },
+
+    "DialogButton": {
+      "type": "object",
+      "properties": {
+        "label": { "type": "string", "description": "Button text (uppercase recommended)." },
+        "value": { "type": "string", "description": "Value returned when this button is clicked." },
+        "style": { "type": "string", "enum": ["", "primary", "warning", "danger"], "description": "Visual style." }
+      },
+      "required": ["label", "value"]
+    },
+
+    "DialogDefinition": {
+      "type": "object",
+      "description": "Dialog modal definition.",
+      "properties": {
+        "title":   { "type": "string", "description": "Dialog title." },
+        "body":    { "type": "string", "description": "Body text." },
+        "buttons": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/DialogButton" },
+          "minItems": 1,
+          "description": "Array of action buttons."
+        }
+      },
+      "required": ["title", "buttons"]
+    },
+
+    "FlowStep": {
+      "type": "object",
+      "description": "A step in a multi-step flow.",
+      "properties": {
+        "type": { "type": "string", "enum": ["dialog", "render", "toast", "wait", "patch", "lock", "unlock", "notify"], "description": "Step type." }
+      },
+      "required": ["type"],
+      "oneOf": [
+        {
+          "properties": {
+            "type":    { "const": "dialog" },
+            "title":   { "type": "string" },
+            "body":    { "type": "string" },
+            "buttons": { "type": "array", "items": { "$ref": "#/definitions/DialogButton" } }
+          }
+        },
+        {
+          "properties": {
+            "type":     { "const": "render" },
+            "controls": { "type": "array", "items": { "$ref": "#/definitions/Control" } },
+            "config":   { "$ref": "#/definitions/LayoutConfig" },
+            "delay":    { "type": "integer", "description": "Settle delay in ms before next step." }
+          }
+        },
+        {
+          "properties": {
+            "type":     { "const": "toast" },
+            "message":  { "type": "string" },
+            "level":    { "type": "string", "enum": ["info", "warn", "error", "ok"] },
+            "duration": { "type": "integer" }
+          }
+        },
+        {
+          "properties": {
+            "type":     { "const": "wait" },
+            "duration": { "type": "integer", "description": "Wait time in ms." }
+          }
+        },
+        {
+          "properties": {
+            "type":    { "const": "patch" },
+            "id":      { "type": "string" },
+            "index":   { "type": "integer" },
+            "changes": { "type": "object" }
+          }
+        },
+        {
+          "properties": {
+            "type":  { "const": "lock" },
+            "id":    { "type": "string", "description": "Control id to lock (disable)." },
+            "index": { "type": "integer", "description": "Control index to lock." }
+          }
+        },
+        {
+          "properties": {
+            "type":  { "const": "unlock" },
+            "id":    { "type": "string", "description": "Control id to unlock (re-enable)." },
+            "index": { "type": "integer", "description": "Control index to unlock." }
+          }
+        },
+        {
+          "properties": {
+            "type":     { "const": "notify" },
+            "icon":     { "type": "string", "description": "Phosphor icon class (e.g. 'ph-bell')." },
+            "title":    { "type": "string", "description": "Notification title." },
+            "subtitle": { "type": "string", "description": "Secondary text line." },
+            "linger":   { "type": "integer", "description": "Auto-dismiss time in ms (default: 4000)." }
+          }
+        }
+      ]
+    },
+
+    "AHIEvent": {
+      "type": "object",
+      "description": "Event emitted by the AHI layer when the user interacts with a control.",
+      "properties": {
+        "event":     { "type": "string", "description": "Event name (e.g., 'toggle', 'button_click', 'slider_change', 'dialog_response')." },
+        "id":        { "oneOf": [{"type": "string"}, {"type": "null"}], "description": "Control id if assigned." },
+        "index":     { "type": "integer", "description": "Control index in the controls array." },
+        "control":   { "type": "string", "description": "Human-readable control name/label." },
+        "value":     { "description": "The new value or selected option." },
+        "timestamp": { "type": "integer", "description": "Unix timestamp in milliseconds." }
+      },
+      "required": ["event", "timestamp"]
+    }
+  },
+
+  "type": "object",
+  "properties": {
+    "controls": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/Control" },
+      "description": "Array of control definitions for ahi_render."
+    },
+    "config": { "$ref": "#/definitions/LayoutConfig" },
+    "dialog": { "$ref": "#/definitions/DialogDefinition" },
+    "steps":  {
+      "type": "array",
+      "items": { "$ref": "#/definitions/FlowStep" },
+      "description": "Array of flow steps for ahi_flow."
+    },
+    "notification": {
+      "type": "object",
+      "description": "In-grid notification definition for ahi_notify.",
+      "properties": {
+        "icon":     { "type": "string", "description": "Phosphor icon class." },
+        "title":    { "type": "string", "description": "Notification title." },
+        "subtitle": { "type": "string", "description": "Secondary text line." },
+        "linger":   { "type": "integer", "description": "Auto-dismiss time in ms." }
+      }
+    }
+  }
+}

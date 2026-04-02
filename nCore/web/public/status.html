@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>ClusterFlock — Status</title>
+    <link rel="stylesheet" href="notum_AHI/css/phosphor.css?v=20260330">
+    <link rel="stylesheet" href="notum_AHI/css/style.css?v=20260330">
+    <link rel="stylesheet" href="notum_AHI/css/notum.css?v=20260330">
+    <link rel="stylesheet" href="app.css?v=20260330">
+</head>
+<body>
+<div class="cf-app">
+    <header>
+        <h1>CLUSTER<span class="accent">FLOCK</span></h1>
+    </header>
+
+    <!--#include file="nav.part"-->
+
+    <main>
+        <!-- Alert Banner -->
+        <div class="alert-banner" id="alert-banner">
+            <i class="ph ph-warning ab-icon"></i>
+            <span class="ab-text" id="alert-text"></span>
+            <button class="ab-dismiss" id="alert-dismiss"><i class="ph ph-x"></i></button>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="summary-grid" id="summary-grid">
+            <div class="summary-card" id="sc-nodes">
+                <span class="corner corner-tl">⌜</span>
+                <span class="corner corner-tr">⌝</span>
+                <span class="corner corner-bl">⌞</span>
+                <span class="corner corner-br">⌟</span>
+                <span class="sc-label">NODES</span>
+                <span class="sc-value loading" id="sc-nodes-val">—</span>
+            </div>
+            <div class="summary-card" id="sc-healthy">
+                <span class="corner corner-tl">⌜</span>
+                <span class="corner corner-tr">⌝</span>
+                <span class="corner corner-bl">⌞</span>
+                <span class="corner corner-br">⌟</span>
+                <span class="sc-label">HEALTHY</span>
+                <span class="sc-value accent loading" id="sc-healthy-val">—</span>
+            </div>
+            <div class="summary-card" id="sc-stale">
+                <span class="corner corner-tl">⌜</span>
+                <span class="corner corner-tr">⌝</span>
+                <span class="corner corner-bl">⌞</span>
+                <span class="corner corner-br">⌟</span>
+                <span class="sc-label">STALE</span>
+                <span class="sc-value loading" id="sc-stale-val">—</span>
+            </div>
+            <div class="summary-card" id="sc-dead">
+                <span class="corner corner-tl">⌜</span>
+                <span class="corner corner-tr">⌝</span>
+                <span class="corner corner-bl">⌞</span>
+                <span class="corner corner-br">⌟</span>
+                <span class="sc-label">DEAD</span>
+                <span class="sc-value loading" id="sc-dead-val">—</span>
+            </div>
+            <div class="summary-card" id="sc-gpus">
+                <span class="corner corner-tl">⌜</span>
+                <span class="corner corner-tr">⌝</span>
+                <span class="corner corner-bl">⌞</span>
+                <span class="corner corner-br">⌟</span>
+                <span class="sc-label">GPUs</span>
+                <span class="sc-value loading" id="sc-gpus-val">—</span>
+            </div>
+            <div class="summary-card" id="sc-models">
+                <span class="corner corner-tl">⌜</span>
+                <span class="corner corner-tr">⌝</span>
+                <span class="corner corner-bl">⌞</span>
+                <span class="corner corner-br">⌟</span>
+                <span class="sc-label">MODELS</span>
+                <span class="sc-value accent loading" id="sc-models-val">—</span>
+            </div>
+            <div class="summary-card" id="sc-vram">
+                <span class="corner corner-tl">⌜</span>
+                <span class="corner corner-tr">⌝</span>
+                <span class="corner corner-bl">⌞</span>
+                <span class="corner corner-br">⌟</span>
+                <span class="sc-label">TOTAL VRAM</span>
+                <span class="sc-value loading" id="sc-vram-val">—</span>
+            </div>
+            <div class="summary-card" id="sc-outdated">
+                <span class="corner corner-tl">⌜</span>
+                <span class="corner corner-tr">⌝</span>
+                <span class="corner corner-bl">⌞</span>
+                <span class="corner corner-br">⌟</span>
+                <span class="sc-label">OUTDATED</span>
+                <span class="sc-value loading" id="sc-outdated-val">—</span>
+            </div>
+        </div>
+
+        <!-- Nodes -->
+        <div class="cf-section">
+            <div class="cf-section-label">NODES</div>
+            <div class="node-grid" id="node-grid"></div>
+        </div>
+
+        <!-- Config -->
+        <div class="cf-section">
+            <div class="cf-section-label">CLUSTER CONFIG</div>
+            <div class="cf-panel" id="config-panel">
+                <span class="corner corner-tl">⌜</span>
+                <span class="corner corner-tr">⌝</span>
+                <span class="corner corner-bl">⌞</span>
+                <span class="corner corner-br">⌟</span>
+                <div class="status-row">
+                    <span class="status-label">ACCESS MODE</span>
+                    <span class="status-val accent" id="cfg-access-mode">—</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">ORCHESTRATOR LOCK</span>
+                    <span class="status-val" id="cfg-lock">—</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">TIGHT PACK</span>
+                    <span class="status-val" id="cfg-tight-pack">—</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">UPTIME</span>
+                    <span class="status-val" id="cfg-uptime">—</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">APP VERSION</span>
+                    <span class="status-val" id="cfg-version">—</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">EXPECTED AGENT VERSION</span>
+                    <span class="status-val" id="cfg-agent-version">—</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">DOWNLOADED MODELS</span>
+                    <span class="status-val" id="cfg-downloads">—</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Local Agent -->
+        <div class="cf-section">
+            <div class="cf-section-label">LOCAL AGENT</div>
+            <div class="cf-panel" id="local-agent-panel">
+                <span class="corner corner-tl">⌜</span>
+                <span class="corner corner-tr">⌝</span>
+                <span class="corner corner-bl">⌞</span>
+                <span class="corner corner-br">⌟</span>
+                <div class="status-row">
+                    <span class="status-label">STATUS</span>
+                    <span class="status-val" id="la-status">—</span>
+                </div>
+                <div class="status-row" id="la-type-row" style="display:none;">
+                    <span class="status-label">AGENT TYPE</span>
+                    <span class="status-val accent" id="la-type">—</span>
+                </div>
+                <div class="status-row" id="la-pid-row" style="display:none;">
+                    <span class="status-label">PID</span>
+                    <span class="status-val" id="la-pid">—</span>
+                </div>
+                <div id="la-controls" class="btn-row" style="margin-top:4px;">
+                    <select class="cf-select" id="la-agent-type" style="flex:1;">
+                        <option value="">Select agent type...</option>
+                    </select>
+                    <button class="cf-btn primary" id="la-btn-start" data-flash data-lockout="1500">
+                        <i class="ph ph-play"></i> START
+                    </button>
+                    <button class="cf-btn danger" id="la-btn-stop" data-flash data-lockout="1500" style="display:none;">
+                        <i class="ph ph-stop"></i> STOP
+                    </button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!--#include file="footer.part"-->
+</div>
+
+<div id="ahi-toast-container"></div>
+
+<div id="dialog-overlay" class="dialog-overlay">
+    <div id="dialog-box" class="dialog-box"></div>
+</div>
+
+<script src="notum_AHI/js/nRegistry.js?v=20260330"></script>
+<script src="notum_AHI/js/nUtils.js?v=20260330"></script>
+<script src="notum_AHI/js/nComp.js?v=20260330"></script>
+<script src="notum_AHI/js/nNotify.js?v=20260330"></script>
+<script src="notum_AHI/js/nDynamic.js?v=20260330"></script>
+<script>
+(function() {
+    'use strict';
+
+    const POLL_INTERVAL = 5000;
+    const BASE = '';
+    let connected = false;
+    let prevNodeStatuses = {};
+    let firstPollDone = false;
+    let alertDismissed = false;
+
+    // ── Nav highlight ──
+    document.querySelectorAll('.nav-tab').forEach(t => {
+        if (t.getAttribute('href') === '/status.html') t.classList.add('active');
+    });
+
+    // ── Toast helper ──
+    function toast(msg, level, duration) {
+        level = level || 'info';
+        duration = duration || 3000;
+        const c = document.getElementById('ahi-toast-container');
+        if (!c) return;
+        const el = document.createElement('div');
+        el.className = 'ahi-toast ' + level;
+        el.textContent = msg;
+        c.appendChild(el);
+        requestAnimationFrame(() => el.classList.add('visible'));
+        if (typeof nbeep === 'function') nbeep('toast_' + level);
+        setTimeout(() => {
+            el.classList.remove('visible');
+            setTimeout(() => el.remove(), 300);
+        }, duration);
+    }
+
+    // ── Connection indicator ──
+    function setConnected(val) {
+        if (val === connected) return;
+        connected = val;
+        toast(val ? 'LINK RESTORED' : 'LINK DOWN', val ? 'ok' : 'error');
+    }
+
+    // ── Alert Banner ──
+    var alertBanner = document.getElementById('alert-banner');
+    var alertText = document.getElementById('alert-text');
+    document.getElementById('alert-dismiss').addEventListener('click', function() {
+        alertDismissed = true;
+        alertBanner.classList.remove('visible');
+    });
+
+    function updateAlertBanner(health) {
+        if (alertDismissed) return;
+        var problems = [];
+        if (health.dead > 0) problems.push(health.dead + ' DEAD');
+        if (health.stale > 0) problems.push(health.stale + ' STALE');
+        if (health.outdated > 0) problems.push(health.outdated + ' OUTDATED');
+        if (problems.length > 0) {
+            alertText.textContent = problems.join(' · ') + ' — ATTENTION REQUIRED';
+            alertBanner.className = 'alert-banner visible ' + (health.dead > 0 ? 'error' : 'warn');
+        } else {
+            alertBanner.classList.remove('visible');
+        }
+    }
+
+    // ── Formatters ──
+    function fmtBytes(mb) {
+        if (mb == null) return '—';
+        if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
+        return Math.round(mb) + ' MB';
+    }
+
+    function fmtUptime(sec) {
+        if (sec == null) return '—';
+        var h = Math.floor(sec / 3600);
+        var m = Math.floor((sec % 3600) / 60);
+        return h + 'h ' + m + 'm';
+    }
+
+    function ageStr(ts) {
+        if (!ts) return '—';
+        var now = Date.now() / 1000;
+        var diff = Math.max(0, now - ts);
+        if (diff < 60) return Math.round(diff) + 's ago';
+        if (diff < 3600) return Math.round(diff / 60) + 'm ago';
+        if (diff < 86400) return Math.round(diff / 3600) + 'h ago';
+        return Math.round(diff / 86400) + 'd ago';
+    }
+
+    function fullTimestamp(ts) {
+        if (!ts) return '';
+        return new Date(ts * 1000).toLocaleString();
+    }
+
+    function segBar(filled, total, color) {
+        var segs = [];
+        for (var i = 0; i < total; i++) {
+            var cls = i < filled ? 'seg filled' + (color ? ' ' + color : '') : 'seg';
+            segs.push('<div class="' + cls + '"></div>');
+        }
+        return segs.join('');
+    }
+
+    function vramColor(pct) {
+        if (pct >= 90) return 'crit';
+        if (pct >= 70) return 'warn';
+        return '';
+    }
+
+    // ── Render nodes ──
+    function renderNodes(nodes) {
+        var grid = document.getElementById('node-grid');
+        if (!nodes || !nodes.length) {
+            grid.innerHTML = '<div class="status-val" style="padding:8px 0;">NO NODES</div>';
+            return;
+        }
+
+        var html = '';
+        var gpuCount = 0;
+        var totalVram = 0;
+        var modelCount = 0;
+
+        nodes.forEach(function(n) {
+            var st = n.status || 'dead';
+            var gpus = (n.hardware && n.hardware.gpu) || [];
+            var eps = n.endpoints || [];
+            var agentType = (n.agent_type || '').toUpperCase() || 'LMS';
+
+            gpuCount += gpus.length;
+            modelCount += eps.filter(function(e) { return e.status === 'ready'; }).length;
+
+            html += '<div class="node-card ' + st + '">';
+            html += '<span class="corner corner-tl">⌜</span>';
+            html += '<span class="corner corner-tr">⌝</span>';
+            html += '<span class="corner corner-bl">⌞</span>';
+            html += '<span class="corner corner-br">⌟</span>';
+
+            html += '<div class="node-header">';
+            html += '<div>';
+            html += '<div class="node-hostname">' + escHtml(n.hostname || n.node_id) + '</div>';
+            html += '<div class="node-id">' + escHtml(n.node_id) + '</div>';
+            html += '</div>';
+            html += '<div class="node-badges">';
+            html += '<span class="node-badge ' + st + '">' + st.toUpperCase() + '</span>';
+            html += '<span class="node-badge agent-type">' + agentType + '</span>';
+            if (n.conn_mode) html += '<span class="node-badge agent-type">' + n.conn_mode.toUpperCase() + '</span>';
+            if (n.agent_version) {
+                var vCls = n.version_ok === false ? ' danger' : '';
+                html += '<span class="node-badge agent-type' + vCls + '">' + escHtml(n.agent_version) + '</span>';
+            }
+            html += '</div>';
+            html += '</div>';
+
+            // Last seen
+            if (n.last_seen) {
+                html += '<div class="metric-row" data-tooltip="' + escHtml(fullTimestamp(n.last_seen)) + '">';
+                html += '<span class="metric-label">SEEN</span>';
+                html += '<span class="metric-val">' + ageStr(n.last_seen) + '</span>';
+                html += '</div>';
+            }
+
+            // GPUs
+            gpus.forEach(function(gpu, gi) {
+                var vt = gpu.vram_total_mb || gpu.vramTotal || 0;
+                var vu = gpu.vram_used_mb || gpu.vramUsed || 0;
+                totalVram += vt;
+                var pct = vt > 0 ? Math.round((vu / vt) * 100) : 0;
+                var filled = Math.round(pct / 10);
+                var gname = gpu.name || gpu.device || ('GPU ' + gi);
+
+                html += '<div class="gpu-row">';
+                html += '<div class="gpu-header">';
+                html += '<span class="gpu-name">' + escHtml(gname) + '</span>';
+                html += '<span class="gpu-vram">' + fmtBytes(vu) + ' / ' + fmtBytes(vt) + '</span>';
+                html += '</div>';
+                html += '<div class="metric-row">';
+                html += '<span class="metric-label">VRAM</span>';
+                html += '<div class="metric-bar">' + segBar(filled, 10, vramColor(pct)) + '</div>';
+                html += '<span class="metric-val">' + pct + '%</span>';
+                html += '</div>';
+
+                // GPU utilization
+                var gpuMetrics = (n.metrics && n.metrics.gpu) || [];
+                var gm = gpuMetrics[gi];
+                if (gm && gm.utilization_pct != null) {
+                    var uFilled = Math.round(gm.utilization_pct / 10);
+                    html += '<div class="metric-row">';
+                    html += '<span class="metric-label">UTIL</span>';
+                    html += '<div class="metric-bar">' + segBar(uFilled, 10, vramColor(gm.utilization_pct)) + '</div>';
+                    html += '<span class="metric-val">' + Math.round(gm.utilization_pct) + '%</span>';
+                    html += '</div>';
+                }
+                html += '</div>';
+            });
+
+            // System metrics
+            var sys = (n.metrics && n.metrics.system) || {};
+            if (sys.cpu_percent != null) {
+                var cpuFilled = Math.round(sys.cpu_percent / 10);
+                html += '<div class="metric-row">';
+                html += '<span class="metric-label">CPU</span>';
+                html += '<div class="metric-bar">' + segBar(cpuFilled, 10, vramColor(sys.cpu_percent)) + '</div>';
+                html += '<span class="metric-val">' + Math.round(sys.cpu_percent) + '%</span>';
+                html += '</div>';
+            }
+            if (sys.ram_percent != null) {
+                var ramFilled = Math.round(sys.ram_percent / 10);
+                html += '<div class="metric-row">';
+                html += '<span class="metric-label">RAM</span>';
+                html += '<div class="metric-bar">' + segBar(ramFilled, 10, vramColor(sys.ram_percent)) + '</div>';
+                html += '<span class="metric-val">' + Math.round(sys.ram_percent) + '%</span>';
+                html += '</div>';
+            }
+            if (sys.disk_percent != null) {
+                var diskFilled = Math.round(sys.disk_percent / 10);
+                html += '<div class="metric-row">';
+                html += '<span class="metric-label">DISK</span>';
+                html += '<div class="metric-bar">' + segBar(diskFilled, 10, vramColor(sys.disk_percent)) + '</div>';
+                html += '<span class="metric-val">' + Math.round(sys.disk_percent) + '%</span>';
+                html += '</div>';
+            }
+
+            // Endpoints
+            if (eps.length) {
+                html += '<div class="endpoint-tags">';
+                eps.forEach(function(ep) {
+                    var est = ep.status || 'unknown';
+                    var cls = est === 'ready' ? 'ready' : est === 'loading' ? 'loading' : est === 'error' ? 'error' : '';
+                    var tps = ep.tokens_per_sec ? ' ' + Math.round(ep.tokens_per_sec) + ' t/s' : '';
+                    var gpuLabel = ep.gpu != null ? ' GPU ' + ep.gpu : '';
+                    html += '<span class="endpoint-tag ' + cls + '">';
+                    if (ep.graylisted) html += '⚠️ ';
+                    html += escHtml(ep.model || '?');
+                    if (gpuLabel) html += '<span class="ep-tps">' + gpuLabel + '</span>';
+                    if (tps) html += '<span class="ep-tps">' + tps + '</span>';
+                    html += '</span>';
+                });
+                html += '</div>';
+            }
+
+            // System info line
+            var hw = n.hardware || {};
+            var sysInfo = [];
+            if (hw.system) {
+                if (hw.system.cpu_name) sysInfo.push(hw.system.cpu_name);
+                if (hw.system.ram_total_mb) sysInfo.push(fmtBytes(hw.system.ram_total_mb) + ' RAM');
+                if (hw.system.os) sysInfo.push(hw.system.os);
+            }
+            if (n.address) sysInfo.push(n.address);
+            if (sysInfo.length) {
+                html += '<div class="metric-row">';
+                html += '<span class="metric-val" style="text-align:left;flex:1;font-size:.5rem;color:var(--text-dim);opacity:0.7;">' + escHtml(sysInfo.join(' · ')) + '</span>';
+                html += '</div>';
+            }
+
+            // Downloaded models count
+            var dlCount = (n.downloaded || []).length;
+            if (dlCount > 0) {
+                html += '<div class="metric-row">';
+                html += '<span class="metric-label">STORED</span>';
+                html += '<span class="metric-val">' + dlCount + ' model' + (dlCount > 1 ? 's' : '') + ' locally</span>';
+                html += '</div>';
+            }
+
+            html += '</div>';
+
+            // Track status changes for notifications
+            var prev = prevNodeStatuses[n.node_id];
+            if (prev && prev !== st) {
+                if (st === 'dead') toast('AGENT DEAD — ' + (n.hostname || n.node_id), 'error');
+                else if (st === 'healthy' && prev !== 'healthy') toast('AGENT ONLINE — ' + (n.hostname || n.node_id), 'ok');
+            }
+            prevNodeStatuses[n.node_id] = st;
+        });
+
+        grid.innerHTML = html;
+
+        // Apply nComp status pips to node cards
+        if (typeof nComp !== 'undefined') {
+            grid.querySelectorAll('.node-card').forEach(function(card) {
+                if (card.classList.contains('healthy')) nComp.status(card, 'ok');
+                else if (card.classList.contains('stale')) nComp.status(card, 'warn');
+                else nComp.status(card, 'error');
+            });
+        }
+
+        return { gpuCount: gpuCount, totalVram: totalVram, modelCount: modelCount };
+    }
+
+    function escHtml(s) {
+        if (!s) return '';
+        var d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+    }
+
+    // ── Poll ──
+    function poll() {
+        var healthDone = false, nodesDone = false;
+        var healthData = null, nodesData = null, configData = null;
+
+        // Fetch health
+        fetch(BASE + '/api/v1/health')
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                healthData = d;
+                setConnected(true);
+            })
+            .catch(function() { setConnected(false); })
+            .finally(check);
+
+        // Fetch nodes
+        fetch(BASE + '/api/v1/nodes')
+            .then(function(r) { return r.json(); })
+            .then(function(d) { nodesData = d; })
+            .catch(function() {})
+            .finally(check);
+
+        // Fetch config
+        fetch(BASE + '/api/v1/config')
+            .then(function(r) { return r.json(); })
+            .then(function(d) { configData = d; })
+            .catch(function() {})
+            .finally(check);
+
+        // Fetch access
+        var accessData = null;
+        fetch(BASE + '/api/v1/access')
+            .then(function(r) { return r.json(); })
+            .then(function(d) { accessData = d; })
+            .catch(function() {})
+            .finally(check);
+
+        // Fetch local agent
+        var localAgentData = null;
+        fetch(BASE + '/api/v1/local-agent')
+            .then(function(r) { return r.json(); })
+            .then(function(d) { localAgentData = d; })
+            .catch(function() {})
+            .finally(check);
+
+        // Fetch downloads count
+        var downloadsData = null;
+        fetch(BASE + '/api/v1/autoload/downloads')
+            .then(function(r) { return r.json(); })
+            .then(function(d) { downloadsData = d; })
+            .catch(function() {})
+            .finally(check);
+
+        var doneCount = 0;
+        function check() {
+            doneCount++;
+            if (doneCount < 6) return;
+
+            // Remove loading pulse on first successful poll
+            if (!firstPollDone) {
+                firstPollDone = true;
+                document.querySelectorAll('.sc-value.loading').forEach(function(el) {
+                    el.classList.remove('loading');
+                });
+            }
+
+            // Update sync badge
+
+
+            // Update summary
+            if (healthData) {
+                document.getElementById('sc-nodes-val').textContent = healthData.nodes_total;
+                document.getElementById('sc-healthy-val').textContent = healthData.healthy;
+
+                var staleEl = document.getElementById('sc-stale-val');
+                staleEl.textContent = healthData.stale;
+                staleEl.className = 'sc-value' + (healthData.stale > 0 ? ' amber' : '');
+
+                var deadEl = document.getElementById('sc-dead-val');
+                deadEl.textContent = healthData.dead;
+                deadEl.className = 'sc-value' + (healthData.dead > 0 ? ' danger' : '');
+
+                var outEl = document.getElementById('sc-outdated-val');
+                outEl.textContent = healthData.outdated;
+                outEl.className = 'sc-value' + (healthData.outdated > 0 ? ' amber' : '');
+
+                document.getElementById('cfg-uptime').textContent = fmtUptime(healthData.uptime);
+
+                // Alert banner
+                updateAlertBanner(healthData);
+            }
+
+            // Render nodes
+            if (nodesData && nodesData.nodes) {
+                var stats = renderNodes(nodesData.nodes);
+                if (stats) {
+                    document.getElementById('sc-gpus-val').textContent = stats.gpuCount;
+                    document.getElementById('sc-models-val').textContent = stats.modelCount;
+                    document.getElementById('sc-vram-val').textContent = fmtBytes(stats.totalVram);
+                }
+            }
+
+            // Config
+            if (configData) {
+                var lockEl = document.getElementById('cfg-lock');
+                lockEl.textContent = (configData.locked ? 'LOCKED' : 'UNLOCKED');
+                lockEl.className = 'status-val' + (configData.locked ? ' amber' : ' accent');
+
+                var tpEl = document.getElementById('cfg-tight-pack');
+                tpEl.textContent = (configData.tight_pack ? 'ON' : 'OFF');
+                tpEl.className = 'status-val' + (configData.tight_pack ? ' accent' : '');
+            }
+
+            if (accessData) {
+                var amEl = document.getElementById('cfg-access-mode');
+                amEl.textContent = (accessData.mode || 'OPEN').toUpperCase();
+            }
+
+            // Local agent
+            if (localAgentData) {
+                var laStatusEl = document.getElementById('la-status');
+                var laTypeRow = document.getElementById('la-type-row');
+                var laPidRow = document.getElementById('la-pid-row');
+                var laStartBtn = document.getElementById('la-btn-start');
+                var laStopBtn = document.getElementById('la-btn-stop');
+                var laSelect = document.getElementById('la-agent-type');
+
+                if (localAgentData.running) {
+                    laStatusEl.textContent = 'RUNNING';
+                    laStatusEl.className = 'status-val accent';
+                    laTypeRow.style.display = '';
+                    document.getElementById('la-type').textContent = (localAgentData.agent_type || '?').toUpperCase();
+                    if (localAgentData.pid) {
+                        laPidRow.style.display = '';
+                        document.getElementById('la-pid').textContent = localAgentData.pid;
+                    } else {
+                        laPidRow.style.display = 'none';
+                    }
+                    laStartBtn.style.display = 'none';
+                    laSelect.style.display = 'none';
+                    laStopBtn.style.display = '';
+                } else {
+                    laStatusEl.textContent = 'STOPPED';
+                    laStatusEl.className = 'status-val';
+                    laTypeRow.style.display = 'none';
+                    laPidRow.style.display = 'none';
+                    laStartBtn.style.display = '';
+                    laSelect.style.display = '';
+                    laStopBtn.style.display = 'none';
+                    // Populate available agent types
+                    var avail = localAgentData.available || [];
+                    var rec = localAgentData.recommended || '';
+                    if (avail.length && laSelect.options.length <= 1) {
+                        laSelect.innerHTML = '<option value="">Select agent type...</option>';
+                        avail.forEach(function(a) {
+                            var label = escHtml(a.toUpperCase());
+                            if (a === rec) label += ' (recommended)';
+                            laSelect.innerHTML += '<option value="' + escHtml(a) + '"' + (a === rec ? ' selected' : '') + '>' + label + '</option>';
+                        });
+                    }
+                }
+
+                if (typeof nComp !== 'undefined') {
+                    nComp.status(document.getElementById('local-agent-panel'), localAgentData.running ? 'ok' : null);
+                }
+            }
+
+            // Expected agent version
+            if (healthData && healthData.expected_agent_version) {
+                document.getElementById('cfg-agent-version').textContent = healthData.expected_agent_version;
+            }
+
+            // Downloads
+            if (downloadsData) {
+                document.getElementById('cfg-downloads').textContent = (downloadsData.count || 0) + ' MODELS';
+            }
+
+            // nComp status on summary cards
+            if (typeof nComp !== 'undefined' && healthData) {
+                nComp.status(document.getElementById('sc-stale'), healthData.stale > 0 ? 'warn' : null);
+                nComp.status(document.getElementById('sc-dead'), healthData.dead > 0 ? 'error' : null);
+                nComp.status(document.getElementById('sc-healthy'), healthData.healthy > 0 ? 'ok' : null);
+                nComp.status(document.getElementById('sc-outdated'), healthData.outdated > 0 ? 'warn' : null);
+            }
+        }
+    }
+
+    // Start polling
+    poll();
+    setInterval(poll, POLL_INTERVAL);
+
+    // ── Local Agent Controls ──
+    document.getElementById('la-btn-start').addEventListener('click', function() {
+        var agentType = document.getElementById('la-agent-type').value;
+        if (!agentType) { toast('SELECT AGENT TYPE', 'warn'); return; }
+        fetch(BASE + '/api/v1/local-agent', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ agent_type: agentType })
+        })
+        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+        .then(function(res) {
+            if (res.ok) {
+                toast('LOCAL AGENT STARTING — ' + agentType.toUpperCase(), 'ok');
+                if (typeof nbeep === 'function') nbeep('agent_start');
+            } else {
+                toast('START FAILED: ' + (res.data.error || 'unknown'), 'error');
+            }
+        })
+        .catch(function() { toast('START FAILED', 'error'); });
+    });
+
+    document.getElementById('la-btn-stop').addEventListener('click', function() {
+        nDynamic.showDialog({
+            title: 'Stop Agent',
+            body: 'Stop local agent?',
+            alarm: false,
+            buttons: [
+                { label: 'STOP', value: 'yes', style: 'danger' },
+                { label: 'CANCEL', value: null }
+            ]
+        }).then(function(val) {
+            if (val !== 'yes') return;
+            fetch(BASE + '/api/v1/local-agent', { method: 'DELETE' })
+                .then(function(r) { return r.json(); })
+                .then(function() {
+                    toast('LOCAL AGENT STOPPED', 'ok');
+                })
+                .catch(function() { toast('STOP FAILED', 'error'); });
+        });
+    });
+})();
+</script>
+</body>
+</html>

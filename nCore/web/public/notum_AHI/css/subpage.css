@@ -1,0 +1,284 @@
+/* ──────────────────────────────────────────────────────────────
+   Notum AHI Sub-page Layout — Shared CSS
+   Copyright © 2026 Notum Robotics. Licensed under the MIT License.
+
+   Common layout styles used by dynamic.html, interactive.html,
+   ahi.html, and any future sub-page that renders a viewport-
+   filling grid layout with header + container + footer.
+
+   USAGE:
+     <link rel="stylesheet" href="css/subpage.css">
+     <div class="subpage-app">   (flex column, 100dvh)
+       <header>…</header>
+       <div class="nd-grid">…</div>   (flex:1 container)
+       <div class="subpage-footer">…</div>
+     </div>
+   ────────────────────────────────────────────────────────────── */
+
+/* ═══════════════════════════════════
+   Viewport Lock
+   ═══════════════════════════════════ */
+
+html, body {
+    overflow: hidden;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+}
+
+/* ═══════════════════════════════════
+   App Shell — Full-viewport flex column
+   ═══════════════════════════════════ */
+
+.subpage-app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+}
+
+.subpage-app header {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: calc(1rem + env(safe-area-inset-top, 0px)) 16px .5rem;
+    flex-shrink: 0;
+    column-gap: 1rem;
+}
+
+.header-subtitle {
+    width: 100%;
+    font-size: .65rem;
+    letter-spacing: .25em;
+    color: rgba(0,229,255, 0.3);
+    margin-top: -.15rem;
+    margin-bottom: .15rem;
+}
+
+/* ═══════════════════════════════════
+   Header Meta Links
+   ═══════════════════════════════════ */
+
+.header-meta a {
+    color: rgba(0,229,255, 0.35);
+    text-decoration: none;
+}
+.header-meta a:hover {
+    color: rgba(0,229,255, 0.6);
+}
+
+/* ═══════════════════════════════════
+   Grid Container
+   ═══════════════════════════════════ */
+
+.nd-grid {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* ═══════════════════════════════════
+   Grid Cell Overrides
+   Baseline styles for nDynamic-rendered controls
+   inside the viewport-filling container.
+   ═══════════════════════════════════ */
+
+.nd-grid .grid-cell {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    position: relative;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.nd-grid .grid-cell.gc-slider {
+    justify-content: center;
+    gap: 6px;
+}
+
+.nd-grid .grid-cell.gc-toggle {
+    justify-content: center;
+    gap: 2px;
+    padding: 6px 10px;
+}
+
+.nd-grid .grid-cell.gc-toggle .panel-label {
+    font-size: .55rem;
+    line-height: 1;
+}
+
+.nd-grid .grid-cell.gc-toggle .tg-option {
+    padding: 4px 0;
+    font-size: .7rem;
+}
+
+.nd-grid .grid-cell.gc-stepper {
+    justify-content: center;
+    gap: 4px;
+}
+
+.nd-grid .grid-cell.gc-bar {
+    justify-content: center;
+    gap: 4px;
+}
+
+.nd-grid .grid-cell.gc-status {
+    gap: 3px;
+}
+
+.nd-grid .action-btn {
+    display: flex;
+}
+
+.nd-grid .card {
+    flex: none;
+    min-width: 0;
+}
+
+/* ═══════════════════════════════════
+   Footer Bar
+   ═══════════════════════════════════ */
+
+.subpage-footer {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: .4rem 16px calc(.4rem + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--border);
+}
+
+.subpage-footer .footer-info {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: .55rem;
+    color: var(--text-dim);
+    letter-spacing: .06em;
+}
+
+.subpage-footer .footer-info span {
+    color: var(--accent);
+}
+
+/* ═══════════════════════════════════
+   Footer Actions & Buttons
+   ═══════════════════════════════════ */
+
+.footer-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.footer-btn {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 4px 10px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: .6rem;
+    letter-spacing: .06em;
+    color: var(--text-dim);
+    cursor: pointer;
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.footer-btn:hover {
+    color: var(--text);
+    border-color: rgba(244,244,244, 0.20);
+}
+
+.footer-btn.active {
+    color: var(--accent);
+    border-color: rgba(0,229,255, 0.30);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Mobile Optimizations (≤480px)
+   Only affects phones — desktop / iPad rendering is untouched.
+   ══════════════════════════════════════════════════════════════ */
+
+@media (max-width: 480px) {
+    /* Header: tighter padding on phones */
+    .subpage-app header {
+        padding: calc(.75rem + env(safe-area-inset-top, 0px)) 10px .35rem;
+        column-gap: .6rem;
+    }
+
+    .header-subtitle {
+        font-size: .58rem;
+        letter-spacing: .18em;
+        margin-top: -.1rem;
+    }
+
+    /* Grid container: tighter padding via nDynamic config,
+       but also ensure visual breathing room */
+    .nd-grid {
+        /* nDynamic sets padding inline; let it handle it */
+    }
+
+    /* Grid cell overrides: more compact for small screens */
+    .nd-grid .grid-cell {
+        padding: 7px;
+    }
+    .nd-grid .grid-cell.gc-toggle {
+        padding: 4px 7px;
+    }
+    .nd-grid .grid-cell.gc-toggle .tg-option {
+        padding: 3px 0;
+        font-size: .65rem;
+    }
+
+    /* Footer: wrap actions below info on small screens */
+    .subpage-footer {
+        flex-wrap: wrap;
+        padding: .35rem 10px calc(.35rem + env(safe-area-inset-bottom, 0px));
+        gap: 4px;
+    }
+    .subpage-footer .footer-info {
+        font-size: .5rem;
+    }
+
+    /* Footer actions: allow horizontal scroll if they overflow */
+    .footer-actions {
+        flex-wrap: wrap;
+        gap: 4px;
+    }
+    .footer-btn {
+        padding: 3px 7px;
+        font-size: .55rem;
+    }
+}
+
+/* Very small phones */
+@media (max-width: 374px) {
+    .subpage-app header {
+        padding: calc(.6rem + env(safe-area-inset-top, 0px)) 8px .3rem;
+    }
+    .subpage-footer {
+        padding: .3rem 8px calc(.3rem + env(safe-area-inset-bottom, 0px));
+    }
+    .footer-btn {
+        padding: 3px 5px;
+        font-size: .5rem;
+    }
+}
+
+/* Landscape phone: extreme vertical compression */
+@media (max-width: 768px) and (max-height: 420px) {
+    .subpage-app header {
+        padding: calc(.5rem + env(safe-area-inset-top, 0px)) 10px .2rem;
+    }
+    .header-subtitle {
+        display: none;
+    }
+    .subpage-footer {
+        padding: .25rem 10px calc(.25rem + env(safe-area-inset-bottom, 0px));
+    }
+}

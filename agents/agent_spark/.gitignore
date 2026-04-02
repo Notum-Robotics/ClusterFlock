@@ -1,0 +1,19 @@
+# llama.cpp source tree (cloned for building)
+llama_cpp/
+
+# Downloaded models (large files)
+models/**/*.gguf
+models/**/*.gguf.part
+
+# Prebuilt binaries — built by setup.py from llama_cpp/ source
+build/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Runtime config (contains tokens)
+cluster.json
+
+# Benchmark cache
+benchmarks.json

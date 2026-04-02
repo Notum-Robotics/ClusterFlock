@@ -1,0 +1,1002 @@
+<!--
+  Notum AHI — Homepage
+  Copyright © 2026 Notum Robotics. Licensed under the MIT License.
+
+  AHI (Automatic Human Interface) dashboard serves as the main
+  landing page — agents send declarative JSON, humans see a
+  polished dashboard, interactions produce structured events.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0a0a0a">
+    <title>Notum AHI</title>
+    <link rel="stylesheet" href="css/phosphor.css?v=20260228">
+    <link rel="stylesheet" href="css/style.css?v=20260228">
+    <link rel="stylesheet" href="css/notum.css?v=20260228">
+    <link rel="stylesheet" href="css/subpage.css?v=20260228">
+    <style>
+        /* ── AHI-specific overrides ── */
+        #event-log {
+            flex: 1;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: .55rem;
+            color: var(--accent);
+            letter-spacing: .04em;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            text-align: right;
+            opacity: .7;
+        }
+        #ahi-footer { gap: 12px; }
+
+        /* ── Scenario bar ── */
+        #scenario-bar {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: .35rem 16px;
+            border-bottom: 1px solid var(--border);
+            overflow-x: auto;
+        }
+        .scenario-btn {
+            font-family: 'Rajdhani', sans-serif;
+            font-size: .6rem;
+            font-weight: 600;
+            letter-spacing: .12em;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            background: transparent;
+            border: 1px solid var(--border);
+            padding: 4px 10px;
+            cursor: pointer;
+            transition: color .15s, border-color .15s;
+            flex-shrink: 0;
+        }
+        .scenario-btn:hover {
+            color: var(--text);
+            border-color: var(--text-dim);
+        }
+        .scenario-btn.active {
+            color: var(--accent);
+            border-color: var(--accent);
+        }
+
+        /* AHI disabled / hidden / badge overrides */
+        .ahi-disabled { pointer-events: none; }
+        .ahi-hidden   { visibility: hidden; }
+        .ahi-badge {
+            position: absolute;
+            top: 4px; right: 6px;
+            background: var(--danger);
+            color: #fff;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: .5rem;
+            font-weight: 700;
+            padding: 1px 5px;
+            border-radius: 2px;
+            line-height: 1.3;
+            z-index: 2;
+        }
+        .ahi-toast-container {
+            position: fixed;
+            top: 12px;
+            right: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            z-index: 9999;
+            pointer-events: none;
+        }
+        .ahi-toast {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: .6rem;
+            letter-spacing: .05em;
+            padding: 8px 14px;
+            border-radius: 2px;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--text);
+            pointer-events: auto;
+            animation: ahi-toast-in .15s;
+        }
+        .ahi-toast[data-level="ok"]    { border-left: 3px solid var(--accent); }
+        .ahi-toast[data-level="warn"]  { border-left: 3px solid var(--warning); }
+        .ahi-toast[data-level="error"] { border-left: 3px solid var(--danger); }
+        .ahi-toast[data-level="info"]  { border-left: 3px solid var(--text-dim); }
+        @keyframes ahi-toast-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* Progress bar on controls */
+        .ahi-progress {
+            position: absolute;
+            bottom: 0; left: 0;
+            height: 2px;
+            background: var(--accent);
+            transition: width .3s linear;
+        }
+        .ahi-progress.indeterminate {
+            width: 30% !important;
+            animation: ahi-ind .8s infinite linear;
+        }
+        @keyframes ahi-ind { 0% { left: -30%; } 100% { left: 100%; } }
+
+        /* Status pip */
+        .ahi-status-pip {
+            position: absolute;
+            top: 5px; left: 6px;
+            width: 5px; height: 5px;
+            border-radius: 50%;
+        }
+        .ahi-status-pip[data-s="ok"]   { background: var(--accent); }
+        .ahi-status-pip[data-s="warn"] { background: var(--warning); }
+        .ahi-status-pip[data-s="error"]{ background: var(--danger); }
+        .ahi-status-pip[data-s="busy"] { background: var(--warning); animation: ahi-pulse .6s infinite alternate; }
+        @keyframes ahi-pulse { from { opacity: 1; } to { opacity: .3; } }
+
+        /* ── Mobile optimizations ── */
+        @media (max-width: 480px) {
+            #scenario-bar {
+                padding: .3rem 10px;
+                gap: 4px;
+                -webkit-overflow-scrolling: touch;
+            }
+            .scenario-btn {
+                padding: 4px 7px;
+                font-size: .55rem;
+                letter-spacing: .08em;
+            }
+            #ahi-footer {
+                gap: 6px;
+                flex-wrap: wrap;
+            }
+            #event-log {
+                font-size: .5rem;
+                flex: 1 1 100%;
+                order: 1;
+                text-align: left;
+                margin-top: 2px;
+            }
+            .ahi-toast-container {
+                top: 8px;
+                right: 8px;
+                left: 8px;
+            }
+            .ahi-toast {
+                font-size: .55rem;
+                padding: 6px 10px;
+            }
+        }
+        @media (max-width: 374px) {
+            #scenario-bar {
+                padding: .25rem 8px;
+                gap: 3px;
+            }
+            .scenario-btn {
+                padding: 3px 5px;
+                font-size: .5rem;
+                letter-spacing: .06em;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ahi-app" class="subpage-app">
+
+        <header>
+            <h1>Notum<span>AHI</span></h1>
+            <div class="header-subtitle">AUTOMATIC HUMAN INTERFACE</div>
+            <div class="header-meta">
+                NOTUM ROBOTICS D.O.O. <a href="https://n-r.hr" target="_blank" rel="noopener">N-R.HR</a>
+            </div>
+            <div class="header-meta">
+                <a href="components.html">COMPONENTS</a> ·
+                <a href="dynamic.html">DYNAMIC</a> ·
+                <a href="CODING_AGENT.md">AGENT DOCS</a> ·
+                <a href="Archive.zip">DOWNLOAD</a>
+            </div>
+        </header>
+
+        <div id="scenario-bar">
+            <button class="scenario-btn active" data-scenario="home">HOME</button>
+            <button class="scenario-btn" data-scenario="features">FEATURES</button>
+            <button class="scenario-btn" data-scenario="iot">IOT DASHBOARD</button>
+            <button class="scenario-btn" data-scenario="cicd">CI / CD PIPELINE</button>
+            <button class="scenario-btn" data-scenario="wizard">DEPLOY WIZARD</button>
+            <button class="scenario-btn" data-scenario="live">LIVE PATCHING</button>
+            <button class="scenario-btn" data-scenario="agent">AGENT SESSION</button>
+            <button class="scenario-btn" data-scenario="beeptest">BEEP TEST</button>
+        </div>
+
+        <div id="ahi-container" class="nd-grid"></div>
+
+        <div id="dialog-overlay" class="dialog-overlay"><div id="dialog-box" class="dialog-box"></div></div>
+
+        <div id="ahi-footer" class="subpage-footer">
+            <span class="footer-info">AHI v1.0 · NOTUM ROBOTICS</span>
+            <div class="footer-actions">
+                <div class="footer-btn" id="btn-edit"><i class="ph ph-pencil-simple"></i> EDIT</div>
+            </div>
+            <span id="event-log">— awaiting events —</span>
+        </div>
+
+    </div>
+
+    <!-- ── Scripts ── -->
+    <script src="js/nRegistry.js?v=20260228"></script>
+    <script src="js/nbeep.js?v=20260228"></script>
+    <script src="js/nUtils.js?v=20260228"></script>
+    <script src="js/nComp.js?v=20260228"></script>
+    <script src="js/nCatalog.js?v=20260228"></script>
+    <script src="js/nDynamic.js?v=20260228"></script>
+    <script src="js/nInteractive.js?v=20260228"></script>
+    <script src="js/nNotify.js?v=20260228"></script>
+    <script src="js/nStore.js?v=20260228"></script>
+    <script src="js/ahi/ahi.js?v=20260228"></script>
+    <script src="js/ahi/ahi-flow.js?v=20260228"></script>
+    <script src="js/ahi/ahi-protocol.js?v=20260228"></script>
+    <script src="js/ahi/ahi-transport-ws.js?v=20260228"></script>
+
+    <script>
+    (function () {
+        'use strict';
+
+        /* ── Initialise AHI ── */
+        notumAHI.init('#ahi-container');
+
+        /* ═══════════════════════════════════
+           Footer: Edit Toggle
+           ═══════════════════════════════════ */
+
+        var editBtn = document.getElementById('btn-edit');
+        if (editBtn && typeof nInteractive !== 'undefined') {
+            editBtn.addEventListener('click', function () {
+                if (nInteractive.isEditing()) {
+                    nInteractive.exitEdit();
+                } else {
+                    nInteractive.enterEdit();
+                }
+                if (typeof nbeep === 'function') nbeep('select');
+            });
+            /* Sync button label on edit mode changes */
+            var _origOnEditChange = null;
+            var syncEdit = setInterval(function () {
+                if (!nInteractive.isEditing && !editBtn) { clearInterval(syncEdit); return; }
+                var editing = nInteractive.isEditing();
+                editBtn.innerHTML = editing
+                    ? '<i class="ph ph-x"></i> EXIT'
+                    : '<i class="ph ph-pencil-simple"></i> EDIT';
+                editBtn.classList.toggle('active', editing);
+            }, 300);
+        }
+
+        var logEl = document.getElementById('event-log');
+        var eventCount = 0;
+
+        /* Subscribe to all events and log them */
+        notumAHI.onEvent(function (evt) {
+            eventCount++;
+            logEl.textContent = '#' + eventCount + '  ' +
+                evt.event + (evt.id ? ' [' + evt.id + ']' : '') +
+                '  →  ' + (typeof evt.value === 'object' ? JSON.stringify(evt.value) : evt.value);
+        });
+
+        /* ══════════════ SCENARIO DEFINITIONS ══════════════ */
+
+        var SCENARIOS = {};
+
+        /* ─── Home — Full Component Showcase ─── */
+        SCENARIOS.home = function () {
+            /* Build AHI-compatible controls from the shared catalog.
+               Each item gets a unique id derived from label/name + index. */
+            var controls = GRID_CATALOG.map(function (item, i) {
+                var copy = JSON.parse(JSON.stringify(item));
+                var key  = (item.label || item.name || item.type).toLowerCase().replace(/[^a-z0-9]+/g, '_');
+                copy.id  = key + '_' + i;
+                return copy;
+            });
+            notumAHI.render(controls);
+            notumAHI.notify({ icon: 'ph-house', title: 'ALL COMPONENTS', subtitle: 'Full design system showcase', linger: 4000 });
+        };
+
+        /* ─── Features — Lockout & Progress Demo ─── */
+        SCENARIOS.features = function () {
+            notumAHI.render([
+                /* ── Header status ── */
+                { id: 'fw_info', type: 'status', cols: 4, rows: 2,
+                  label: 'FIRMWARE MANAGER', items: [
+                    { k: 'CURRENT', v: 'v2.4.1-RC3', c: 'accent' },
+                    { k: 'LATEST',  v: 'v2.5.0',     c: 'amber' },
+                    { k: 'NODES',   v: '12 online',   c: 'accent' },
+                    { k: 'CHANNEL', v: 'STABLE',      c: '' }
+                  ]},
+
+                /* ── Standard flash button (default lockout) ── */
+                { id: 'check', type: 'button', cols: 2, rows: 1,
+                  label: 'CHECK UPDATES', style: 'primary', icon: 'ph-magnifying-glass',
+                  tooltip: 'Default lockout (~150ms)' },
+
+                /* ── Short lockout: debounce rapid taps ── */
+                { id: 'ping', type: 'button', cols: 2, rows: 1,
+                  label: 'PING NODES', style: '', icon: 'ph-wifi-high',
+                  lockout: 400, tooltip: 'Short lockout (400ms)' },
+
+                /* ── Medium lockout: prevent accidental re-trigger ── */
+                { id: 'stage', type: 'button', cols: 2, rows: 1,
+                  label: 'STAGE UPDATE', style: 'warning', icon: 'ph-cloud-arrow-down',
+                  lockout: 1500, tooltip: 'Medium lockout (1.5s)' },
+
+                /* ── Long lockout: destructive action cooldown ── */
+                { id: 'rollback', type: 'button', cols: 2, rows: 1,
+                  label: 'ROLLBACK', style: 'danger', icon: 'ph-arrow-counter-clockwise',
+                  lockout: 3000, tooltip: 'Long lockout (3s)',
+                  confirm: {
+                      title: 'Rollback Firmware?',
+                      body: 'All nodes will revert to the previous stable build.',
+                      buttons: [
+                          { label: 'CANCEL', value: 'no' },
+                          { label: 'ROLLBACK', value: 'yes', style: 'danger' }
+                      ]
+                  }},
+
+                /* ── Progress indicators on bars ── */
+                { id: 'download', type: 'bar', cols: 4, rows: 1,
+                  label: 'DOWNLOAD', max: 20, value: 0, color: 'accent' },
+
+                { id: 'flash_bar', type: 'bar', cols: 4, rows: 1,
+                  label: 'FLASH', max: 20, value: 0, color: 'amber' },
+
+                /* ── Buttons with progress loading ── */
+                { id: 'upload', type: 'button', cols: 2, rows: 1,
+                  label: 'UPLOAD IMAGE', style: 'primary', icon: 'ph-upload',
+                  tooltip: 'Click to simulate upload with progress bar' },
+
+                { id: 'verify', type: 'button', cols: 2, rows: 1,
+                  label: 'VERIFY HASH', style: '', icon: 'ph-fingerprint',
+                  tooltip: 'Click to simulate hash verification (indeterminate)' },
+
+                { id: 'flash_fw', type: 'button', cols: 2, rows: 1,
+                  label: 'FLASH FIRMWARE', style: 'danger', icon: 'ph-lightning',
+                  lockout: 2000, tooltip: 'Lockout + progress combined',
+                  confirm: {
+                      title: 'Flash Firmware?',
+                      body: 'Nodes will be unavailable during the flash cycle (~8s).',
+                      buttons: [
+                          { label: 'ABORT', value: 'no' },
+                          { label: 'FLASH', value: 'go', style: 'danger' }
+                      ]
+                  }},
+
+                { id: 'reboot', type: 'button', cols: 2, rows: 1,
+                  label: 'REBOOT NODES', style: 'warning', icon: 'ph-arrows-clockwise',
+                  lockout: 2500, tooltip: 'Lockout + progress: node reboot cycle' },
+
+                /* ── Node health toggle + stepper ── */
+                { id: 'auto_update', type: 'toggle', cols: 2, rows: 1,
+                  label: 'AUTO-UPDATE', options: ['OFF', 'NIGHTLY', 'IMMEDIATE'], active: 1 },
+
+                { id: 'batch_size', type: 'stepper', cols: 1, rows: 2,
+                  label: 'BATCH SIZE', value: 4 },
+
+                { id: 'node_health', type: 'card', cols: 2, rows: 2,
+                  state: 'on', icon: 'ph-heartbeat', name: 'NODE HEALTH',
+                  on: 'MONITORING', off: 'PAUSED', status: 'ok' }
+            ]);
+
+            notumAHI.notify({ icon: 'ph-lightning', title: 'FEATURE DEMO', subtitle: 'Lockout & progress showcase', linger: 4000 });
+
+            /* ── Wire up progress-loading buttons ── */
+
+            /* UPLOAD IMAGE: click → progress 0→100 → ok */
+            notumAHI.onEvent(function _uploadHandler(evt) {
+                if (evt.id !== 'upload') return;
+                var el = document.querySelector('[data-ahi-id="upload"]');
+                if (!el || el._uploading) return;
+                el._uploading = true;
+                nComp.progress(el, 0);
+                nComp.status(el, 'busy');
+                var pct = 0;
+                var iv = setInterval(function () {
+                    pct += 3 + Math.floor(Math.random() * 8);
+                    if (pct >= 100) {
+                        pct = 100;
+                        clearInterval(iv);
+                        nComp.progress(el, 100);
+                        nComp.status(el, 'ok');
+                        notumAHI.patch('download', { value: 20 });
+                        notumAHI.notify({ icon: 'ph-check-circle', title: 'UPLOAD COMPLETE', subtitle: 'Firmware image staged', linger: 3000 });
+                        setTimeout(function () {
+                            nComp.progress(el, null);
+                            nComp.status(el, null);
+                            el._uploading = false;
+                        }, 2500);
+                    } else {
+                        nComp.progress(el, pct);
+                        notumAHI.patch('download', { value: Math.round(pct / 5) });
+                    }
+                }, 200);
+            });
+
+            /* VERIFY HASH: click → indeterminate → ok/error */
+            notumAHI.onEvent(function _verifyHandler(evt) {
+                if (evt.id !== 'verify') return;
+                var el = document.querySelector('[data-ahi-id="verify"]');
+                if (!el || el._verifying) return;
+                el._verifying = true;
+                nComp.progress(el, -1);
+                nComp.status(el, 'busy');
+                var duration = 1500 + Math.floor(Math.random() * 2000);
+                setTimeout(function () {
+                    var pass = Math.random() > 0.2;
+                    nComp.progress(el, pass ? 100 : 0);
+                    nComp.status(el, pass ? 'ok' : 'error');
+                    notumAHI.notify({
+                        icon: pass ? 'ph-seal-check' : 'ph-seal-warning',
+                        title: pass ? 'HASH VERIFIED' : 'HASH MISMATCH',
+                        subtitle: pass ? 'SHA-256 matches manifest' : 'Firmware image may be corrupted',
+                        linger: 4000
+                    });
+                    setTimeout(function () {
+                        nComp.progress(el, null);
+                        nComp.status(el, null);
+                        el._verifying = false;
+                    }, 2500);
+                }, duration);
+            });
+
+            /* FLASH FIRMWARE: confirm → progress + bar fill → done */
+            notumAHI.onEvent(function _flashHandler(evt) {
+                if (evt.id !== 'flash_fw' || evt.dialogResponse !== 'go') return;
+                var el = document.querySelector('[data-ahi-id="flash_fw"]');
+                if (!el || el._flashing) return;
+                el._flashing = true;
+                nComp.progress(el, 0);
+                nComp.status(el, 'busy');
+                var pct = 0;
+                var iv = setInterval(function () {
+                    pct += 2 + Math.floor(Math.random() * 5);
+                    if (pct >= 100) {
+                        pct = 100;
+                        clearInterval(iv);
+                        nComp.progress(el, 100);
+                        nComp.status(el, 'ok');
+                        notumAHI.patch('flash_bar', { value: 20 });
+                        notumAHI.patch('fw_info', {
+                            items: [
+                                { k: 'CURRENT', v: 'v2.5.0',     c: 'accent' },
+                                { k: 'LATEST',  v: 'v2.5.0',     c: 'accent' },
+                                { k: 'NODES',   v: '12 online',   c: 'accent' },
+                                { k: 'CHANNEL', v: 'STABLE',      c: '' }
+                            ]
+                        });
+                        notumAHI.notify({ icon: 'ph-check-circle', title: 'FLASH COMPLETE', subtitle: 'All nodes updated to v2.5.0', linger: 5000 });
+                        setTimeout(function () {
+                            nComp.progress(el, null);
+                            nComp.status(el, null);
+                            el._flashing = false;
+                        }, 3000);
+                    } else {
+                        nComp.progress(el, pct);
+                        notumAHI.patch('flash_bar', { value: Math.round(pct / 5) });
+                    }
+                }, 300);
+            });
+
+            /* REBOOT NODES: click → progress sweep → done */
+            notumAHI.onEvent(function _rebootHandler(evt) {
+                if (evt.id !== 'reboot') return;
+                var el = document.querySelector('[data-ahi-id="reboot"]');
+                if (!el || el._rebooting) return;
+                el._rebooting = true;
+                nComp.progress(el, -1);
+                nComp.status(el, 'busy');
+                notumAHI.patch('node_health', { state: 'off' });
+                var duration = 3000 + Math.floor(Math.random() * 2000);
+                setTimeout(function () {
+                    nComp.progress(el, 100);
+                    nComp.status(el, 'ok');
+                    notumAHI.patch('node_health', { state: 'on' });
+                    notumAHI.notify({ icon: 'ph-arrows-clockwise', title: 'REBOOT COMPLETE', subtitle: '12 nodes back online', linger: 4000 });
+                    setTimeout(function () {
+                        nComp.progress(el, null);
+                        nComp.status(el, null);
+                        el._rebooting = false;
+                    }, 2500);
+                }, duration);
+            });
+        };
+
+        /* ─── IoT Dashboard ─── */
+        SCENARIOS.iot = function () {
+            notumAHI.render([
+                { id: 'light', type: 'card', cols: 2, rows: 2,
+                  state: 'on', icon: 'ph-lightbulb', name: 'LIVING ROOM',
+                  on: 'ACTIVE', off: 'INACTIVE', tooltip: 'Main light control' },
+
+                { id: 'fan', type: 'card', cols: 2, rows: 2,
+                  state: 'off', icon: 'ph-fan', name: 'CEILING FAN',
+                  on: 'RUNNING', off: 'STOPPED' },
+
+                { id: 'lock', type: 'card', cols: 2, rows: 2,
+                  state: 'on', icon: 'ph-lock', name: 'FRONT DOOR',
+                  on: 'LOCKED', off: 'UNLOCKED',
+                  confirm: {
+                      title: 'Unlock Front Door?',
+                      body: 'The door sensor will be disabled for 30 seconds.',
+                      buttons: [
+                          { label: 'CANCEL', value: 'cancel' },
+                          { label: 'UNLOCK', value: 'unlock', style: 'warning' }
+                      ]
+                  }},
+
+                { id: 'brightness', type: 'slider', cols: 4, rows: 2,
+                  label: 'BRIGHTNESS', max: 20, value: 14, color: 'accent' },
+
+                { id: 'temperature', type: 'slider', cols: 4, rows: 2,
+                  label: 'TEMPERATURE', max: 30, value: 22, color: 'amber' },
+
+                { id: 'scene', type: 'toggle', cols: 2, rows: 1,
+                  label: 'SCENE', options: ['MORNING', 'DAY', 'NIGHT'], active: 1 },
+
+                { id: 'zone', type: 'toggle', cols: 2, rows: 1,
+                  label: 'ZONE', options: ['MAIN', 'GARAGE', 'YARD'], active: 0 },
+
+                { id: 'signal', type: 'bar', cols: 2, rows: 1,
+                  label: 'SIGNAL', max: 16, value: 12, color: 'accent' },
+
+                { id: 'power', type: 'bar', cols: 2, rows: 1,
+                  label: 'POWER DRAW', max: 16, value: 7, color: 'amber' },
+
+                { id: 'radio', type: 'status', cols: 2, rows: 2,
+                  label: 'RADIO', items: [
+                    { k: 'RSSI', v: '-42 dBm', c: 'accent' },
+                    { k: 'CHANNEL', v: '11', c: '' },
+                    { k: 'TX PWR', v: '20 dBm', c: 'amber' }
+                  ]},
+
+                { id: 'system', type: 'status', cols: 2, rows: 2,
+                  label: 'SYSTEM', items: [
+                    { k: 'UPTIME', v: '14d 7h', c: 'accent' },
+                    { k: 'CPU', v: '12%', c: '' },
+                    { k: 'RAM', v: '340 MB', c: '' },
+                    { k: 'TEMP', v: '38°C', c: 'amber' }
+                  ]},
+
+                { id: 'retry', type: 'stepper', cols: 1, rows: 2,
+                  label: 'RETRY COUNT', value: 3 },
+
+                { id: 'save', type: 'button', cols: 1, rows: 1,
+                  label: 'SAVE', style: 'primary', icon: 'ph-floppy-disk' },
+
+                { id: 'reset', type: 'button', cols: 1, rows: 1,
+                  label: 'RESET', style: 'danger', icon: 'ph-arrows-clockwise',
+                  confirm: {
+                      title: 'Factory Reset?',
+                      body: 'All settings will be restored to defaults.',
+                      buttons: [
+                          { label: 'CANCEL', value: 'no' },
+                          { label: 'RESET', value: 'yes', style: 'danger' }
+                      ]
+                  }}
+            ]);
+            notumAHI.notify({ icon: 'ph-check-circle', title: 'IOT DASHBOARD', subtitle: 'Dashboard loaded successfully', linger: 4000 });
+        };
+
+        /* ─── CI/CD Pipeline ─── */
+        SCENARIOS.cicd = function () {
+            notumAHI.render([
+                { id: 'pipeline', type: 'status', cols: 4, rows: 2,
+                  label: 'PIPELINE #847', items: [
+                    { k: 'BRANCH', v: 'main', c: 'accent' },
+                    { k: 'COMMIT', v: 'a3f8b21', c: '' },
+                    { k: 'STAGE',  v: 'BUILD', c: 'amber' },
+                    { k: 'ETA',    v: '~2m 30s', c: '' }
+                  ], status: 'busy' },
+
+                { id: 'build_bar', type: 'bar', cols: 4, rows: 1,
+                  label: 'BUILD PROGRESS', max: 20, value: 14, color: 'accent' },
+
+                { id: 'test_bar', type: 'bar', cols: 4, rows: 1,
+                  label: 'TEST SUITE', max: 20, value: 0, color: 'amber' },
+
+                { id: 'coverage', type: 'bar', cols: 2, rows: 1,
+                  label: 'COVERAGE', max: 10, value: 8, color: 'accent' },
+
+                { id: 'lint', type: 'bar', cols: 2, rows: 1,
+                  label: 'LINT SCORE', max: 10, value: 9, color: 'accent' },
+
+                { id: 'env', type: 'toggle', cols: 2, rows: 1,
+                  label: 'TARGET', options: ['DEV', 'STAGING', 'PROD'], active: 0 },
+
+                { id: 'deploy', type: 'button', cols: 2, rows: 1,
+                  label: 'DEPLOY', style: 'danger', icon: 'ph-rocket',
+                  disabled: true, tooltip: 'Available after tests pass',
+                  badge: '!' },
+
+                { id: 'abort', type: 'button', cols: 2, rows: 1,
+                  label: 'ABORT', style: 'warning', icon: 'ph-x',
+                  confirm: {
+                      title: 'Abort Pipeline?',
+                      body: 'Build artifacts will be discarded.',
+                      buttons: [
+                          { label: 'CONTINUE', value: 'no' },
+                          { label: 'ABORT', value: 'abort', style: 'danger' }
+                      ]
+                  }},
+
+                { id: 'logs', type: 'button', cols: 2, rows: 1,
+                  label: 'VIEW LOGS', style: '', icon: 'ph-terminal' }
+            ]);
+            notumAHI.notify({ icon: 'ph-git-branch', title: 'CI / CD PIPELINE', subtitle: 'Pipeline #847 loaded', linger: 4000 });
+        };
+
+        /* ─── Deploy Wizard (Flow) ─── */
+        SCENARIOS.wizard = function () {
+            notumAHI.render([
+                { id: 'info', type: 'status', cols: 4, rows: 2,
+                  label: 'DEPLOY WIZARD', items: [
+                    { k: 'STATUS', v: 'READY', c: 'accent' },
+                    { k: 'BUILD', v: '#847', c: '' },
+                    { k: 'NODES', v: '12', c: '' }
+                  ]}
+            ]);
+
+            // Launch a flow after a short delay
+            setTimeout(function () {
+                notumAHI.flow([
+                    {
+                        type: 'dialog',
+                        title: 'Select Environment',
+                        body: 'Choose the deployment target for build #847.',
+                        buttons: [
+                            { label: 'STAGING',    value: 'staging' },
+                            { label: 'PRODUCTION', value: 'production', style: 'danger' }
+                        ]
+                    },
+                    {
+                        type: 'dialog',
+                        title: 'Confirm: {{prev}}',
+                        body: 'Deploy build #847 to {{0}}? This action cannot be undone.',
+                        buttons: [
+                            { label: 'BACK',   value: '$back' },
+                            { label: 'DEPLOY', value: 'go', style: 'primary' }
+                        ]
+                    },
+                    {
+                        type: 'notify',
+                        icon: 'ph-cloud-arrow-up',
+                        title: 'DEPLOYING',
+                        subtitle: 'Pushing build #847 to {{0}}…',
+                        linger: 2000
+                    },
+                    {
+                        type: 'render',
+                        controls: [
+                            { id: 'deploy_progress', type: 'bar', cols: 4, rows: 1,
+                              label: 'DEPLOYMENT', max: 20, value: 0, color: 'accent' },
+                            { id: 'deploy_log', type: 'status', cols: 4, rows: 2,
+                              label: 'DEPLOY LOG', items: [
+                                { k: 'TARGET', v: '{{0}}', c: 'accent' },
+                                { k: 'STATUS', v: 'INITIALIZING', c: 'amber' },
+                                { k: 'BUILD',  v: '#847', c: '' }
+                              ], status: 'busy' }
+                        ]
+                    }
+                ]).then(function (results) {
+                    console.log('Flow results:', results);
+                    // Simulate deployment progress
+                    if (results && results[1] === 'go') {
+                        var v = 0;
+                        var iv = setInterval(function () {
+                            v += 2;
+                            notumAHI.patch('deploy_progress', { value: Math.min(v, 20) });
+                            if (v >= 20) {
+                                clearInterval(iv);
+                                notumAHI.patch('deploy_log', {
+                                    items: [
+                                        { k: 'TARGET', v: results[0], c: 'accent' },
+                                        { k: 'STATUS', v: 'COMPLETE', c: 'accent' },
+                                        { k: 'BUILD',  v: '#847', c: '' },
+                                        { k: 'TIME',   v: '~12s', c: '' }
+                                    ],
+                                    status: 'ok'
+                                });
+                                notumAHI.notify({ icon: 'ph-rocket', title: 'DEPLOY COMPLETE', subtitle: 'Deployment finished successfully', linger: 5000 });
+                            }
+                        }, 400);
+                    }
+                });
+            }, 600);
+        };
+
+        /* ─── Live Patching ─── */
+        SCENARIOS.live = function () {
+            notumAHI.render([
+                { id: 'cpu_bar', type: 'bar', cols: 4, rows: 1,
+                  label: 'CPU USAGE', max: 20, value: 5, color: 'accent' },
+
+                { id: 'mem_bar', type: 'bar', cols: 4, rows: 1,
+                  label: 'MEMORY', max: 20, value: 12, color: 'amber' },
+
+                { id: 'disk_bar', type: 'bar', cols: 4, rows: 1,
+                  label: 'DISK I/O', max: 20, value: 3, color: 'accent' },
+
+                { id: 'net_bar', type: 'bar', cols: 4, rows: 1,
+                  label: 'NETWORK', max: 20, value: 8, color: 'accent' },
+
+                { id: 'metrics', type: 'status', cols: 4, rows: 2,
+                  label: 'SYSTEM METRICS', items: [
+                    { k: 'LOAD AVG', v: '1.24', c: '' },
+                    { k: 'PROCESSES', v: '142', c: '' },
+                    { k: 'UPTIME', v: '7d 3h 12m', c: 'accent' },
+                    { k: 'TEMP', v: '52°C', c: 'amber' }
+                  ]},
+
+                { id: 'alert', type: 'card', cols: 2, rows: 2,
+                  state: 'off', icon: 'ph-bell', name: 'ALERTS',
+                  on: 'ACTIVE', off: 'SILENT' },
+
+                { id: 'pause', type: 'button', cols: 2, rows: 1,
+                  label: 'PAUSE', style: '', icon: 'ph-pause' },
+
+                { id: 'refresh', type: 'button', cols: 2, rows: 1,
+                  label: 'REFRESH', style: 'primary', icon: 'ph-arrows-clockwise' }
+            ]);
+
+            notumAHI.notify({ icon: 'ph-pulse', title: 'LIVE MONITORING', subtitle: 'Patching every 1.5s', linger: 4000 });
+
+            /* Simulate live patching */
+            var livePatch = setInterval(function () {
+                notumAHI.patch('cpu_bar',  { value: 2 + Math.floor(Math.random() * 18) });
+                notumAHI.patch('mem_bar',  { value: 8 + Math.floor(Math.random() * 12) });
+                notumAHI.patch('disk_bar', { value: 1 + Math.floor(Math.random() * 10) });
+                notumAHI.patch('net_bar',  { value: 3 + Math.floor(Math.random() * 14) });
+
+                var load = (0.5 + Math.random() * 3).toFixed(2);
+                var temp = 40 + Math.floor(Math.random() * 25);
+                notumAHI.patch('metrics', {
+                    items: [
+                        { k: 'LOAD AVG', v: load, c: parseFloat(load) > 2 ? 'danger' : '' },
+                        { k: 'PROCESSES', v: '' + (130 + Math.floor(Math.random() * 30)), c: '' },
+                        { k: 'UPTIME', v: '7d 3h 12m', c: 'accent' },
+                        { k: 'TEMP', v: temp + '°C', c: temp > 55 ? 'danger' : 'amber' }
+                    ]
+                });
+            }, 1500);
+
+            /* Store interval so it can be cleared on scenario switch */
+            window._ahiLiveInterval = livePatch;
+        };
+
+        /* ─── Agent Session Simulation ─── */
+        SCENARIOS.agent = function () {
+            notumAHI.render([
+                { id: 'agent_status', type: 'card', cols: 2, rows: 2,
+                  state: 'on', icon: 'ph-cpu', name: 'AGENT',
+                  on: 'CONNECTED', off: 'OFFLINE', status: 'ok' },
+
+                { id: 'task', type: 'status', cols: 4, rows: 2,
+                  label: 'CURRENT TASK', items: [
+                    { k: 'NAME', v: 'SYSTEM AUDIT', c: 'accent' },
+                    { k: 'STEP', v: '1 / 5', c: '' },
+                    { k: 'STATUS', v: 'RUNNING', c: 'amber' }
+                  ], status: 'busy' },
+
+                { id: 'task_bar', type: 'bar', cols: 4, rows: 1,
+                  label: 'TASK PROGRESS', max: 20, value: 4, color: 'accent' },
+
+                { id: 'prompt', type: 'button', cols: 2, rows: 1,
+                  label: 'ASK AGENT', style: 'primary', icon: 'ph-chat-text' },
+
+                { id: 'stop', type: 'button', cols: 2, rows: 1,
+                  label: 'STOP AGENT', style: 'danger', icon: 'ph-stop',
+                  confirm: {
+                      title: 'Stop Agent?',
+                      body: 'The current task will be aborted.',
+                      buttons: [
+                          { label: 'CANCEL', value: 'no' },
+                          { label: 'STOP', value: 'stop', style: 'danger' }
+                      ]
+                  }},
+
+                { id: 'verbose', type: 'toggle', cols: 2, rows: 1,
+                  label: 'LOG LEVEL', options: ['QUIET', 'NORMAL', 'VERBOSE'], active: 1 },
+
+                { id: 'retries', type: 'stepper', cols: 1, rows: 2,
+                  label: 'MAX RETRIES', value: 3 }
+            ]);
+
+            notumAHI.notify({ icon: 'ph-cpu', title: 'AGENT SESSION', subtitle: 'Agent connected — session active', linger: 4000 });
+
+            /* Simulate agent progress */
+            var step = 1;
+            var agentIv = setInterval(function () {
+                step++;
+                if (step > 5) {
+                    clearInterval(agentIv);
+                    notumAHI.patch('task', {
+                        items: [
+                            { k: 'NAME', v: 'SYSTEM AUDIT', c: 'accent' },
+                            { k: 'STEP', v: '5 / 5', c: '' },
+                            { k: 'STATUS', v: 'COMPLETE', c: 'accent' }
+                        ],
+                        status: 'ok'
+                    });
+                    notumAHI.patch('task_bar', { value: 20 });
+                    notumAHI.notify({ icon: 'ph-check-circle', title: 'TASK COMPLETE', subtitle: 'System audit passed', linger: 5000 });
+                    return;
+                }
+                notumAHI.patch('task', {
+                    items: [
+                        { k: 'NAME', v: 'SYSTEM AUDIT', c: 'accent' },
+                        { k: 'STEP', v: step + ' / 5', c: '' },
+                        { k: 'STATUS', v: 'RUNNING', c: 'amber' }
+                    ]
+                });
+                notumAHI.patch('task_bar', { value: step * 4 });
+            }, 2000);
+            window._ahiAgentInterval = agentIv;
+        };
+
+        /* ─── Beep Test — Duration Override & Dialog Beep ─── */
+        SCENARIOS.beeptest = function () {
+            notumAHI.render([
+                { id: 'beep_info', type: 'status', cols: 4, rows: 2,
+                  label: 'BEEP DURATION TEST', items: [
+                    { k: 'ENGINE', v: nDesignAudio.config.soundMode.toUpperCase(), c: 'accent' },
+                    { k: 'GLOBAL DUR', v: Math.round(nDesignAudio.config.maxDuration * 100) + '%', c: '' },
+                    { k: 'NOTE', v: 'PER-CALL MS OVERRIDE', c: '' }
+                  ]},
+
+                /* ── Direct beep tests (various durations) ── */
+                { id: 'beep_default', type: 'button', cols: 2, rows: 1,
+                  label: 'DEFAULT BEEP', style: '', icon: 'ph-speaker-high',
+                  tooltip: 'Normal beep — global config duration' },
+
+                { id: 'beep_200', type: 'button', cols: 2, rows: 1,
+                  label: '200 MS', style: '', icon: 'ph-speaker-high',
+                  tooltip: '200ms per-call duration' },
+
+                { id: 'beep_500', type: 'button', cols: 2, rows: 1,
+                  label: '500 MS', style: 'primary', icon: 'ph-speaker-high',
+                  tooltip: '500ms — at the complexity threshold' },
+
+                { id: 'beep_1000', type: 'button', cols: 2, rows: 1,
+                  label: '1 SECOND', style: 'primary', icon: 'ph-speaker-high',
+                  tooltip: '1000ms — extended complexity kicks in' },
+
+                { id: 'beep_2000', type: 'button', cols: 2, rows: 1,
+                  label: '2 SECONDS', style: 'warning', icon: 'ph-speaker-high',
+                  tooltip: '2000ms — rich evolving sequence' },
+
+                { id: 'beep_5000', type: 'button', cols: 2, rows: 1,
+                  label: '5 SECONDS', style: 'danger', icon: 'ph-speaker-high',
+                  tooltip: '5000ms — full extended complexity' },
+
+                /* ── Dialog tests: alarm vs beep ── */
+                { id: 'dlg_alarm', type: 'button', cols: 2, rows: 1,
+                  label: 'DIALOG + ALARM', style: 'warning', icon: 'ph-bell-ringing',
+                  tooltip: 'Standard dialog with looping alarm',
+                  confirm: {
+                      title: 'Alarm Dialog',
+                      body: 'This dialog plays a looping alarm sound that repeats until dismissed.',
+                      buttons: [
+                          { label: 'DISMISS', value: 'ok' }
+                      ]
+                  }},
+
+                { id: 'dlg_beep_5s', type: 'button', cols: 2, rows: 1,
+                  label: 'DIALOG + 5S BEEP', style: 'primary', icon: 'ph-music-note',
+                  tooltip: 'Dialog with a single 5-second beep (no alarm loop)' },
+
+                { id: 'dlg_beep_3s', type: 'button', cols: 2, rows: 1,
+                  label: 'DIALOG + 3S BEEP', style: '', icon: 'ph-music-note',
+                  tooltip: 'Dialog with a single 3-second beep' },
+
+                { id: 'dlg_silent', type: 'button', cols: 2, rows: 1,
+                  label: 'DIALOG SILENT', style: '', icon: 'ph-speaker-slash',
+                  tooltip: 'Dialog with no audio (alarm: false)' }
+            ]);
+
+            notumAHI.notify({ icon: 'ph-speaker-high', title: 'BEEP TEST', subtitle: 'Duration override & dialog audio modes', linger: 4000 });
+
+            /* ── Wire up direct beep buttons ── */
+            notumAHI.onEvent(function _beepTestHandler(evt) {
+                if (evt.event !== 'button_click') return;
+                switch (evt.id) {
+                    case 'beep_default':
+                        nbeep('beep_test_default');
+                        break;
+                    case 'beep_200':
+                        nbeep('beep_test_200', false, undefined, 200);
+                        break;
+                    case 'beep_500':
+                        nbeep('beep_test_500', false, undefined, 500);
+                        break;
+                    case 'beep_1000':
+                        nbeep('beep_test_1000', false, undefined, 1000);
+                        break;
+                    case 'beep_2000':
+                        nbeep('beep_test_2000', false, undefined, 2000);
+                        break;
+                    case 'beep_5000':
+                        nbeep('beep_test_5000', false, undefined, 5000);
+                        break;
+                    case 'dlg_beep_5s':
+                        notumAHI.dialog({
+                            title: '5-Second Beep',
+                            body: 'This dialog plays a single 5-second procedural beep — no looping alarm. The sound has increased complexity because it\'s longer than 500ms.',
+                            alarm: false,
+                            beep: 5000,
+                            buttons: [
+                                { label: 'NICE', value: 'ok', style: 'primary' }
+                            ]
+                        });
+                        break;
+                    case 'dlg_beep_3s':
+                        notumAHI.dialog({
+                            title: '3-Second Beep',
+                            body: 'A single 3-second beep plays when this dialog opens. No looping.',
+                            alarm: false,
+                            beep: 3000,
+                            buttons: [
+                                { label: 'GOT IT', value: 'ok' }
+                            ]
+                        });
+                        break;
+                    case 'dlg_silent':
+                        notumAHI.dialog({
+                            title: 'Silent Dialog',
+                            body: 'This dialog has alarm: false and no beep option — completely silent.',
+                            alarm: false,
+                            buttons: [
+                                { label: 'OK', value: 'ok' }
+                            ]
+                        });
+                        break;
+                }
+            });
+        };
+
+        /* ══════════════ SCENARIO SWITCHING ══════════════ */
+
+        var scenarioBtns = document.querySelectorAll('.scenario-btn');
+
+        function switchScenario(name) {
+            /* Clear any running intervals from previous scenario */
+            if (window._ahiLiveInterval) { clearInterval(window._ahiLiveInterval); window._ahiLiveInterval = null; }
+            if (window._ahiAgentInterval) { clearInterval(window._ahiAgentInterval); window._ahiAgentInterval = null; }
+
+            /* Reset event log */
+            eventCount = 0;
+            logEl.textContent = '— awaiting events —';
+
+            /* Update active button */
+            scenarioBtns.forEach(function (btn) {
+                btn.classList.toggle('active', btn.dataset.scenario === name);
+            });
+
+            /* Run scenario */
+            if (SCENARIOS[name]) SCENARIOS[name]();
+        }
+
+        scenarioBtns.forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                switchScenario(btn.dataset.scenario);
+            });
+        });
+
+        /* ── Boot: load default scenario ── */
+        switchScenario('home');
+
+    })();
+    </script>
+
+</body>
+</html>

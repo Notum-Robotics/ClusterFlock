@@ -1,0 +1,299 @@
+<!--
+  Notum Design System — Interactive Layout Editor
+  Copyright © 2026 Notum Robotics. Licensed under the MIT License.
+
+  Demonstrates nInteractive: an interactive layout editor built
+  on nDynamic. Controls can be rearranged via drag‑and‑drop,
+  locked, muted, and resized through a hold‑to‑edit workflow.
+
+  INTERACTION:
+    Normal mode — controls work as usual.
+      • Hold any control for 5 s → enter edit mode.
+    Edit mode — dashed outlines, actions suppressed.
+      • Drag to reorder (drop‑then‑reflow).
+      • Hold 3 s → context menu (lock / mute / resize).
+      • Right-click → context menu (same as hold).
+      • Tap empty space or press ESC → exit edit mode.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0a0a0a">
+    <title>Interactive Layout — Notum Design System</title>
+    <link rel="stylesheet" href="css/phosphor.css?v=20260228">
+    <link rel="stylesheet" href="css/style.css?v=20260228">
+    <link rel="stylesheet" href="css/notum.css?v=20260228">
+    <link rel="stylesheet" href="css/subpage.css?v=20260228">
+    <style>
+        /* ── Page-specific overrides ── */
+        #interactive-container {
+            -webkit-touch-callout: none;
+            touch-action: manipulation;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="interactive-app" class="subpage-app">
+
+        <header>
+            <h1>Notum<span>Interactive</span></h1>
+            <div class="header-meta"><a href="index.html">← HOME</a> · <a href="components.html">COMPONENTS</a> · <a href="dynamic.html">DYNAMIC</a> · NOTUM ROBOTICS · <a href="https://n-r.hr" target="_blank" rel="noopener">N-R.HR</a></div>
+        </header>
+
+        <div id="interactive-container" class="nd-grid"></div>
+
+        <div id="interactive-footer" class="subpage-footer">
+            <div class="footer-info">
+                nInteractive v1.0 · <span id="grid-info">COMPUTING...</span>
+            </div>
+            <div class="footer-actions">
+                <div class="footer-btn" id="btn-edit"><i class="ph ph-pencil-simple"></i> EDIT</div>
+                <div class="footer-btn" id="btn-cols-auto">AUTO</div>
+                <div class="footer-btn" id="btn-cols-2">2 COL</div>
+                <div class="footer-btn" id="btn-cols-4">4 COL</div>
+                <div class="footer-btn" id="btn-cols-6">6 COL</div>
+                <div class="footer-btn" id="btn-shuffle"><i class="ph ph-shuffle"></i></div>
+                <a class="footer-btn" href="index.html">HOME</a>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Dialog overlay (required for framework consistency) -->
+    <div id="dialog-overlay" class="dialog-overlay">
+        <div id="dialog-box" class="dialog-box"></div>
+    </div>
+
+    <script src="js/nRegistry.js?v=20260228"></script>
+    <script src="js/nbeep.js?v=20260228"></script>
+    <script src="js/nUtils.js?v=20260228"></script>
+    <script src="js/nDynamic.js?v=20260228"></script>
+    <script src="js/nInteractive.js?v=20260228"></script>
+    <script src="js/nNotify.js?v=20260228"></script>
+    <script src="js/nStore.js?v=20260228"></script>
+    <script>
+    (function () {
+        'use strict';
+
+        /* ═══════════════════════════════════
+           Control Catalog
+           ═══════════════════════════════════ */
+
+        var CONTROLS = [
+            /* Active-state cards — full size */
+            { type: 'card', cols: 2, rows: 2, state: 'on',  icon: 'ph-lightbulb',   name: 'AMBIENT',     on: 'ACTIVE',   off: 'INACTIVE' },
+            { type: 'card', cols: 2, rows: 2, state: 'off', icon: 'ph-fan',         name: 'EXHAUST FAN', on: 'ENABLED',  off: 'DISABLED' },
+
+            /* Full-width slider */
+            { type: 'slider', cols: 4, rows: 2, label: 'ROOM BRIGHTNESS', max: 20, value: 14, color: 'accent' },
+
+            /* Half-width sliders */
+            { type: 'slider', cols: 2, rows: 2, label: 'VOLUME',       max: 15, value: 8,  color: 'accent' },
+            { type: 'slider', cols: 2, rows: 2, label: 'COLOR WARMTH', max: 12, value: 9,  color: 'amber' },
+
+            /* Toggle groups */
+            { type: 'toggle', cols: 2, rows: 1, label: 'SCENE',  options: ['MORNING', 'DAY', 'NIGHT'], active: 1 },
+            { type: 'toggle', cols: 2, rows: 1, label: 'ZONE',   options: ['A', 'B', 'C', 'D'],       active: 2 },
+
+            /* Buttons (some with dialogs) */
+            { type: 'button', cols: 1, rows: 1, label: 'REBOOT', style: 'danger',  icon: 'ph-arrows-clockwise',
+              dialog: { title: 'Confirm Reboot', body: 'System will restart. All active sessions will be terminated.', buttons: [
+                  { label: 'CANCEL', value: 'no' }, { label: 'REBOOT', value: 'yes', style: 'danger' }
+              ]} },
+            { type: 'button', cols: 1, rows: 1, label: 'ARM',    style: 'primary', icon: 'ph-shield-check' },
+            { type: 'button', cols: 1, rows: 1, label: 'LOCK',   style: '',        icon: 'ph-lock-key' },
+            { type: 'button', cols: 1, rows: 1, label: 'ALERT',  style: 'warning', icon: 'ph-bell-ringing',
+              dialog: { title: 'Alert Configuration', body: 'Select alert severity for broadcast.', buttons: [
+                  { label: 'LOW', value: 'low' }, { label: 'HIGH', value: 'high', style: 'warning' }, { label: 'CRITICAL', value: 'critical', style: 'danger' }
+              ]} },
+
+            /* Steppers */
+            { type: 'stepper', cols: 1, rows: 2, label: 'DELAY (S)', value: 30 },
+            { type: 'stepper', cols: 1, rows: 2, label: 'RETRY #',   value: 3 },
+
+            /* Progress bars */
+            { type: 'bar', cols: 2, rows: 1, label: 'SIGNAL',  max: 16, value: 12, color: 'accent' },
+            { type: 'bar', cols: 2, rows: 1, label: 'UPLINK',  max: 16, value: 16, color: 'accent' },
+            { type: 'bar', cols: 2, rows: 1, label: 'LATENCY', max: 16, value: 14, color: 'danger' },
+
+            /* Door lock cards — multiple sizes */
+            { type: 'card', cols: 2, rows: 2, state: 'on',  icon: 'ph-lock',        name: 'DOOR LOCK', on: 'LOCKED',  off: 'UNLOCKED' },
+            { type: 'card', cols: 2, rows: 1, size: '2x1',  state: 'on',  icon: 'ph-lock',      name: 'DOOR LOCK', on: 'LOCKED', off: 'UNLOCKED' },
+            { type: 'card', cols: 1, rows: 2, size: '1x2',  state: 'off', icon: 'ph-lock-open', name: 'DOOR LOCK', on: 'LOCKED', off: 'UNLOCKED' },
+            { type: 'card', cols: 1, rows: 1, size: '1x1',  state: 'on',  icon: 'ph-lock',      name: 'DOOR LOCK', on: 'LOCKED', off: 'UNLOCKED' },
+            { type: 'card', cols: 1, rows: 1, size: '1x1',  state: 'off', icon: 'ph-lock-open', name: 'DOOR LOCK', on: 'LOCKED', off: 'UNLOCKED' },
+
+            /* Heating */
+            { type: 'card', cols: 2, rows: 2, state: 'off', icon: 'ph-thermometer', name: 'HEATING', on: 'ENABLED', off: 'DISABLED' },
+
+            /* More buttons */
+            { type: 'button', cols: 1, rows: 1, label: 'PAIR',   style: 'primary', icon: 'ph-bluetooth' },
+            { type: 'button', cols: 1, rows: 1, label: 'SCAN',   style: '',        icon: 'ph-magnifying-glass' },
+            { type: 'button', cols: 1, rows: 1, label: 'LOG',    style: '',        icon: 'ph-terminal' },
+            { type: 'button', cols: 1, rows: 1, label: 'OTA',    style: 'warning', icon: 'ph-cloud-arrow-down' },
+
+            /* Status groups */
+            { type: 'status', cols: 2, rows: 2, label: 'RADIO', items: [
+                { k: 'RSSI',    v: '-42 dBm', c: 'accent' },
+                { k: 'CHANNEL', v: '11',       c: '' },
+                { k: 'TX PWR',  v: '20 dBm',  c: 'amber' }
+            ]},
+            { type: 'status', cols: 2, rows: 2, label: 'MESH', items: [
+                { k: 'NODES',   v: '7',     c: 'accent' },
+                { k: 'HOPS',    v: '2',     c: '' },
+                { k: 'DROPPED', v: '0.1%',  c: 'accent' }
+            ]},
+
+            /* More toggles */
+            { type: 'toggle', cols: 2, rows: 1, label: 'POWER',  options: ['ECO', 'STD', 'PERF'],    active: 1 },
+            { type: 'toggle', cols: 2, rows: 1, label: 'SOURCE', options: ['HDMI1', 'HDMI2', 'USB'], active: 0 },
+
+            /* More bars */
+            { type: 'bar', cols: 2, rows: 1, label: 'CACHE', max: 20, value: 7,  color: 'accent' },
+            { type: 'bar', cols: 2, rows: 1, label: 'QUEUE', max: 20, value: 3,  color: 'amber' },
+
+            /* Fill buttons */
+            { type: 'button', cols: 1, rows: 1, label: 'RESET',  style: 'danger',  icon: 'ph-prohibit',
+              dialog: { title: 'Factory Reset', body: 'This will erase all configuration and restore defaults. This action cannot be undone.', buttons: [
+                  { label: 'ABORT', value: 'abort' }, { label: 'ERASE ALL', value: 'erase', style: 'danger' }
+              ]} },
+            { type: 'button', cols: 1, rows: 1, label: 'SAVE',   style: 'primary', icon: 'ph-floppy-disk' },
+            { type: 'button', cols: 1, rows: 1, label: 'EXPORT', style: '',        icon: 'ph-export' },
+            { type: 'button', cols: 1, rows: 1, label: 'CONFIG', style: 'warning', icon: 'ph-gear' },
+        ];
+
+        /* ═══════════════════════════════════
+           Init nInteractive
+           ═══════════════════════════════════ */
+
+        var editBtn   = document.getElementById('btn-edit');
+        var infoEl    = document.getElementById('grid-info');
+
+        var currentConfig = {
+            onEditChange: function (editing) {
+                /* Update edit button */
+                if (editBtn) {
+                    editBtn.innerHTML = editing
+                        ? '<i class="ph ph-x"></i> EXIT'
+                        : '<i class="ph ph-pencil-simple"></i> EDIT';
+                    editBtn.classList.toggle('active', editing);
+                }
+                updateInfo();
+            }
+        };
+
+        nInteractive.init('#interactive-container', CONTROLS, currentConfig);
+
+        /* ── Demo notification ── */
+        setTimeout(function () {
+            nNotify.init('#interactive-container');
+            nNotify.show({
+                icon:     'ph-hand-tap',
+                title:    'INTERACTIVE MODE',
+                subtitle: 'Hold any element to enter edit mode',
+                linger:   5000
+            });
+        }, 800);
+
+        /* ═══════════════════════════════════
+           Footer: Grid Info
+           ═══════════════════════════════════ */
+
+        function updateInfo() {
+            if (!infoEl) return;
+            var container = document.getElementById('interactive-container');
+            if (!container) return;
+            var style    = getComputedStyle(container);
+            var colDef   = style.gridTemplateColumns;
+            var colCount = colDef ? colDef.split(' ').length : '?';
+            var mode     = nInteractive.isEditing() ? 'EDITING' : 'LIVE';
+            infoEl.textContent =
+                mode + ' · ' +
+                colCount + ' COLS · ' +
+                CONTROLS.length + ' CONTROLS · ' +
+                Math.round(container.clientWidth) + '\u00D7' +
+                Math.round(container.clientHeight) + 'px';
+        }
+
+        setTimeout(updateInfo, 100);
+        window.addEventListener('resize', function () { setTimeout(updateInfo, 200); });
+
+        /* ═══════════════════════════════════
+           Footer: Edit Toggle
+           ═══════════════════════════════════ */
+
+        if (editBtn) {
+            editBtn.addEventListener('click', function () {
+                if (nInteractive.isEditing()) {
+                    nInteractive.exitEdit();
+                } else {
+                    nInteractive.enterEdit();
+                }
+                if (typeof nbeep === 'function') nbeep('select');
+            });
+        }
+
+        /* ═══════════════════════════════════
+           Footer: Column Controls
+           ═══════════════════════════════════ */
+
+        var colBtns = {
+            'btn-cols-auto': null,
+            'btn-cols-2': 2,
+            'btn-cols-4': 4,
+            'btn-cols-6': 6
+        };
+
+        function setActiveCols(activeId) {
+            Object.keys(colBtns).forEach(function (id) {
+                var btn = document.getElementById(id);
+                if (btn) btn.classList.toggle('active', id === activeId);
+            });
+        }
+
+        setActiveCols('btn-cols-auto');
+
+        Object.keys(colBtns).forEach(function (id) {
+            var btn = document.getElementById(id);
+            if (!btn) return;
+            btn.addEventListener('click', function () {
+                var cols = colBtns[id];
+                if (cols) currentConfig.cols = cols;
+                else      delete currentConfig.cols;
+                nInteractive.update(null, currentConfig);
+                setActiveCols(id);
+                setTimeout(updateInfo, 100);
+                if (typeof nbeep === 'function') nbeep('select');
+            });
+        });
+
+        /* ═══════════════════════════════════
+           Footer: Shuffle
+           ═══════════════════════════════════ */
+
+        var shuffleBtn = document.getElementById('btn-shuffle');
+        if (shuffleBtn) {
+            shuffleBtn.addEventListener('click', function () {
+                var indices = [];
+                for (var i = 0; i < CONTROLS.length; i++) indices.push(i);
+                for (var j = indices.length - 1; j > 0; j--) {
+                    var k = Math.floor(Math.random() * (j + 1));
+                    var tmp = indices[j]; indices[j] = indices[k]; indices[k] = tmp;
+                }
+                currentConfig.order = indices;
+                nInteractive.update(null, currentConfig);
+                setTimeout(updateInfo, 100);
+                if (typeof nbeep === 'function') nbeep('shuffle');
+            });
+        }
+
+    })();
+    </script>
+
+</body>
+</html>

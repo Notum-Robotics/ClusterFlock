@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Runtime state (contains auth token hashes)
+nCore/state.json
+nCore/missions.json
+
+# Runtime config (contains tokens)
+cluster.json
+
+# Benchmark cache
+benchmarks.json
+
+# Prebuilt binaries — users build locally via build.sh / setup.py
+agents/agent_linux/build/
+agents/agent_spark/build/
+agents/agent_mac/build/
+
+# Downloaded models
+models/
+*.gguf
+*.gguf.part
+
+# Logs
+*.log
+
+# Environment
+.env
+
+# Editor / IDE
+.vscode/
+.idea/
+
+# Internal dev scripts
+_ABOUT.md
+_submit_mission.py
+_monitor_mission.py

@@ -1,0 +1,1595 @@
+/* ──────────────────────────────────────
+   Notum AHI
+   Copyright © 2026 Notum Robotics. Licensed under the MIT License.
+   Functional Realism
+   ────────────────────────────────────── */
+
+/* ---------- Reset & Base ---------- */
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+
+/* ---------- Self-hosted Fonts ---------- */
+@font-face {
+    font-family: 'Rajdhani';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('../fonts/rajdhani-400.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Rajdhani';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url('../fonts/rajdhani-500.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Rajdhani';
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url('../fonts/rajdhani-600.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Rajdhani';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('../fonts/rajdhani-700.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'IBM Plex Mono';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('../fonts/ibm-plex-mono-400.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'IBM Plex Mono';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url('../fonts/ibm-plex-mono-500.woff2') format('woff2');
+}
+
+/* ---------- Design Tokens ---------- */
+:root {
+    --bg:         #0a0a0a;
+    --surface:    #141414;
+    --border:     rgba(244,244,244, 0.10);
+    --text:       #F4F4F4;
+    --text-dim:   rgba(244,244,244, 0.40);
+    --accent:     #00e5ff;
+    --danger:     #FF3333;
+    --amber:      #FFB300;
+    --radius:     2px;
+    --font-label: 'Rajdhani', 'Share Tech', sans-serif;
+    --font-data:  'IBM Plex Mono', 'SF Mono', monospace;
+    --safe-b:     env(safe-area-inset-bottom, 0px);
+    --safe-t:     env(safe-area-inset-top, 0px);
+}
+
+html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-label);
+    -webkit-font-smoothing: antialiased;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    overflow: hidden;
+}
+
+/* ---------- Layout ---------- */
+#app {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    max-width: 540px;
+    margin: 0 auto;
+    position: relative;
+}
+
+/* ---------- Connection indicator ---------- */
+.conn {
+    position: absolute;
+    top: calc(1rem + var(--safe-t));
+    right: 1.25rem;
+    width: 8px;
+    height: 8px;
+    border-radius: 0;
+    z-index: 10;
+}
+.conn.on  { background: var(--accent); }
+.conn.off { background: var(--danger); animation: hardBlink 1s steps(1) infinite; }
+
+@keyframes hardBlink {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0; }
+}
+
+/* ---------- Header ---------- */
+header {
+    padding: calc(2.5rem + var(--safe-t)) 1.5rem 1rem;
+    flex-shrink: 0;
+}
+header h1 {
+    font-family: var(--font-label);
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: rgba(244,244,244, 0.45);
+}
+header h1 span {
+    font-weight: 400;
+    color: rgba(244,244,244, 0.25);
+}
+.header-meta {
+    font-family: var(--font-data);
+    font-size: .65rem;
+    font-weight: 400;
+    letter-spacing: .08em;
+    color: rgba(244,244,244, 0.25);
+    margin-top: 4px;
+}
+.header-meta a {
+    color: rgba(0,229,255, 0.35);
+    text-decoration: none;
+}
+.header-meta a:hover {
+    color: rgba(0,229,255, 0.6);
+}
+
+/* ---------- Main (scrollable) ---------- */
+main {
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: .5rem 1.25rem 2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+main::-webkit-scrollbar { display: none; }
+
+/* ---------- Control Card ---------- */
+.card {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: clamp(0.6rem, 2.5vw, 1.25rem) clamp(0.5rem, 2vw, 1rem);
+    display: flex;
+    align-items: center;
+    gap: clamp(0.5rem, 2vw, 1rem);
+    cursor: pointer;
+    overflow: hidden;
+    container-type: inline-size;
+    -webkit-tap-highlight-color: transparent;
+}
+
+/* Corner anchors — all four corners (shared) */
+.corner {
+    position: absolute;
+    font-family: var(--font-data);
+    font-size: .65rem;
+    color: rgba(244,244,244, 0.15);
+    line-height: 1;
+    pointer-events: none;
+}
+.corner-tl { top: 4px; left: 5px; }
+.corner-tr { top: 4px; right: 5px; }
+.corner-bl { bottom: 4px; left: 5px; }
+.corner-br { bottom: 4px; right: 5px; }
+
+/* Corner strobe when card is ON: each corner flashes 5× at 50ms, then 500ms off, circular */
+/* Per corner: 250ms strobe + 500ms off = 750ms active, 4 corners = 3000ms total cycle */
+.card.is-on .corner-tl { animation: cornerBurst 3s steps(1) 0s infinite; }
+.card.is-on .corner-tr { animation: cornerBurst 3s steps(1) 0.75s infinite; }
+.card.is-on .corner-br { animation: cornerBurst 3s steps(1) 1.5s infinite; }
+.card.is-on .corner-bl { animation: cornerBurst 3s steps(1) 2.25s infinite; }
+
+@keyframes cornerBurst {
+    /* 5 flashes at 50ms intervals = 250ms, then off until next cycle */
+    /* Each tick = 50ms / 3000ms ≈ 1.667% */
+    0%      { color: var(--text); }
+    1.667%  { color: rgba(244,244,244, 0.15); }
+    3.333%  { color: var(--text); }
+    5%      { color: rgba(244,244,244, 0.15); }
+    6.667%  { color: var(--text); }
+    8.333%  { color: rgba(244,244,244, 0.15); }
+    100%    { color: rgba(244,244,244, 0.15); }
+}
+
+/* Active state borders */
+.card.is-on {
+    border-color: rgba(0, 229, 255, 0.30);
+}
+.card.is-off {
+    border-color: rgba(255, 51, 51, 0.25);
+}
+
+/* ---------- Card pressed state ---------- */
+.card:active {
+    background: rgba(244,244,244, 0.10);
+    color: var(--bg);
+}
+.card.is-on:active {
+    background: rgba(0,229,255, 0.30);
+    color: var(--bg);
+}
+.card.is-off:active {
+    background: rgba(255,51,51, 0.25);
+    color: var(--bg);
+}
+
+/* Click feedback: white outline strobe (driven by JS) */
+.flash-outline {
+    border-color: var(--text) !important;
+}
+/* Corner glyph strobe: full white when flashing */
+.corner.flash-outline {
+    color: var(--text) !important;
+}
+
+/* --- Left: icon --- */
+.card-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: clamp(36px, 12cqi, 48px);
+    height: clamp(36px, 12cqi, 48px);
+    flex-shrink: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-dim);
+    font-size: clamp(1.25rem, 7cqi, 1.75rem);
+}
+.card.is-on  .card-icon { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+.card.is-off .card-icon { color: var(--danger); border-color: rgba(255,51,51,.15); }
+
+/* --- Middle: name + status --- */
+.card-info {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(0.1rem, 0.5cqi, 0.2rem);
+    min-width: 0;
+    flex: 1;
+}
+.card-name {
+    font-family: var(--font-label);
+    font-size: clamp(0.85rem, 5.2cqi, 1.3rem);
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: rgba(244,244,244, 0.50);
+}
+
+.card-state {
+    font-family: var(--font-data);
+    font-size: clamp(0.65rem, 3.4cqi, 0.85rem);
+    font-weight: 400;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text);
+}
+.card.is-on  .card-state { color: var(--accent); }
+.card.is-off .card-state { color: var(--danger); }
+
+.card.is-on .card-state {
+    text-shadow: 0 0 2px rgba(0,229,255, 0.35);
+}
+.card.is-off .card-state {
+    text-shadow: 0 0 2px rgba(255,51,51, 0.25);
+}
+
+/* --- Status badge (removed — redundant with card-state) --- */
+.card-status {
+    display: none;
+}
+
+/* ---------- Card Size Variants ---------- */
+/* Default (2x2): vertical stack — text on top, icon below, centered */
+/* Driven by data-size attribute; omit for default 2×2 */
+.card:not([data-size]),
+.card[data-size="2x2"] {
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    text-align: center;
+    gap: 0;
+}
+.card:not([data-size]) .card-info,
+.card[data-size="2x2"] .card-info {
+    order: -1;
+    align-items: center;
+    flex: 0 0 auto;
+}
+.card:not([data-size]) .card-icon,
+.card[data-size="2x2"] .card-icon {
+    width: clamp(44px, 16cqi, 64px);
+    height: clamp(44px, 16cqi, 64px);
+    font-size: clamp(1.6rem, 10cqi, 2.4rem);
+    border: none;
+    margin: auto 0;
+}
+.card:not([data-size]) .card-name,
+.card[data-size="2x2"] .card-name {
+    font-size: clamp(0.95rem, 6cqi, 1.35rem);
+}
+.card:not([data-size]) .card-state,
+.card[data-size="2x2"] .card-state {
+    font-size: clamp(0.7rem, 3.8cqi, 0.9rem);
+}
+
+/* 3×3 — extra large: vertical stack — text on top, large icon below, centered */
+.card[data-size="3x3"] {
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    text-align: center;
+    padding: 1.5rem 1.25rem;
+    gap: 0;
+}
+.card[data-size="3x3"] .card-info {
+    order: -1;
+    align-items: center;
+    flex: 0 0 auto;
+}
+.card[data-size="3x3"] .card-icon {
+    width: 100px;
+    height: 100px;
+    font-size: 3.75rem;
+    border: none;
+    margin: auto 0;
+}
+.card[data-size="3x3"] .card-name {
+    font-size: 1.9rem;
+}
+.card[data-size="3x3"] .card-state {
+    font-size: 1.15rem;
+}
+
+/* 3×2 — wide landscape: full card, slightly bigger */
+.card[data-size="3x2"] {
+    padding: 1.25rem 1.15rem;
+    gap: 1.15rem;
+}
+.card[data-size="3x2"] .card-icon {
+    width: 56px;
+    height: 56px;
+    font-size: 2rem;
+}
+.card[data-size="3x2"] .card-name {
+    font-size: 1.45rem;
+}
+.card[data-size="3x2"] .card-state {
+    font-size: .95rem;
+}
+
+/* 2×3 — tall portrait: vertical stack with room */
+.card[data-size="2x3"] {
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 1.25rem 1rem;
+    gap: .75rem;
+    text-align: center;
+}
+.card[data-size="2x3"] .card-icon {
+    width: 56px;
+    height: 56px;
+    font-size: 2rem;
+}
+.card[data-size="2x3"] .card-info {
+    align-items: center;
+}
+.card[data-size="2x3"] .card-name {
+    font-size: 1.3rem;
+}
+.card[data-size="2x3"] .card-state {
+    font-size: .85rem;
+}
+
+/* 3×1 — wide strip: icon + name only, compact height */
+.card[data-size="3x1"] {
+    padding: .6rem .85rem;
+    gap: .7rem;
+}
+.card[data-size="3x1"] .card-icon {
+    width: 36px;
+    height: 36px;
+    font-size: 1.25rem;
+}
+.card[data-size="3x1"] .card-name {
+    font-size: 1.1rem;
+}
+.card[data-size="3x1"] .card-state {
+    display: none;
+}
+
+/* 1×3 — tall narrow strip: vertical stack, compact */
+.card[data-size="1x3"] {
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: .6rem .5rem;
+    gap: .35rem;
+    text-align: center;
+}
+.card[data-size="1x3"] .card-icon {
+    width: 36px;
+    height: 36px;
+    font-size: 1.25rem;
+}
+.card[data-size="1x3"] .card-info {
+    align-items: center;
+}
+.card[data-size="1x3"] .card-name {
+    font-size: .75rem;
+    letter-spacing: .04em;
+}
+.card[data-size="1x3"] .card-state {
+    font-size: .6rem;
+}
+
+/* 2×1 — half-height: icon + name, hide state text */
+.card[data-size="2x1"] {
+    padding: .6rem .75rem;
+    gap: .6rem;
+}
+.card[data-size="2x1"] .card-icon {
+    width: 36px;
+    height: 36px;
+    font-size: 1.25rem;
+}
+.card[data-size="2x1"] .card-name {
+    font-size: 1rem;
+}
+.card[data-size="2x1"] .card-state {
+    display: none;
+}
+
+/* 1×2 — half-width: vertical layout, icon + name stacked */
+.card[data-size="1x2"] {
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: .6rem .5rem;
+    gap: .4rem;
+    text-align: center;
+}
+.card[data-size="1x2"] .card-icon {
+    width: 36px;
+    height: 36px;
+    font-size: 1.25rem;
+}
+.card[data-size="1x2"] .card-info {
+    align-items: center;
+}
+.card[data-size="1x2"] .card-name {
+    font-size: .7rem;
+    letter-spacing: .04em;
+}
+.card[data-size="1x2"] .card-state {
+    font-size: .55rem;
+}
+
+/* 1×1 — quarter: icon only, everything else hidden */
+.card[data-size="1x1"] {
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: .4rem;
+    gap: 0;
+}
+.card[data-size="1x1"] .card-icon {
+    width: 32px;
+    height: 32px;
+    font-size: 1.1rem;
+    border: none;
+}
+.card[data-size="1x1"] .card-info {
+    display: none;
+}
+.card[data-size="1x1"] .corner {
+    font-size: .5rem;
+}
+.card[data-size="1x1"] .corner-tl { top: 2px; left: 3px; }
+.card[data-size="1x1"] .corner-tr { top: 2px; right: 3px; }
+.card[data-size="1x1"] .corner-bl { bottom: 2px; left: 3px; }
+.card[data-size="1x1"] .corner-br { bottom: 2px; right: 3px; }
+
+/* ---------- Empty state ---------- */
+.empty {
+    text-align: center;
+    font-family: var(--font-data);
+    color: var(--text-dim);
+    padding: 4rem 1rem;
+    font-size: .85rem;
+    line-height: 1.6;
+}
+
+/* ---------- Footer ---------- */
+footer {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: .75rem 1.25rem calc(.75rem + var(--safe-b));
+    font-family: var(--font-data);
+    font-size: .6rem;
+    color: var(--text-dim);
+    letter-spacing: .06em;
+    text-transform: uppercase;
+}
+#ping-graph {
+    display: block;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+#ping-val {
+    min-width: 48px;
+}
+
+/* ---------- Responsive ---------- */
+@media (min-width: 420px) {
+    #app { max-width: 680px; }
+    main {
+        flex-direction: row;
+        flex-wrap: wrap;
+    }
+    .card {
+        flex: 1 1 calc(50% - 4px);
+        min-width: calc(50% - 4px);
+    }
+}
+
+@media (min-width: 768px) {
+    #app { max-width: 900px; }
+    .card {
+        flex: 1 1 calc(33.33% - 6px);
+        min-width: calc(33.33% - 6px);
+    }
+}
+
+@media (max-height: 500px) {
+    header { padding-top: calc(1rem + var(--safe-t)); padding-bottom: .5rem; }
+    header h1 { font-size: 1.2rem; }
+    main { padding-top: 0; }
+    .card { padding: .75rem; }
+}
+
+/* ---------- Sample action button ---------- */
+.action-btn {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: .75rem 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: .5rem;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    font-family: var(--font-data);
+    font-size: .75rem;
+    font-weight: 500;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+
+/* ---------- Dialog overlay (dithered) ---------- */
+.dialog-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* Dithered dot pattern: 2×2 repeating 50% fill */
+    background-color: rgba(0,0,0,0.55);
+    background-image:
+        url("data:image/svg+xml,%3Csvg width='4' height='4' xmlns='http://www.w3.org/2000/svg'%3E%3Crect x='0' y='0' width='2' height='2' fill='%23000' fill-opacity='0.45'/%3E%3Crect x='2' y='2' width='2' height='2' fill='%23000' fill-opacity='0.45'/%3E%3C/svg%3E");
+    background-size: 4px 4px;
+    image-rendering: pixelated;
+    opacity: 0;
+    pointer-events: none;
+}
+.dialog-overlay.open {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* ---------- Dialog box ---------- */
+.dialog-box {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid rgba(244,244,244,0.15);
+    border-radius: var(--radius);
+    width: calc(100% - 2.5rem);
+    max-width: 360px;
+    padding: 1.5rem 1.25rem 1.25rem;
+}
+
+/* Dialog corner anchors (brighter) */
+.dialog-box .corner {
+    color: rgba(244,244,244, 0.20);
+}
+.dialog-box .corner-tl { top: 5px; left: 6px; }
+.dialog-box .corner-tr { top: 5px; right: 6px; }
+.dialog-box .corner-bl { bottom: 5px; left: 6px; }
+.dialog-box .corner-br { bottom: 5px; right: 6px; }
+
+.dialog-title {
+    font-family: var(--font-label);
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: rgba(244,244,244, 0.50);
+    margin-bottom: .25rem;
+}
+
+.dialog-body {
+    font-family: var(--font-data);
+    font-size: .8rem;
+    color: var(--text-dim);
+    letter-spacing: .04em;
+    line-height: 1.5;
+    margin-bottom: 1.25rem;
+}
+
+.dialog-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.dialog-btn {
+    flex: 1;
+    padding: .7rem .5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: transparent;
+    font-family: var(--font-data);
+    font-size: .75rem;
+    font-weight: 500;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+.dialog-btn.primary {
+    color: var(--accent);
+    border-color: rgba(0,229,255, 0.30);
+}
+.dialog-btn.danger {
+    color: var(--danger);
+    border-color: rgba(255,51,51, 0.25);
+}
+.dialog-btn.warning {
+    color: var(--amber);
+    border-color: rgba(255,179,0, 0.30);
+}
+
+/* ---------- Dialog button pressed state ---------- */
+.dialog-btn:active {
+    background: rgba(244,244,244, 0.10);
+    color: var(--bg);
+}
+.dialog-btn.primary:active {
+    background: rgba(0,229,255, 0.30);
+    color: var(--bg);
+}
+.dialog-btn.danger:active {
+    background: rgba(255,51,51, 0.25);
+    color: var(--bg);
+}
+.dialog-btn.warning:active {
+    background: rgba(255,179,0, 0.30);
+    color: var(--bg);
+}
+
+/* ---------- Action button pressed state ---------- */
+.action-btn:active {
+    background: rgba(244,244,244, 0.10);
+    color: var(--bg);
+}
+.action-btn.primary:active {
+    background: rgba(0,229,255, 0.25);
+    color: var(--bg);
+}
+.action-btn.warning:active {
+    background: rgba(255,179,0, 0.25);
+    color: var(--bg);
+}
+.action-btn.danger:active {
+    background: rgba(255,51,51, 0.25);
+    color: var(--bg);
+}
+
+/* ---------- Status-tagged button pressed state ---------- */
+.action-btn[data-status="ok"]:active {
+    background: rgba(0,229,255, 0.15);
+    color: var(--bg);
+}
+.action-btn[data-status="warn"]:active {
+    background: rgba(255,179,0, 0.15);
+    color: var(--bg);
+}
+.action-btn[data-status="error"]:active {
+    background: rgba(255,51,51, 0.15);
+    color: var(--bg);
+}
+.action-btn[data-status="busy"]:active {
+    background: rgba(0,229,255, 0.12);
+    color: var(--bg);
+}
+
+/* ---------- Amber action button variant ---------- */
+.action-btn.warning {
+    color: var(--amber);
+    border-color: rgba(255,179,0, 0.25);
+}
+.action-btn.primary {
+    color: var(--accent);
+    border-color: rgba(0,229,255, 0.25);
+}
+.action-btn.danger {
+    color: var(--danger);
+    border-color: rgba(255,51,51, 0.25);
+}
+
+/* ---------- Icon-only buttons ---------- */
+.icon-btn {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    color: var(--text-dim);
+    font-size: 1.2rem;
+}
+
+.icon-btn.primary {
+    color: var(--accent);
+    border-color: rgba(0,229,255, 0.25);
+}
+.icon-btn.warning {
+    color: var(--amber);
+    border-color: rgba(255,179,0, 0.25);
+}
+.icon-btn.danger {
+    color: var(--danger);
+    border-color: rgba(255,51,51, 0.25);
+}
+
+/* ---------- Icon button pressed state ---------- */
+.icon-btn:active {
+    background: rgba(244,244,244, 0.10);
+    color: var(--bg);
+}
+.icon-btn.primary:active {
+    background: rgba(0,229,255, 0.25);
+    color: var(--bg);
+}
+.icon-btn.warning:active {
+    background: rgba(255,179,0, 0.25);
+    color: var(--bg);
+}
+.icon-btn.danger:active {
+    background: rgba(255,51,51, 0.25);
+    color: var(--bg);
+}
+
+/* Icon button toggle states */
+.icon-btn.is-on {
+    color: var(--bg);
+    background: var(--accent);
+    border-color: var(--accent);
+}
+.icon-btn.is-off {
+    color: var(--danger);
+    border-color: rgba(255,51,51, 0.20);
+}
+
+/* ═══════════ Component Properties System ═══════════ */
+
+/* --- Progress Bar (embedded in interactive elements) --- */
+.n-progress {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    display: flex;
+    gap: 1px;
+    pointer-events: none;
+    overflow: hidden;
+    border-radius: 0 0 var(--radius) var(--radius);
+}
+
+.n-progress .n-seg {
+    flex: 1;
+    background: rgba(244,244,244, 0.04);
+    min-width: 0;
+}
+
+.n-progress .n-seg.filled {
+    background: var(--accent);
+}
+
+.warning .n-progress .n-seg.filled { background: var(--amber); }
+.danger .n-progress .n-seg.filled  { background: var(--danger); }
+
+.n-progress .n-seg.filled.seg-dim    { filter: brightness(0.75); }
+.n-progress .n-seg.filled.seg-bright { filter: brightness(1.35); }
+
+.n-progress .n-seg.seg-scan          { background: rgba(244,244,244, 0.15); }
+.warning .n-progress .n-seg.seg-scan { background: rgba(255,179,0, 0.20); }
+.danger .n-progress .n-seg.seg-scan  { background: rgba(255,51,51, 0.20); }
+
+/* --- Progress Background Fill (segmented, synced to progress bar) --- */
+[data-progress]:not([data-progress="indeterminate"])::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background:
+        repeating-linear-gradient(
+            to right,
+            transparent 0,
+            transparent calc(10% - 0.5px),
+            var(--surface) calc(10% - 0.5px),
+            var(--surface) 10%
+        ),
+        linear-gradient(
+            to right,
+            rgba(0,229,255, 0.06) calc(var(--prog-filled) * 10%),
+            transparent                calc(var(--prog-filled) * 10%)
+        );
+}
+.warning[data-progress]:not([data-progress="indeterminate"])::before {
+    background:
+        repeating-linear-gradient(
+            to right,
+            transparent 0,
+            transparent calc(10% - 0.5px),
+            var(--surface) calc(10% - 0.5px),
+            var(--surface) 10%
+        ),
+        linear-gradient(
+            to right,
+            rgba(255,179,0, 0.06) calc(var(--prog-filled) * 10%),
+            transparent               calc(var(--prog-filled) * 10%)
+        );
+}
+.danger[data-progress]:not([data-progress="indeterminate"])::before {
+    background:
+        repeating-linear-gradient(
+            to right,
+            transparent 0,
+            transparent calc(10% - 0.5px),
+            var(--surface) calc(10% - 0.5px),
+            var(--surface) 10%
+        ),
+        linear-gradient(
+            to right,
+            rgba(255,51,51, 0.06) calc(var(--prog-filled) * 10%),
+            transparent               calc(var(--prog-filled) * 10%)
+        );
+}
+
+/* --- Status Pip --- */
+.n-status-pip {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 10px;
+    height: 10px;
+    border-radius: 0;
+    pointer-events: none;
+    z-index: 2;
+    background: transparent;
+    border: 1px solid rgba(244,244,244, 0.06);
+}
+
+[data-status="ok"]    .n-status-pip { background: var(--accent); }
+[data-status="warn"]  .n-status-pip { background: var(--amber); }
+[data-status="error"] .n-status-pip { background: var(--danger); animation: hardBlink 1s steps(1) infinite; }
+[data-status="busy"]  .n-status-pip { background: var(--accent); animation: hardBlink 1s steps(1) infinite; }
+
+:is(.action-btn, .card, .submenu-item, .panel)[data-status="ok"]    { border-color: rgba(0,229,255, 0.25); }
+:is(.action-btn, .card, .submenu-item, .panel)[data-status="warn"]  { border-color: rgba(255,179,0, 0.25); }
+:is(.action-btn, .card, .submenu-item, .panel)[data-status="error"] { border-color: rgba(255,51,51, 0.25); }
+:is(.action-btn, .card, .submenu-item, .panel)[data-status="busy"]  { border-color: rgba(0,229,255, 0.20); }
+
+/* --- Active / Inactive --- */
+:is(.action-btn, .submenu-item)[data-active="true"] {
+    color: var(--accent);
+    border-color: rgba(0,229,255, 0.30);
+}
+
+:is(.action-btn, .card, .submenu-item)[data-active="false"] {
+    pointer-events: none;
+    cursor: default;
+}
+
+/* --- Disabled X overlay --- */
+.ahi-disabled {
+    position: relative;
+    pointer-events: none;
+    background: rgba(10,10,10, 0.6) !important;
+    border-color: rgba(244,244,244, 0.05) !important;
+}
+.ahi-disabled::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+    background:
+        linear-gradient(
+            to top right,
+            transparent calc(50% - 0.5px),
+            var(--border) calc(50% - 0.5px),
+            var(--border) calc(50% + 0.5px),
+            transparent calc(50% + 0.5px)
+        ),
+        linear-gradient(
+            to top left,
+            transparent calc(50% - 0.5px),
+            var(--border) calc(50% - 0.5px),
+            var(--border) calc(50% + 0.5px),
+            transparent calc(50% + 0.5px)
+        );
+}
+
+/* --- Lockout cooldown --- */
+.n-locked {
+    cursor: wait !important;
+}
+
+/* ═══════════ In-Grid Notifications (nNotify) ═══════════ */
+
+/* Notification box — sits inside the grayout overlay */
+.nn-box {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid rgba(244,244,244, 0.15);
+    border-radius: var(--radius);
+    padding: 0.75rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    max-width: 90%;
+    min-width: 160px;
+    z-index: 1;
+}
+
+/* Corner anchors (reuse global corner styling) */
+.nn-box .corner {
+    color: rgba(244,244,244, 0.20);
+}
+.nn-box .corner-tl { top: 3px; left: 4px; }
+.nn-box .corner-tr { top: 3px; right: 4px; }
+.nn-box .corner-bl { bottom: 3px; left: 4px; }
+.nn-box .corner-br { bottom: 3px; right: 4px; }
+
+/* Icon */
+.nn-icon {
+    font-size: 1.25rem;
+    color: var(--accent);
+    flex-shrink: 0;
+    line-height: 1;
+}
+
+/* Text content */
+.nn-content {
+    min-width: 0;
+    flex: 1;
+}
+
+.nn-title {
+    font-family: var(--font-label);
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(244,244,244, 0.55);
+    line-height: 1.2;
+}
+
+.nn-subtitle {
+    font-family: var(--font-data);
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    letter-spacing: 0.03em;
+    line-height: 1.4;
+    margin-top: 0.15rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0s !important;
+    }
+}
+
+/* ═══════════ Adaptive Sub-Element Hiding ═══════════ */
+/* Performance-first responsive element hiding via CSS container
+   queries.  Zero JS layout reads — pure CSS, zero thrashing.
+
+   PRIORITY (highest → lowest):
+     1. Icon       — always visible, never shrunk
+     2. Title/Name — show in full → truncate to first word → hide
+     3. Value/State — hide first (redundant with pips / bars)
+
+   Containment lives on the grid item itself (.card already has
+   container-type; .grid-cell and .grid-btn are added here).
+   Named containers prevent cross-matching in nested layouts.  */
+
+/* --- Containment contexts --- */
+.grid-cell      { container-type: inline-size; container-name: cell; }
+.grid-btn       { container-type: inline-size; container-name: btn; }
+/* .card already has container-type: inline-size */
+
+/* --- Flex-shrink priority (vertical overflow) --- */
+.card-icon,
+.nn-icon        { flex-shrink: 0; }
+.card-info      { flex-shrink: 1; min-height: 0; }
+.card-name      { flex-shrink: 0; }
+.card-state     { flex-shrink: 10; min-height: 0; overflow: hidden; }
+
+/* --- Button label baseline --- */
+.btn-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+/* ── Tier 3: Values / state text — first to hide ────────── */
+
+@container (max-width: 150px) {
+    .card-state     { display: none; }
+}
+
+@container (max-width: 140px) {
+    .slider-readout { display: none; }
+}
+
+@container (max-width: 130px) {
+    .status-val     { display: none; }
+}
+
+/* Stepper value is NEVER hidden — it IS the control's output.
+   The label collapses but the value always stays.            */
+
+/* ── Tier 2: Titles / labels — truncate then hide ───────── */
+
+@container (max-width: 110px) {
+    .card-name {
+        max-width: 6ch; /* ≈ first word + ellipsis */
+    }
+    .panel-label {
+        max-width: 8ch;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .tg-option {
+        font-size: .6rem;
+        letter-spacing: 0;
+    }
+}
+
+@container (max-width: 90px) {
+    .btn-label      { display: none; }
+    /* Icon-only state: enlarge icon to fill the freed space */
+    .action-btn i,
+    .grid-btn i     { font-size: 1.2rem; }
+}
+
+@container (max-width: 75px) {
+    .panel-label    { display: none; }
+    .status-label   { display: none; }
+    /* Stepper label is exempt — always visible (truncated) */
+    .gc-stepper .panel-label { display: block; }
+}
+
+@container (max-width: 70px) {
+    .card-info      { display: none; }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   nInteractive — Edit Mode, Drag & Drop, Context Menu
+   Styles for nInteractive.js module. Loaded globally so every
+   page that uses nInteractive gets correct visuals automatically.
+   ══════════════════════════════════════════════════════════════ */
+
+/* ---------- Edit Mode ---------- */
+/* Dashed outlines + subtle diagonal grid pattern */
+.ni-edit-mode {
+    background:
+        repeating-linear-gradient(
+            45deg,
+            transparent,
+            transparent 10px,
+            rgba(244,244,244, 0.012) 10px,
+            rgba(244,244,244, 0.012) 11px
+        ) !important;
+}
+
+.ni-edit-mode > [data-ni-idx] {
+    outline: 1px dashed rgba(244,244,244, 0.20);
+    outline-offset: -1px;
+    cursor: grab;
+}
+
+.ni-edit-mode > [data-ni-idx]:active {
+    cursor: grabbing;
+}
+
+/* Locked controls */
+.ni-edit-mode > .ni-locked {
+    outline-color: rgba(255,179,0, 0.30);
+    cursor: not-allowed;
+}
+
+.ni-edit-mode > .ni-locked::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 6px;
+    height: 6px;
+    background: var(--amber);
+    z-index: 5;
+    pointer-events: none;
+}
+
+/* Muted controls – only visible in edit mode */
+.ni-edit-mode > .ni-muted::before {
+    content: '';
+    position: absolute;
+    bottom: 3px;
+    left: 3px;
+    width: 6px;
+    height: 6px;
+    background: var(--danger);
+    z-index: 5;
+    pointer-events: none;
+    opacity: 0.6;
+}
+
+/* ---------- Drag & Drop ---------- */
+
+/* Drag ghost */
+.ni-drag-ghost {
+    opacity: 0.6;
+    border: 1px dashed var(--accent) !important;
+    outline: none !important;
+    box-shadow: 0 0 24px rgba(0,229,255, 0.12);
+}
+
+/* Drag source (dimmed) */
+.ni-drag-source {
+    opacity: 0.2;
+}
+
+/* Drop indicator */
+.ni-drop-indicator {
+    border: 2px dashed rgba(0,229,255, 0.40);
+    border-radius: var(--radius);
+    background: rgba(0,229,255, 0.04);
+    pointer-events: none;
+    transition: border-color 0.15s, background 0.15s;
+}
+
+/* Drop indicator — invalid / overlapping position */
+.ni-drop-indicator.ni-drop-invalid {
+    border-color: rgba(255,179,0, 0.55);
+    background: rgba(255,179,0, 0.06);
+}
+
+/* Placement error — subtle flash on the container */
+@keyframes ni-error-flash {
+    0%, 100% { box-shadow: none; }
+    20%, 80% { box-shadow: inset 0 0 0 2px rgba(255,51,51, 0.20); }
+}
+.ni-placement-error {
+    animation: ni-error-flash 0.6s ease;
+}
+
+/* ---------- Context Menu ---------- */
+
+.ni-ctx-menu {
+    background: var(--surface);
+    border: 1px solid rgba(244,244,244, 0.15);
+    border-radius: var(--radius);
+    padding: 10px;
+    min-width: 180px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.ni-ctx-menu .corner {
+    color: rgba(244,244,244, 0.20);
+}
+
+.ni-ctx-title {
+    font-family: var(--font-label);
+    font-size: .7rem;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: rgba(244,244,244, 0.50);
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 2px;
+}
+
+.ni-ctx-item {
+    font-family: var(--font-data);
+    font-size: .65rem;
+    letter-spacing: .06em;
+    color: var(--text-dim);
+    padding: 7px 6px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ni-ctx-item:hover {
+    color: var(--text);
+    border-color: var(--border);
+}
+
+.ni-ctx-item i {
+    font-size: .8rem;
+    width: 16px;
+    text-align: center;
+}
+
+/* Resize / theme sub-menu: row of buttons */
+.ni-ctx-resize-header {
+    padding-bottom: 2px !important;
+    margin-bottom: 0 !important;
+}
+
+.ni-ctx-size-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+    padding: 4px 6px 6px;
+}
+
+.ni-ctx-size-btn {
+    font-family: var(--font-data);
+    font-size: .6rem;
+    letter-spacing: .04em;
+    color: var(--text-dim);
+    text-align: center;
+    padding: 5px 2px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.ni-ctx-size-btn:hover {
+    color: var(--text);
+    border-color: var(--accent);
+    background: rgba(0,229,255, 0.04);
+}
+
+.ni-ctx-size-btn.active {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: rgba(0,229,255, 0.08);
+    cursor: default;
+    pointer-events: none;
+}
+
+/* Sound hash stepper row */
+.ni-ctx-hash-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px 6px;
+}
+
+.ni-ctx-hash-btn {
+    width: 28px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-data);
+    font-size: .75rem;
+    font-weight: 700;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.ni-ctx-hash-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+.ni-ctx-hash-val {
+    flex: 1;
+    font-family: var(--font-data);
+    font-size: .65rem;
+    font-weight: 700;
+    letter-spacing: .1em;
+    color: var(--accent);
+    text-align: center;
+}
+
+/* ---------- Edit Mode Banner ---------- */
+
+.ni-edit-banner {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1500;
+    background: rgba(0,229,255, 0.06);
+    border-bottom: 1px solid rgba(0,229,255, 0.20);
+    padding: 5px 16px;
+    font-family: var(--font-data);
+    font-size: .55rem;
+    letter-spacing: .08em;
+    color: var(--accent);
+    text-align: center;
+    text-transform: uppercase;
+    opacity: 0;
+    transform: translateY(-100%);
+    transition: opacity 0.2s, transform 0.2s;
+    pointer-events: none;
+}
+
+.ni-edit-banner.visible {
+    opacity: 1;
+    transform: translateY(0);
+    animation: bannerStrobe 0.5s steps(1) 1;
+}
+
+@keyframes bannerStrobe {
+    0%, 20%, 40%, 60%, 80% { background: rgba(0,229,255, 0.12); }
+    10%, 30%, 50%, 70%, 90% { background: rgba(0,229,255, 0.03); }
+    100% { background: rgba(0,229,255, 0.06); }
+}
+
+.ni-banner-hint {
+    color: rgba(0,229,255, 0.45);
+}
+
+/* ---------- Resize Handles ---------- */
+
+.ni-resize-handle {
+    position: absolute;
+    right: -2px;
+    bottom: -2px;
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    color: var(--accent);
+    font-size: .55rem;
+    cursor: nwse-resize;
+    z-index: 20;
+    opacity: 0;
+    transform: scale(0.6);
+    transition: opacity 0.15s, transform 0.15s;
+    touch-action: none;
+}
+
+.ni-edit-mode .ni-resize-handle {
+    opacity: 0.7;
+    transform: scale(1);
+}
+
+.ni-edit-mode .ni-resize-handle:hover {
+    opacity: 1;
+    background: rgba(0,229,255, 0.1);
+}
+
+.ni-edit-mode > .ni-locked .ni-resize-handle {
+    display: none;
+}
+
+.ni-resizing {
+    outline: 2px solid var(--accent) !important;
+    outline-offset: -1px;
+    z-index: 100;
+}
+
+/* ---------- Placement Error Flash ---------- */
+
+.ni-placement-error {
+    animation: niPlaceErr 0.6s ease-out;
+}
+
+@keyframes niPlaceErr {
+    0%, 20%, 40% { outline-color: var(--danger); }
+    10%, 30%     { outline-color: transparent; }
+    50%          { outline-color: initial; }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Mobile Optimizations (≤480px)
+   Only affects phones — desktop / iPad rendering is untouched.
+   ══════════════════════════════════════════════════════════════ */
+
+@media (max-width: 480px) {
+    /* Tighter header for small screens */
+    header {
+        padding: calc(1.5rem + var(--safe-t)) 1rem .6rem;
+    }
+    header h1 {
+        font-size: 1.25rem;
+        letter-spacing: .08em;
+    }
+    .header-meta {
+        font-size: .58rem;
+        letter-spacing: .05em;
+    }
+
+    /* Tighter main padding */
+    main {
+        padding: .25rem .75rem 1.5rem;
+        gap: 6px;
+    }
+
+    /* Cards: slightly more compact */
+    .card {
+        padding: clamp(0.5rem, 2.5vw, 1rem) clamp(0.4rem, 2vw, 0.85rem);
+        gap: clamp(0.4rem, 1.5vw, 0.85rem);
+    }
+    .corner {
+        font-size: .55rem;
+    }
+    .corner-tl { top: 3px; left: 4px; }
+    .corner-tr { top: 3px; right: 4px; }
+    .corner-bl { bottom: 3px; left: 4px; }
+    .corner-br { bottom: 3px; right: 4px; }
+
+    /* Footer: compact */
+    footer {
+        padding: .5rem .75rem calc(.5rem + var(--safe-b));
+        gap: 6px;
+        font-size: .55rem;
+    }
+
+    /* Dialog: tighter for small screens */
+    .dialog-box {
+        width: calc(100% - 1.5rem);
+        max-width: 340px;
+        padding: 1.25rem 1rem 1rem;
+    }
+    .dialog-title {
+        font-size: 1rem;
+    }
+    .dialog-body {
+        font-size: .75rem;
+        margin-bottom: 1rem;
+    }
+    .dialog-btn {
+        padding: .6rem .4rem;
+        font-size: .7rem;
+        letter-spacing: .06em;
+    }
+
+    /* Action buttons: slightly more compact */
+    .action-btn {
+        padding: .6rem .75rem;
+        font-size: .7rem;
+        gap: .4rem;
+    }
+
+    /* Context menu: tighter */
+    .ni-ctx-menu {
+        padding: 8px;
+        min-width: 160px;
+    }
+    .ni-ctx-title {
+        font-size: .65rem;
+    }
+    .ni-ctx-item {
+        font-size: .6rem;
+        padding: 6px 5px;
+    }
+
+    /* Notification: tighter */
+    .nn-box {
+        padding: 0.6rem 0.75rem;
+        gap: 0.6rem;
+    }
+    .nn-title {
+        font-size: 0.78rem;
+    }
+    .nn-subtitle {
+        font-size: 0.64rem;
+    }
+
+    /* Edit banner: slightly larger text for readability */
+    .ni-edit-banner {
+        padding: 6px 12px;
+        font-size: .5rem;
+    }
+}
+
+/* Very small phones (iPhone SE and below) */
+@media (max-width: 374px) {
+    header {
+        padding: calc(1.25rem + var(--safe-t)) .75rem .5rem;
+    }
+    header h1 {
+        font-size: 1.1rem;
+        letter-spacing: .06em;
+    }
+    .header-meta {
+        font-size: .52rem;
+    }
+    .header-subtitle {
+        font-size: .55rem;
+        letter-spacing: .15em;
+    }
+    main {
+        padding: .2rem .5rem 1rem;
+        gap: 4px;
+    }
+    .dialog-box {
+        width: calc(100% - 1rem);
+        padding: 1rem .75rem .75rem;
+    }
+}
+
+/* Landscape phone — compact vertical space */
+@media (max-width: 768px) and (max-height: 420px) {
+    header {
+        padding: calc(.75rem + var(--safe-t)) 1rem .35rem;
+    }
+    header h1 {
+        font-size: 1.1rem;
+    }
+    main {
+        padding: .2rem .75rem 1rem;
+    }
+    footer {
+        padding: .35rem .75rem calc(.35rem + var(--safe-b));
+    }
+}

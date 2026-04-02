@@ -1,0 +1,1003 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>ClusterFlock — OAPI</title>
+    <link rel="stylesheet" href="notum_AHI/css/phosphor.css?v=20260330">
+    <link rel="stylesheet" href="notum_AHI/css/style.css?v=20260330">
+    <link rel="stylesheet" href="notum_AHI/css/notum.css?v=20260330">
+    <link rel="stylesheet" href="app.css?v=20260330">
+    <style>
+        /* OAPI-specific layout */
+        .oapi-body {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        /* Status bar */
+        .oapi-status-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+            padding: 4px 0;
+        }
+        .oapi-stat {
+            display: flex;
+            gap: 4px;
+            align-items: center;
+        }
+        .oapi-stat .os-label {
+            font-family: var(--font-data);
+            font-size: .5rem;
+            color: var(--text-dim);
+            letter-spacing: .08em;
+            text-transform: uppercase;
+        }
+        .oapi-stat .os-value {
+            font-family: var(--font-data);
+            font-size: .6rem;
+            color: var(--text);
+            letter-spacing: .04em;
+        }
+
+        /* Config panel */
+        .oapi-config {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            padding: 6px 0;
+        }
+        .oapi-config .toggle-group { flex: none; max-width: 100%; }
+        .oapi-config .model-sel {
+            flex: 1;
+        }
+
+        /* Thinking power slider */
+        .tp-row {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            flex: 1;
+        }
+        .mt-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .mt-row input {
+            width: 80px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 4px 6px;
+            font-family: var(--font-data);
+            font-size: .6rem;
+            color: var(--text);
+            outline: none;
+        }
+        .mt-row input:focus { border-color: rgba(0,229,255,0.30); }
+        .mt-row .mt-hint {
+            font-family: var(--font-data);
+            font-size: .45rem;
+            color: var(--text-dim);
+            letter-spacing: .06em;
+        }
+
+        /* Chat area */
+        .chat-area {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Conversation sidebar */
+        .conv-sidebar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            width: 260px;
+            background: var(--surface);
+            border-right: 1px solid var(--border);
+            z-index: 90;
+            display: none;
+            flex-direction: column;
+            padding: calc(env(safe-area-inset-top, 0px) + 12px) 12px 12px;
+        }
+        .conv-sidebar.open { display: flex; }
+        .conv-sidebar .cs-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .conv-sidebar .cs-title {
+            font-family: var(--font-label);
+            font-size: .8rem;
+            font-weight: 700;
+            letter-spacing: .1em;
+            text-transform: uppercase;
+            color: rgba(244,244,244,0.4);
+        }
+        .conv-sidebar .cs-close {
+            background: none;
+            border: none;
+            color: var(--text-dim);
+            cursor: pointer;
+            font-size: .9rem;
+            padding: 4px;
+        }
+        .conv-sidebar .cs-new-btn {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 6px 10px;
+            font-family: var(--font-label);
+            font-size: .65rem;
+            font-weight: 600;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+            color: var(--accent);
+            cursor: pointer;
+            width: 100%;
+            margin-bottom: 8px;
+        }
+        .cs-list {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .cs-list::-webkit-scrollbar { display: none; }
+        .cs-item {
+            padding: 6px 8px;
+            font-family: var(--font-data);
+            font-size: .6rem;
+            color: var(--text-dim);
+            cursor: pointer;
+            border-radius: var(--radius);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 6px;
+        }
+        .cs-item:hover { background: rgba(244,244,244,0.04); color: var(--text); }
+        .cs-item.active { color: var(--accent); background: rgba(0,229,255,0.06); }
+        .cs-item .cs-title-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .cs-item .cs-delete {
+            color: var(--text-dim);
+            font-size: .7rem;
+            opacity: 0;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .cs-item:hover .cs-delete { opacity: 1; }
+
+        /* Thinking indicator */
+        .thinking {
+            display: none;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 12px;
+            font-family: var(--font-data);
+            font-size: .6rem;
+            color: var(--text-dim);
+        }
+        .thinking.active { display: flex; }
+        .thinking-dots span {
+            display: inline-block;
+            width: 4px;
+            height: 4px;
+            background: var(--accent);
+            margin: 0 2px;
+            animation: dotPulse 1.2s infinite;
+        }
+        .thinking-dots span:nth-child(2) { animation-delay: .2s; }
+        .thinking-dots span:nth-child(3) { animation-delay: .4s; }
+        @keyframes dotPulse {
+            0%, 80%, 100% { opacity: .2; }
+            40% { opacity: 1; }
+        }
+
+        /* Orchestration trace */
+        .orch-trace {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+            margin-top: 4px;
+        }
+        .orch-toggle {
+            padding: 5px 10px;
+            font-family: var(--font-data);
+            font-size: .5rem;
+            color: var(--text-dim);
+            letter-spacing: .08em;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+        }
+        .orch-body {
+            display: none;
+            padding: 6px 10px;
+            font-family: var(--font-data);
+            font-size: .55rem;
+            color: var(--text-dim);
+            line-height: 1.6;
+        }
+        .orch-trace.open .orch-body { display: block; }
+        .orch-phase {
+            padding: 3px 0;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .orch-phase .op-label { flex: 1; }
+        .orch-phase .op-time { color: var(--accent); min-width: 40px; text-align: right; }
+
+        /* Sidebar overlay backdrop */
+        .sidebar-backdrop {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.4);
+            z-index: 89;
+        }
+        .sidebar-backdrop.open { display: block; }
+    </style>
+</head>
+<body>
+<div class="cf-app">
+    <header>
+        <h1>CLUSTER<span class="accent">FLOCK</span></h1>
+    </header>
+
+    <!--#include file="nav.part"-->
+
+    <main class="oapi-body">
+        <!-- Status Bar -->
+        <div class="oapi-status-bar">
+            <button class="cf-btn" id="sidebar-toggle" data-flash style="padding:4px 8px;font-size:.7rem;">
+                <i class="ph ph-list"></i>
+            </button>
+            <div class="oapi-stat">
+                <span class="os-label">SHOWRUNNER</span>
+                <span class="os-value accent" id="os-showrunner">[ — ]</span>
+            </div>
+            <div class="oapi-stat">
+                <span class="os-label">ENDPOINTS</span>
+                <span class="os-value" id="os-endpoints">[ — ]</span>
+            </div>
+            <div class="oapi-stat">
+                <span class="os-label">QUEUE</span>
+                <span class="os-value" id="os-queue">[ 0 ]</span>
+            </div>
+            <button class="cf-btn" id="btn-clear-conv" data-flash style="padding:2px 8px;font-size:.55rem;margin-left:auto;">
+                <i class="ph ph-eraser"></i> CLEAR
+            </button>
+        </div>
+
+        <!-- Config Row -->
+        <div class="oapi-config">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex:1;min-width:0;">
+                <span class="cf-section-label" style="border:none;padding:0;">SETTINGS</span>
+                <div class="toggle-group" id="mode-bar">
+                    <div class="tg-option active" data-mode="fanout" data-flash data-nbeep="select">
+                        <i class="ph ph-broadcast"></i> FAN OUT
+                    </div>
+                    <div class="tg-option" data-mode="speed" data-flash data-nbeep="select">
+                        <i class="ph ph-lightning"></i> SPEED
+                    </div>
+                    <div class="tg-option" data-mode="manual" data-flash data-nbeep="select">
+                        <i class="ph ph-hand"></i> MANUAL
+                    </div>
+                </div>
+                <select class="cf-select model-sel" id="manual-model-sel" style="display:none;">
+                    <option value="">Select model...</option>
+                </select>
+                <div class="mt-row">
+                    <span class="cf-section-label" style="border:none;padding:0;">MAX TOKENS</span>
+                    <input type="number" id="mt-input" min="0" max="131072" step="256" value="0" placeholder="0">
+                    <span class="mt-hint">0 = no limit</span>
+                </div>
+            </div>
+            <div class="tp-row">
+                <div class="slider-header">
+                    <span class="cf-section-label" style="border:none;padding:0;">THINKING</span>
+                    <span class="slider-readout" id="tp-val">[ 60s ]</span>
+                </div>
+                <div class="seg-slider" id="tp-slider" data-max="20" data-value="4"></div>
+            </div>
+        </div>
+
+        <!-- Chat Messages -->
+        <div class="chat-area">
+            <div class="chat-messages" id="chat-messages">
+                <div class="status-val" style="text-align:center;padding:40px 0;color:var(--text-dim);">
+                    [ OAPI CHAT ]<br>
+                    <span style="font-size:.5rem;letter-spacing:.06em;">OpenAI-compatible cluster chat · port 1919</span>
+                    <div style="margin-top:16px;font-size:.5rem;color:var(--text-dim);font-family:var(--font-data);letter-spacing:.04em;">
+                        <div style="margin-bottom:4px;color:var(--accent);letter-spacing:.1em;">CONNECTION DETAILS</div>
+                        <div style="margin-bottom:2px;">Endpoint: <span style="color:var(--text);" id="empty-endpoint"></span></div>
+                        <div style="margin-bottom:2px;">Models: <span style="color:var(--text);" id="empty-models"></span></div>
+                        <div>Compatible with: OpenAI SDK, LangChain, LiteLLM, curl</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="thinking" id="thinking">
+                <div class="thinking-dots"><span></span><span></span><span></span></div>
+                <span id="thinking-text">Thinking...</span>
+                <span id="thinking-timer" style="margin-left:auto;font-family:var(--font-data);font-size:.5rem;color:var(--accent);letter-spacing:.04em;"></span>
+            </div>
+
+            <!-- Input -->
+            <div class="chat-input-row">
+                <textarea id="chat-input" rows="1" placeholder="Send a message..."></textarea>
+                <div class="send-btn" id="btn-send" data-flash data-lockout="800">
+                    <i class="ph ph-paper-plane-tilt"></i>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!--#include file="footer.part"-->
+</div>
+
+<!-- Conversation Sidebar -->
+<div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+<div class="conv-sidebar" id="conv-sidebar">
+    <span class="corner corner-tl">⌜</span>
+    <span class="corner corner-tr">⌝</span>
+    <span class="corner corner-bl">⌞</span>
+    <span class="corner corner-br">⌟</span>
+    <div class="cs-header">
+        <span class="cs-title">CONVERSATIONS</span>
+        <button class="cs-close" id="sidebar-close" data-flash><i class="ph ph-x"></i></button>
+    </div>
+    <button class="cs-new-btn" id="btn-new-conv" data-flash>+ NEW CONVERSATION</button>
+    <div class="cs-list" id="conv-list"></div>
+    <div class="btn-row" style="margin-top:8px;">
+        <button class="cf-btn danger" id="btn-clear-convs" data-flash data-lockout="800" style="width:100%;justify-content:center;">
+            <i class="ph ph-trash"></i> CLEAR ALL
+        </button>
+    </div>
+</div>
+
+<div id="ahi-toast-container"></div>
+
+<div id="dialog-overlay" class="dialog-overlay">
+    <div id="dialog-box" class="dialog-box"></div>
+</div>
+
+<script src="notum_AHI/js/nRegistry.js?v=20260330"></script>
+<script src="notum_AHI/js/nUtils.js?v=20260330"></script>
+<script src="notum_AHI/js/nComp.js?v=20260330"></script>
+<script src="notum_AHI/js/nNotify.js?v=20260330"></script>
+<script src="notum_AHI/js/nDynamic.js?v=20260330"></script>
+<script>
+(function() {
+    'use strict';
+
+    // OAPI runs on port 1919
+    var OAPI_PORT = 1919;
+    var OAPI_BASE = location.protocol + '//' + location.hostname + ':' + OAPI_PORT;
+    var POLL = 8000;
+    var connected = false;
+    var currentConvId = null;
+    var sending = false;
+    var thinkingTimer = null;
+    var thinkingStart = 0;
+    var endpointsReady = 0;
+
+    // Nav active
+    document.querySelectorAll('.nav-tab').forEach(function(t) {
+        if (t.getAttribute('href') === '/oapi.html') t.classList.add('active');
+    });
+
+    // ── Utils ──
+    function toast(msg, level, dur) {
+        level = level || 'info'; dur = dur || 3000;
+        var c = document.getElementById('ahi-toast-container');
+        var el = document.createElement('div');
+        el.className = 'ahi-toast ' + level;
+        el.textContent = msg;
+        c.appendChild(el);
+        requestAnimationFrame(function() { el.classList.add('visible'); });
+        if (typeof nbeep === 'function') nbeep('toast_' + level);
+        setTimeout(function() {
+            el.classList.remove('visible');
+            setTimeout(function() { el.remove(); }, 300);
+        }, dur);
+    }
+
+    function setConn(val) {
+        if (val === connected) return;
+        connected = val;
+        toast(val ? 'OAPI LINK RESTORED' : 'OAPI LINK DOWN', val ? 'ok' : 'error');
+    }
+
+    // Thinking timer
+    function startThinkingTimer() {
+        thinkingStart = Date.now();
+        var timerEl = document.getElementById('thinking-timer');
+        thinkingTimer = setInterval(function() {
+            var elapsed = ((Date.now() - thinkingStart) / 1000).toFixed(1);
+            timerEl.textContent = elapsed + 's';
+        }, 100);
+    }
+    function stopThinkingTimer() {
+        if (thinkingTimer) { clearInterval(thinkingTimer); thinkingTimer = null; }
+        document.getElementById('thinking-timer').textContent = '';
+    }
+
+    function escHtml(s) {
+        if (!s) return '';
+        var d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+    }
+
+    // ── Mode Selector ──
+    var modeBar = document.getElementById('mode-bar');
+    var manualSel = document.getElementById('manual-model-sel');
+
+    modeBar.addEventListener('click', function(e) {
+        var opt = e.target.closest('.tg-option');
+        if (!opt) return;
+        modeBar.querySelectorAll('.tg-option').forEach(function(o) { o.classList.remove('active'); });
+        opt.classList.add('active');
+        var mode = opt.dataset.mode;
+        manualSel.style.display = mode === 'manual' ? '' : 'none';
+        saveConfig({ mode: mode, manual_model: mode === 'manual' ? manualSel.value : null });
+        toast('MODE: ' + mode.toUpperCase(), 'info', 2000);
+    });
+
+    manualSel.addEventListener('change', function() {
+        saveConfig({ manual_model: manualSel.value });
+    });
+
+    // ── Max Tokens ──
+    var mtInput = document.getElementById('mt-input');
+    var globalMaxTokens = 0;
+    mtInput.addEventListener('change', function() {
+        globalMaxTokens = Math.max(0, parseInt(this.value, 10) || 0);
+        saveConfig({ max_tokens: globalMaxTokens });
+    });
+
+    // ── CLEAR current conversation ──
+    document.getElementById('btn-clear-conv').addEventListener('click', function() {
+        if (currentConvId) {
+            fetch(OAPI_BASE + '/api/oapi/conversations/' + encodeURIComponent(currentConvId), { method: 'DELETE' })
+                .then(function() {
+                    toast('CONVERSATION CLEARED', 'ok');
+                    newConversation();
+                })
+                .catch(function() { toast('CLEAR FAILED', 'error'); });
+        } else {
+            newConversation();
+        }
+    });
+
+    // ── Populate empty state endpoint URLs ──
+    (function() {
+        var host = location.hostname || 'localhost';
+        var epEl = document.getElementById('empty-endpoint');
+        var modEl = document.getElementById('empty-models');
+        if (epEl) epEl.textContent = 'http://' + host + ':1919/v1/chat/completions';
+        if (modEl) modEl.textContent = 'http://' + host + ':1919/v1/models';
+    })();
+
+    // ── Thinking Power Slider (AHI seg-slider) ──
+    var tpSlider = document.getElementById('tp-slider');
+    var tpVal = document.getElementById('tp-val');
+    var tpTimeout = null;
+    var TP_STEP = 15; // seconds per segment
+
+    function tpSegsToSec(segs) { return segs * TP_STEP; }
+    function tpSecToSegs(sec) { return Math.max(1, Math.min(20, Math.round(sec / TP_STEP))); }
+
+    // Build segments
+    (function initTpSlider() {
+        var max = parseInt(tpSlider.dataset.max) || 20;
+        var value = parseInt(tpSlider.dataset.value) || 4;
+        tpSlider.innerHTML = '';
+        for (var i = 0; i < max; i++) {
+            var seg = document.createElement('div');
+            seg.className = 'seg' + (i < value ? ' filled' : '');
+            seg.dataset.idx = i;
+            tpSlider.appendChild(seg);
+        }
+        tpVal.textContent = '[ ' + tpSegsToSec(value) + 's ]';
+
+        var lastSounded = -1;
+        function setVal(idx) {
+            var nv = idx + 1;
+            tpSlider.dataset.value = nv;
+            tpSlider.querySelectorAll('.seg').forEach(function(s, si) {
+                s.classList.toggle('filled', si < nv);
+            });
+            tpVal.textContent = '[ ' + tpSegsToSec(nv) + 's ]';
+            if (nv !== lastSounded && typeof nbeep === 'function') {
+                lastSounded = nv;
+                nbeep('adjust', false, Math.pow(2, (nv / max - 0.5) * 2));
+            }
+            clearTimeout(tpTimeout);
+            tpTimeout = setTimeout(function() {
+                saveConfig({ thinking_power: tpSegsToSec(nv) });
+            }, 400);
+        }
+
+        var dragging = false;
+        function handle(e) {
+            var rect = tpSlider.getBoundingClientRect();
+            var x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+            var segW = rect.width / max;
+            setVal(Math.max(0, Math.min(max - 1, Math.floor(x / segW))));
+        }
+        tpSlider.addEventListener('mousedown', function(e) { dragging = true; handle(e); });
+        tpSlider.addEventListener('touchstart', function(e) { dragging = true; handle(e); }, {passive:true});
+        document.addEventListener('mousemove', function(e) { if (dragging) handle(e); });
+        document.addEventListener('touchmove', function(e) { if (dragging) handle(e); }, {passive:true});
+        document.addEventListener('mouseup', function() { dragging = false; });
+        document.addEventListener('touchend', function() { dragging = false; });
+    })();
+
+    function tpSetFromServer(sec) {
+        var segs = tpSecToSegs(sec);
+        tpSlider.dataset.value = segs;
+        tpSlider.querySelectorAll('.seg').forEach(function(s, si) {
+            s.classList.toggle('filled', si < segs);
+        });
+        tpVal.textContent = '[ ' + tpSegsToSec(segs) + 's ]';
+    }
+
+    function saveConfig(cfg) {
+        fetch(OAPI_BASE + '/api/oapi/config', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(cfg)
+        }).catch(function() {});
+    }
+
+    // ── Status Poll ──
+    function pollStatus() {
+        fetch(OAPI_BASE + '/api/oapi/status')
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                setConn(true);
+
+                // Showrunner
+                var sr = d.showrunner || {};
+                var srText = sr.model ? sr.model : '—';
+                document.getElementById('os-showrunner').textContent = '[ ' + srText + ' ]';
+
+                // Endpoints
+                var epCount = d.endpoints_ready || 0;
+                endpointsReady = epCount;
+                var epEl = document.getElementById('os-endpoints');
+                epEl.textContent = '[ ' + epCount + (epCount === 0 ? ' — NO MODELS LOADED' : '') + ' ]';
+                epEl.className = 'os-value ' + (epCount > 0 ? 'accent' : 'danger');
+
+                // Update send button state
+                var sendBtn = document.getElementById('btn-send');
+                if (epCount === 0 && !sending) {
+                    sendBtn.style.opacity = '0.3';
+                    sendBtn.title = 'No endpoints available — load models first';
+                } else {
+                    sendBtn.style.opacity = '';
+                    sendBtn.title = '';
+                }
+
+                // Queue
+                var q = d.queue || {};
+                var qd = q.queue_depth || 0;
+                var qEl = document.getElementById('os-queue');
+                qEl.textContent = '[ ' + qd + ' ]';
+                qEl.className = 'os-value ' + (qd > 0 ? 'amber' : '');
+
+                // Sync mode
+                var mode = d.oapi_mode || 'fanout';
+                modeBar.querySelectorAll('.tg-option').forEach(function(o) {
+                    o.classList.toggle('active', o.dataset.mode === mode);
+                });
+                manualSel.style.display = mode === 'manual' ? '' : 'none';
+
+                // Thinking power
+                var tp = d.thinking_power || 60;
+                tpSetFromServer(tp);
+
+                // Sync max tokens
+                if (d.max_tokens != null && !document.activeElement.isSameNode(document.getElementById('mt-input'))) {
+                    globalMaxTokens = d.max_tokens;
+                    document.getElementById('mt-input').value = globalMaxTokens || '';
+                }
+
+                // Populate manual model selector
+                var endpoints = d.endpoints || [];
+                var curVal = manualSel.value;
+                var html = '<option value="">Select model...</option>';
+                endpoints.forEach(function(ep) {
+                    var warn = ep.graylisted ? '⚠️ ' : '';
+                    html += '<option value="' + escHtml(ep.model) + '">' + warn + escHtml(ep.model) + ' (' + escHtml(ep.hostname || '') + ')</option>';
+                });
+                manualSel.innerHTML = html;
+                if (d.oapi_manual_model) manualSel.value = d.oapi_manual_model;
+                else if (curVal) manualSel.value = curVal;
+            })
+            .catch(function() { setConn(false); });
+    }
+
+    // ── Conversations Sidebar ──
+    var sidebar = document.getElementById('conv-sidebar');
+    var backdrop = document.getElementById('sidebar-backdrop');
+
+    function openSidebar() {
+        sidebar.classList.add('open');
+        backdrop.classList.add('open');
+        loadConversations();
+    }
+
+    function closeSidebar() {
+        sidebar.classList.remove('open');
+        backdrop.classList.remove('open');
+    }
+
+    document.getElementById('sidebar-toggle').addEventListener('click', openSidebar);
+    document.getElementById('sidebar-close').addEventListener('click', closeSidebar);
+    backdrop.addEventListener('click', closeSidebar);
+
+    function loadConversations() {
+        fetch(OAPI_BASE + '/api/oapi/conversations')
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                var list = document.getElementById('conv-list');
+                var convs = d.conversations || [];
+                if (!convs.length) {
+                    list.innerHTML = '<div class="status-val" style="padding:8px;font-size:.55rem;">[ NO CONVERSATIONS ]</div>';
+                    return;
+                }
+                var html = '';
+                convs.forEach(function(c) {
+                    var isActive = c.id === currentConvId;
+                    html += '<div class="cs-item' + (isActive ? ' active' : '') + '" data-cid="' + escHtml(c.id) + '">';
+                    html += '<span class="cs-title-text">' + escHtml(c.title || 'Untitled') + '</span>';
+                    html += '<span class="cs-delete" data-action="delete-conv" data-cid="' + escHtml(c.id) + '" title="Delete"><i class="ph ph-x"></i></span>';
+                    html += '</div>';
+                });
+                list.innerHTML = html;
+
+                list.querySelectorAll('.cs-item').forEach(function(item) {
+                    item.addEventListener('click', function(e) {
+                        if (e.target.closest('[data-action="delete-conv"]')) return;
+                        loadConversation(item.dataset.cid);
+                        closeSidebar();
+                    });
+                });
+
+                list.querySelectorAll('[data-action="delete-conv"]').forEach(function(btn) {
+                    btn.addEventListener('click', function(e) {
+                        e.stopPropagation();
+                        var cid = btn.dataset.cid;
+                        fetch(OAPI_BASE + '/api/oapi/conversations/' + encodeURIComponent(cid), { method: 'DELETE' })
+                            .then(function() {
+                                toast('CONVERSATION DELETED', 'ok');
+                                if (cid === currentConvId) newConversation();
+                                loadConversations();
+                            })
+                            .catch(function() { toast('DELETE FAILED', 'error'); });
+                    });
+                });
+
+                if (typeof nComp !== 'undefined') {
+                    list.querySelectorAll('.cs-item.active').forEach(function(el) {
+                        nComp.active(el, true);
+                    });
+                }
+            })
+            .catch(function() {});
+    }
+
+    function loadConversation(convId) {
+        fetch(OAPI_BASE + '/api/oapi/conversations/' + encodeURIComponent(convId))
+            .then(function(r) { return r.json(); })
+            .then(function(conv) {
+                currentConvId = conv.id;
+                var msgs = document.getElementById('chat-messages');
+                msgs.innerHTML = '';
+                (conv.turns || []).forEach(function(turn) {
+                    appendMessage(turn.role, turn.content, turn._meta);
+                });
+                msgs.scrollTop = msgs.scrollHeight;
+            })
+            .catch(function() { toast('LOAD FAILED', 'error'); });
+    }
+
+    function newConversation() {
+        currentConvId = null;
+        var msgs = document.getElementById('chat-messages');
+        msgs.innerHTML = '<div class="status-val" style="text-align:center;padding:40px 0;color:var(--text-dim);">' +
+            '[ NEW CONVERSATION ]</div>';
+    }
+
+    document.getElementById('btn-new-conv').addEventListener('click', function() {
+        newConversation();
+        closeSidebar();
+    });
+
+    document.getElementById('btn-clear-convs').addEventListener('click', function() {
+        nDynamic.showDialog({
+            title: 'Clear History',
+            body: 'Clear all conversations?',
+            alarm: false,
+            buttons: [
+                { label: 'CLEAR ALL', value: 'yes', style: 'danger' },
+                { label: 'CANCEL', value: null }
+            ]
+        }).then(function(val) {
+            if (val !== 'yes') return;
+            fetch(OAPI_BASE + '/api/oapi/conversations', { method: 'DELETE' })
+                .then(function() {
+                    toast('HISTORY CLEARED', 'ok');
+                    newConversation();
+                    loadConversations();
+                })
+                .catch(function() { toast('CLEAR FAILED', 'error'); });
+        });
+    });
+
+    // ── Message Rendering ──
+    function appendMessage(role, content, meta) {
+        var msgs = document.getElementById('chat-messages');
+        // Remove empty state
+        var emptyState = msgs.querySelector('.status-val');
+        if (emptyState) emptyState.remove();
+
+        var el = document.createElement('div');
+        el.className = 'chat-msg ' + (role === 'user' ? 'user' : 'assistant');
+
+        if (role === 'assistant') {
+            el.innerHTML = '<span class="corner corner-tl">⌜</span><span class="corner corner-tr">⌝</span>' +
+                '<span class="corner corner-bl">⌞</span><span class="corner corner-br">⌟</span>';
+        }
+
+        // Model label for assistant messages
+        if (role === 'assistant' && meta) {
+            var label = document.createElement('div');
+            label.className = 'msg-model';
+            var parts = [];
+            if (meta.showrunner) parts.push(meta.showrunner);
+            if (meta.endpoints_responded != null) parts.push(meta.endpoints_responded + '/' + (meta.endpoints_queried || '?') + ' ENDPOINTS');
+            label.textContent = parts.join(' · ') || 'CLUSTERFLOCK';
+            el.appendChild(label);
+        }
+
+        var body = document.createElement('div');
+        body.className = 'msg-body';
+
+        // Simple markdown-like rendering
+        var html = escHtml(content);
+        // Code blocks
+        html = html.replace(/```(\w*)\n([\s\S]*?)```/g, function(_, lang, code) {
+            return '<pre><code>' + code + '</code></pre>';
+        });
+        // Inline code
+        html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+        // Bold
+        html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        // Line breaks
+        html = html.replace(/\n/g, '<br>');
+
+        body.innerHTML = html;
+        el.appendChild(body);
+
+        // Orchestration trace for assistant messages
+        if (role === 'assistant' && meta) {
+            var trace = document.createElement('div');
+            trace.className = 'orch-trace';
+
+            // Parse event_log into phases if available
+            var log = meta.event_log || [];
+            var dispatched = [], responses = [], evaluated = [], other = [];
+            var t0 = log.length > 0 ? log[0].t : 0;
+            for (var li = 0; li < log.length; li++) {
+                var ev = log[li];
+                var msg = ev.msg || '';
+                if (msg.indexOf('dispatched to ') === 0 || msg.indexOf('re-use round') === 0) {
+                    var parts = msg.replace(/^(re-use round \d+: )?dispatched to /, '').split(' on ');
+                    dispatched.push({ model: parts[0] || '?', host: parts[1] || '?', reuse: msg.indexOf('re-use') >= 0 });
+                } else if (msg.indexOf('response from ') === 0) {
+                    var rm = msg.match(/response from (.+?) on (.+?) \((\d+) chars\)/);
+                    if (rm) responses.push({ model: rm[1], host: rm[2], chars: parseInt(rm[3]), t: ev.t - t0 });
+                } else if (msg.indexOf('showrunner evaluated') === 0) {
+                    evaluated.push(msg.replace('showrunner evaluated response from ', ''));
+                } else {
+                    other.push(msg);
+                }
+            }
+            var elapsed = log.length > 1 ? (log[log.length - 1].t - t0).toFixed(1) : '?';
+            var respondedMap = {};
+            for (var ri = 0; ri < responses.length; ri++) respondedMap[responses[ri].model + '@' + responses[ri].host] = responses[ri];
+
+            // Toggle header
+            var reuseRounds = meta.reuse_rounds || 1;
+            var hasLog = log.length > 0;
+            var toggleLabel = hasLog
+                ? (dispatched.length + ' dispatched \u00b7 ' + responses.length + ' responded' + (reuseRounds > 1 ? ' \u00b7 ' + reuseRounds + ' rounds' : '') + ' \u00b7 ' + elapsed + 's')
+                : ((meta.endpoints_queried || '?') + ' queried \u00b7 ' + (meta.endpoints_responded || '?') + ' responded');
+
+            var traceHtml = '<div class="orch-toggle" data-flash data-nbeep="select">';
+            traceHtml += '<span>ORCHESTRATION</span><span>' + toggleLabel + '</span></div>';
+            traceHtml += '<div class="orch-body">';
+
+            if (hasLog) {
+                // Phase 1: Fan-out
+                traceHtml += '<div class="orch-phase"><div style="font-size:.45rem;letter-spacing:.1em;color:var(--accent);margin-bottom:3px;"><i class="ph ph-broadcast"></i> FAN-OUT' + (reuseRounds > 1 ? ' (' + reuseRounds + ' rounds)' : '') + '</div>';
+                for (var di = 0; di < dispatched.length; di++) {
+                    var ep = dispatched[di];
+                    var key = ep.model + '@' + ep.host;
+                    var resp = respondedMap[key];
+                    var dotCls = resp ? 'accent' : 'amber';
+                    var charInfo = resp ? resp.chars + ' chars @ ' + resp.t.toFixed(1) + 's' : 'no response';
+                    var reuseTag = ep.reuse ? ' <span style="color:var(--amber);font-size:.42rem;">RE-USE</span>' : '';
+                    traceHtml += '<div style="display:flex;align-items:center;gap:6px;padding:1px 0;font-size:.5rem;color:var(--text-dim);">';
+                    traceHtml += '<span style="width:5px;height:5px;border-radius:50%;background:var(--' + dotCls + ');flex-shrink:0;"></span>';
+                    traceHtml += '<span style="color:var(--text);">' + escHtml(ep.model) + '</span>';
+                    traceHtml += '<span>@ ' + escHtml(ep.host) + '</span>' + reuseTag;
+                    traceHtml += '<span style="color:rgba(0,229,255,0.6);margin-left:auto;white-space:nowrap;">' + charInfo + '</span>';
+                    traceHtml += '</div>';
+                }
+                traceHtml += '</div>';
+
+                // Phase 2: Evaluation
+                traceHtml += '<div class="orch-phase" style="margin-top:6px;"><div style="font-size:.45rem;letter-spacing:.1em;color:var(--accent);margin-bottom:3px;"><i class="ph ph-magnifying-glass"></i> EVALUATION</div>';
+                if (evaluated.length > 0) {
+                    for (var ei = 0; ei < evaluated.length; ei++) {
+                        traceHtml += '<div style="font-size:.5rem;color:var(--text-dim);padding:1px 0;"><span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--accent);margin-right:6px;"></span>Showrunner reviewed <span style="color:var(--text);">' + escHtml(evaluated[ei]) + '</span></div>';
+                    }
+                } else {
+                    traceHtml += '<div style="font-size:.5rem;color:var(--text-dim);padding:1px 0;"><span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--border);margin-right:6px;"></span>No intermediate evaluation</div>';
+                }
+                traceHtml += '</div>';
+
+                // Phase 3: Synthesis
+                traceHtml += '<div class="orch-phase" style="margin-top:6px;"><div style="font-size:.45rem;letter-spacing:.1em;color:var(--accent);margin-bottom:3px;"><i class="ph ph-brain"></i> SYNTHESIS</div>';
+                traceHtml += '<div style="font-size:.5rem;color:var(--text-dim);padding:1px 0;"><span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--accent);margin-right:6px;"></span>';
+                traceHtml += '<span style="color:var(--text);">' + escHtml(meta.showrunner || '?') + '</span>';
+                if (meta.showrunner_host) traceHtml += ' <span>@ ' + escHtml(meta.showrunner_host) + '</span>';
+                traceHtml += ' <span style="color:rgba(0,229,255,0.6);margin-left:6px;">synthesized final answer</span></div>';
+                traceHtml += '</div>';
+
+                // Summary
+                traceHtml += '<div style="font-size:.5rem;color:var(--text-dim);padding-top:6px;border-top:1px solid var(--border);margin-top:6px;display:flex;gap:12px;flex-wrap:wrap;">';
+                traceHtml += '<span><span style="color:var(--accent);">' + dispatched.length + '</span> dispatched</span>';
+                traceHtml += '<span><span style="color:var(--accent);">' + responses.length + '</span> responded</span>';
+                if (reuseRounds > 1) traceHtml += '<span><span style="color:var(--accent);">' + reuseRounds + '</span> rounds</span>';
+                traceHtml += '<span><span style="color:var(--accent);">' + evaluated.length + '</span> evaluated</span>';
+                traceHtml += '<span>total <span style="color:var(--accent);">' + elapsed + 's</span></span>';
+                traceHtml += '</div>';
+            } else {
+                // Fallback: basic info
+                if (meta.endpoints_queried) traceHtml += '<div class="orch-phase"><span class="op-label">Endpoints queried</span><span class="op-time">[ ' + meta.endpoints_queried + ' ]</span></div>';
+                if (meta.endpoints_responded != null) traceHtml += '<div class="orch-phase"><span class="op-label">Endpoints responded</span><span class="op-time">[ ' + meta.endpoints_responded + ' ]</span></div>';
+                if (meta.showrunner) traceHtml += '<div class="orch-phase"><span class="op-label">Showrunner</span><span class="op-time">[ ' + escHtml(meta.showrunner) + ' ]</span></div>';
+            }
+            traceHtml += '</div>';
+            trace.innerHTML = traceHtml;
+
+            trace.querySelector('.orch-toggle').addEventListener('click', function() {
+                trace.classList.toggle('open');
+            });
+
+            el.appendChild(trace);
+        }
+
+        msgs.appendChild(el);
+        msgs.scrollTop = msgs.scrollHeight;
+        return el;
+    }
+
+    // ── Send Message ──
+    document.getElementById('btn-send').addEventListener('click', sendMessage);
+    document.getElementById('chat-input').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+    });
+
+    // Auto-resize textarea
+    var chatInput = document.getElementById('chat-input');
+    chatInput.addEventListener('input', function() {
+        this.style.height = 'auto';
+        this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+    });
+
+    function sendMessage() {
+        if (sending) return;
+        var input = document.getElementById('chat-input');
+        var text = input.value.trim();
+        if (!text) return;
+
+        // Warn if no endpoints
+        if (endpointsReady === 0) {
+            toast('NO ENDPOINTS AVAILABLE — load models first', 'warn', 4000);
+            return;
+        }
+
+        input.value = '';
+        input.style.height = 'auto';
+
+        // Show user message
+        appendMessage('user', text);
+
+        // Show thinking with timer
+        var thinking = document.getElementById('thinking');
+        thinking.classList.add('active');
+        document.getElementById('thinking-text').textContent = 'Thinking...';
+        startThinkingTimer();
+        if (typeof nbeep === 'function') nbeep('chat_send');
+
+        sending = true;
+
+        // Build messages array from conversation
+        var messages = [];
+        document.querySelectorAll('#chat-messages .chat-msg').forEach(function(msg) {
+            var role = msg.classList.contains('user') ? 'user' : 'assistant';
+            var body = msg.querySelector('.msg-body');
+            if (body) messages.push({ role: role, content: body.textContent || '' });
+        });
+
+        // If no messages found (edge case), just send the user message
+        if (!messages.length) {
+            messages = [{ role: 'user', content: text }];
+        }
+
+        var payload = { messages: messages };
+        if (currentConvId) payload._conversation_id = currentConvId;
+
+        fetch(OAPI_BASE + '/v1/chat/completions', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        })
+        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+        .then(function(res) {
+            thinking.classList.remove('active');
+            stopThinkingTimer();
+            sending = false;
+
+            if (res.ok && res.data.choices && res.data.choices.length) {
+                var choice = res.data.choices[0];
+                var content = choice.message ? choice.message.content : '';
+                var meta = res.data._clusterflock || {};
+                appendMessage('assistant', content, meta);
+                if (res.data._conversation_id) currentConvId = res.data._conversation_id;
+                if (typeof nbeep === 'function') nbeep('chat_complete');
+            } else {
+                var errMsg = (res.data.error && res.data.error.message) || res.data.error || 'Unknown error';
+                toast('SEND FAILED — ' + errMsg, 'error', 5000);
+            }
+        })
+        .catch(function(err) {
+            thinking.classList.remove('active');
+            stopThinkingTimer();
+            sending = false;
+            toast('SEND FAILED — connection error', 'error', 4000);
+        });
+    }
+
+    // ── Init ──
+    pollStatus();
+    setInterval(pollStatus, POLL);
+
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,1515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>ClusterFlock — Mission</title>
+    <link rel="stylesheet" href="notum_AHI/css/phosphor.css?v=20260330">
+    <link rel="stylesheet" href="notum_AHI/css/style.css?v=20260330">
+    <link rel="stylesheet" href="notum_AHI/css/notum.css?v=20260330">
+    <link rel="stylesheet" href="app.css?v=20260330">
+    <style>
+        /* Mission-specific layout */
+        .mission-input-area {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .mission-id-row {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+        .mission-id-row .cf-input { flex: 1; }
+        .mission-id-row .regen-btn {
+            background: none;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text-dim);
+            cursor: pointer;
+            padding: 6px 8px;
+            font-size: .8rem;
+            display: flex;
+            align-items: center;
+        }
+        .mission-id-row .regen-btn:hover { color: var(--accent); border-color: rgba(0,229,255,0.25); }
+
+        /* Stats bar */
+        .stats-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            padding: 6px 0;
+        }
+        .stat-item {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+        .stat-item .stat-label {
+            font-family: var(--font-data);
+            font-size: .5rem;
+            color: var(--text-dim);
+            letter-spacing: .08em;
+            text-transform: uppercase;
+        }
+        .stat-item .stat-value {
+            font-family: var(--font-data);
+            font-size: .6rem;
+            color: var(--text);
+            letter-spacing: .04em;
+        }
+
+        /* View tabs content */
+        .view-panel { display: none; flex-direction: column; gap: 6px; flex: 1; min-height: 0; }
+        .view-panel.active { display: flex; }
+
+        /* Context blocks */
+        .context-block {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+        .context-header {
+            padding: 6px 10px;
+            font-family: var(--font-data);
+            font-size: .55rem;
+            color: var(--text-dim);
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+        }
+        .context-body {
+            padding: 8px 10px;
+            font-family: var(--font-data);
+            font-size: .6rem;
+            color: var(--text);
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 300px;
+            overflow-y: auto;
+            display: none;
+        }
+        .context-body::-webkit-scrollbar { display: none; }
+        .context-block.open .context-body { display: block; }
+
+        /* Files panel */
+        .file-tree {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            font-family: var(--font-data);
+            font-size: .6rem;
+        }
+        .file-entry {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            padding: 3px 6px;
+            cursor: pointer;
+            border-radius: var(--radius);
+            color: var(--text-dim);
+        }
+        .file-entry:hover { background: rgba(244,244,244,0.04); color: var(--text); }
+        .file-entry.dir { color: var(--accent); }
+        .file-entry .fe-name { flex: 1; }
+        .file-entry .fe-size {
+            font-size: .5rem;
+            color: var(--text-dim);
+            min-width: 50px;
+            text-align: right;
+        }
+
+        /* File preview */
+        .file-preview {
+            display: none;
+            flex-direction: column;
+            gap: 6px;
+            flex: 1;
+            min-height: 0;
+        }
+        .file-preview.active { display: flex; }
+        .file-preview-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .file-preview-path {
+            font-family: var(--font-data);
+            font-size: .55rem;
+            color: var(--accent);
+            letter-spacing: .04em;
+        }
+        .file-preview-content {
+            flex: 1;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 8px 10px;
+            font-family: var(--font-data);
+            font-size: .6rem;
+            color: var(--text);
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+            overflow-y: auto;
+            min-height: 0;
+        }
+        .file-preview-content::-webkit-scrollbar { display: none; }
+
+        /* Terminal */
+        .terminal-area {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            flex: 1;
+            min-height: 0;
+        }
+        .terminal-output {
+            flex: 1;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 8px 10px;
+            font-family: var(--font-data);
+            font-size: .6rem;
+            color: var(--text);
+            line-height: 1.5;
+            white-space: pre-wrap;
+            overflow-y: auto;
+            min-height: 120px;
+        }
+        .terminal-output::-webkit-scrollbar { display: none; }
+        .terminal-input-row {
+            display: flex;
+            gap: 6px;
+        }
+        .terminal-input-row .cf-input { flex: 1; font-size: .6rem; padding: 6px 8px; }
+
+        /* Prompt toast (interactive) */
+        .prompt-toast-container {
+            position: fixed;
+            bottom: 60px;
+            left: 16px;
+            right: 16px;
+            display: flex;
+            flex-direction: column-reverse;
+            gap: 8px;
+            z-index: 150;
+            pointer-events: none;
+            max-width: 440px;
+        }
+        .prompt-toast {
+            background: var(--surface);
+            border: 1px solid rgba(255,179,0,0.25);
+            border-radius: var(--radius);
+            padding: 10px 12px;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            pointer-events: auto;
+        }
+        .prompt-toast .pt-question {
+            font-family: var(--font-data);
+            font-size: .65rem;
+            color: var(--amber);
+            letter-spacing: .04em;
+        }
+        .prompt-toast .pt-input-row {
+            display: flex;
+            gap: 6px;
+        }
+        .prompt-toast .pt-input-row input {
+            flex: 1;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 5px 8px;
+            font-family: var(--font-data);
+            font-size: .6rem;
+            color: var(--text);
+            outline: none;
+        }
+        .prompt-toast .pt-input-row input:focus {
+            border-color: rgba(0,229,255,0.30);
+        }
+        .prompt-toast .pt-send {
+            background: none;
+            border: 1px solid rgba(255,179,0,0.25);
+            border-radius: var(--radius);
+            color: var(--amber);
+            padding: 4px 10px;
+            font-family: var(--font-label);
+            font-size: .65rem;
+            font-weight: 600;
+            letter-spacing: .06em;
+            cursor: pointer;
+        }
+
+        /* Mission detail area — fill remaining space */
+        .mission-detail-area {
+            display: none;
+            flex-direction: column;
+            gap: 8px;
+            flex: 1;
+            min-height: 0;
+        }
+        .mission-detail-area.active { display: flex; }
+
+        /* Status message strip */
+        .status-message {
+            font-family: var(--font-data);
+            font-size: .55rem;
+            color: var(--amber);
+            letter-spacing: .04em;
+            padding: 4px 0;
+            min-height: 20px;
+        }
+    </style>
+</head>
+<body>
+<div class="cf-app">
+    <header>
+        <h1>CLUSTER<span class="accent">FLOCK</span></h1>
+    </header>
+
+    <!--#include file="nav.part"-->
+
+    <main>
+        <!-- Mission Input -->
+        <div class="mission-input-area cf-panel" id="mission-input-area">
+            <span class="corner corner-tl">⌜</span>
+            <span class="corner corner-tr">⌝</span>
+            <span class="corner corner-bl">⌞</span>
+            <span class="corner corner-br">⌟</span>
+
+            <div class="mission-id-row">
+                <input class="cf-input" id="mission-id" placeholder="Mission ID" readonly>
+                <button class="regen-btn" id="btn-regen-id" data-flash title="Regenerate ID">
+                    <i class="ph ph-arrows-clockwise"></i>
+                </button>
+            </div>
+
+            <textarea class="cf-textarea" id="mission-text" rows="3"
+                      placeholder="Describe the mission objective..."></textarea>
+
+            <details class="showrunner-override" style="margin:4px 0;">
+                <summary style="font-family:'Rajdhani',sans-serif;font-size:.6rem;font-weight:700;letter-spacing:.08em;color:rgba(244,244,244,0.5);cursor:pointer;text-transform:uppercase;">Showrunner Override</summary>
+                <div style="display:flex;gap:4px;margin-top:4px;">
+                    <select class="cf-select" id="sr-override-node" style="flex:1;">
+                        <option value="">Auto (best available)</option>
+                    </select>
+                    <select class="cf-select" id="sr-override-model" style="flex:1;">
+                        <option value="">Auto</option>
+                    </select>
+                </div>
+            </details>
+
+            <div class="btn-row">
+                <button class="cf-btn primary" id="btn-start" data-flash data-lockout="1500">
+                    <i class="ph ph-play"></i> START
+                </button>
+                <button class="cf-btn amber" id="btn-pause" data-flash data-lockout="800" style="display:none;">
+                    <i class="ph ph-pause"></i> PAUSE
+                </button>
+                <button class="cf-btn primary" id="btn-resume" data-flash data-lockout="800" style="display:none;">
+                    <i class="ph ph-play"></i> RESUME
+                </button>
+                <button class="cf-btn danger" id="btn-stop" data-flash data-lockout="800" style="display:none;">
+                    <i class="ph ph-stop"></i> STOP
+                </button>
+                <button class="cf-btn danger" id="btn-delete" data-flash data-lockout="800" style="display:none;">
+                    <i class="ph ph-trash"></i> DELETE
+                </button>
+                <button class="cf-btn" id="btn-result" data-flash style="display:none;">
+                    <i class="ph ph-file-text"></i> RESULT
+                </button>
+                <button class="cf-btn" id="btn-download" data-flash data-lockout="1000" style="display:none;">
+                    <i class="ph ph-download-simple"></i> DOWNLOAD
+                </button>
+            </div>
+        </div>
+
+        <!-- Status Message -->
+        <div class="status-message" id="status-message"></div>
+
+        <!-- Stats Bar -->
+        <div class="stats-bar" id="stats-bar">
+            <div class="stat-item">
+                <span class="stat-label">STATUS</span>
+                <span class="stat-value" id="stat-status">[ — ]</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">SHOWRUNNER</span>
+                <span class="stat-value" id="stat-showrunner">[ — ]</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">FLOCK</span>
+                <span class="stat-value" id="stat-flock">[ — ]</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">ROUNDS</span>
+                <span class="stat-value" id="stat-rounds">[ — ]</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">TASKS</span>
+                <span class="stat-value" id="stat-tasks">[ — ]</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">ENDPOINTS</span>
+                <span class="stat-value accent" id="stat-endpoints">[ — ]</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">VRAM</span>
+                <span class="stat-value" id="stat-vram">[ — ]</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">EVENTS</span>
+                <span class="stat-value" id="stat-events">[ 0 ]</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">TOOLS</span>
+                <span class="stat-value" id="stat-tools">[ 0 ]</span>
+            </div>
+        </div>
+
+        <!-- Missions List (when no active mission) -->
+        <div class="cf-section" id="missions-list-section">
+            <div class="cf-section-label">MISSIONS</div>
+            <div id="missions-grid" class="node-grid"></div>
+        </div>
+
+        <!-- Detail Area (shown when mission selected) -->
+        <div class="mission-detail-area" id="detail-area">
+            <!-- View Tabs -->
+            <div class="toggle-group" id="view-tabs">
+                <div class="tg-option active" data-tab="activity" data-flash data-nbeep="select">ACTIVITY</div>
+                <div class="tg-option" data-tab="flock" data-flash data-nbeep="select">FLOCK</div>
+                <div class="tg-option" data-tab="context" data-flash data-nbeep="select">CONTEXT</div>
+                <div class="tg-option" data-tab="files" data-flash data-nbeep="select">FILES</div>
+                <div class="tg-option" data-tab="terminal" data-flash data-nbeep="select">TERMINAL</div>
+            </div>
+
+            <!-- ACTIVITY -->
+            <div class="view-panel active" id="panel-activity">
+                <div class="log-tab-strip" id="log-filters">
+                    <span class="log-tab active" data-filter="all" data-flash data-nbeep="select">ALL</span>
+                    <span class="log-tab" data-filter="dispatch" data-flash data-nbeep="select">DISPATCH</span>
+                    <span class="log-tab" data-filter="action" data-flash data-nbeep="select">ACTION</span>
+                    <span class="log-tab" data-filter="error" data-flash data-nbeep="select">ERROR</span>
+                    <span class="log-tab" data-filter="info" data-flash data-nbeep="select">INFO</span>
+                </div>
+                <div class="activity-log" id="activity-log"></div>
+            </div>
+
+            <!-- FLOCK -->
+            <div class="view-panel" id="panel-flock">
+                <div id="showrunner-info" class="cf-panel" style="display:none;">
+                    <span class="corner corner-tl">⌜</span>
+                    <span class="corner corner-tr">⌝</span>
+                    <span class="corner corner-bl">⌞</span>
+                    <span class="corner corner-br">⌟</span>
+                    <div class="cf-section-label">SHOWRUNNER</div>
+                    <div id="sr-detail"></div>
+                </div>
+                <div class="cf-section-label">FLOCK AGENTS</div>
+                <div class="flock-grid" id="flock-grid"></div>
+            </div>
+
+            <!-- CONTEXT -->
+            <div class="view-panel" id="panel-context">
+                <div id="context-blocks"></div>
+            </div>
+
+            <!-- FILES -->
+            <div class="view-panel" id="panel-files">
+                <div class="btn-row" style="margin-bottom:4px;">
+                    <button class="cf-btn" id="btn-files-up" data-flash>
+                        <i class="ph ph-arrow-up"></i> UP
+                    </button>
+                    <button class="cf-btn" id="btn-files-refresh" data-flash>
+                        <i class="ph ph-arrows-clockwise"></i> REFRESH
+                    </button>
+                </div>
+                <div class="status-val" id="files-path" style="margin-bottom:4px;">[ /home/mission ]</div>
+                <div id="files-tree-container">
+                    <div class="file-tree" id="file-tree"></div>
+                </div>
+                <div class="file-preview" id="file-preview">
+                    <div class="file-preview-header">
+                        <span class="file-preview-path" id="fp-path"></span>
+                        <button class="cf-btn" id="btn-preview-close" data-flash>CLOSE</button>
+                    </div>
+                    <div class="file-preview-content" id="fp-content"></div>
+                </div>
+            </div>
+
+            <!-- TERMINAL -->
+            <div class="view-panel" id="panel-terminal">
+                <div class="terminal-area">
+                    <div class="terminal-output" id="term-output"></div>
+                    <div class="terminal-input-row">
+                        <input class="cf-input" id="term-input" placeholder="Enter command...">
+                        <button class="cf-btn primary" id="btn-term-exec" data-flash data-lockout="500">RUN</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!--#include file="footer.part"-->
+</div>
+
+<!-- Prompt Toasts (interactive user prompts) -->
+<div class="prompt-toast-container" id="prompt-toast-container"></div>
+
+<!-- Result Overlay -->
+<div class="cf-overlay" id="result-overlay">
+    <div class="cf-overlay-panel" id="result-panel" style="max-width:700px;max-height:85vh;">
+        <span class="corner corner-tl">⌜</span>
+        <span class="corner corner-tr">⌝</span>
+        <span class="corner corner-bl">⌞</span>
+        <span class="corner corner-br">⌟</span>
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+            <div class="cf-overlay-title">MISSION RESULT</div>
+            <button class="cf-btn" id="btn-result-expand" data-flash style="font-size:.55rem;padding:2px 8px;">
+                <i class="ph ph-arrows-out"></i>
+            </button>
+        </div>
+        <iframe id="result-frame" style="flex:1;border:none;background:#fff;border-radius:var(--radius);min-height:400px;" sandbox="allow-same-origin"></iframe>
+        <div class="btn-row">
+            <button class="cf-btn" id="btn-result-close" data-flash>CLOSE</button>
+        </div>
+    </div>
+</div>
+
+<!-- Flock Agent Detail Overlay -->
+<div class="cf-overlay" id="flock-agent-overlay">
+    <div class="cf-overlay-panel" id="flock-agent-panel" style="max-width:560px;max-height:85vh;">
+        <span class="corner corner-tl">⌜</span>
+        <span class="corner corner-tr">⌝</span>
+        <span class="corner corner-bl">⌞</span>
+        <span class="corner corner-br">⌟</span>
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+            <div class="cf-overlay-title" id="fa-title">AGENT</div>
+            <button class="cf-btn" id="btn-fa-expand" data-flash style="font-size:.55rem;padding:2px 8px;">
+                <i class="ph ph-arrows-out"></i>
+            </button>
+        </div>
+        <div id="fa-detail"></div>
+        <div id="fa-history" style="flex:1;overflow-y:auto;"></div>
+        <div class="btn-row">
+            <button class="cf-btn" id="btn-fa-close" data-flash>CLOSE</button>
+        </div>
+    </div>
+</div>
+
+<!-- Mission Complete Overlay -->
+<div class="cf-overlay" id="complete-overlay">
+    <div class="cf-overlay-panel" style="max-width:400px;">
+        <span class="corner corner-tl">⌜</span>
+        <span class="corner corner-tr">⌝</span>
+        <span class="corner corner-bl">⌞</span>
+        <span class="corner corner-br">⌟</span>
+        <div class="cf-overlay-title" id="complete-title">MISSION COMPLETE</div>
+        <div class="status-val" id="complete-body" style="text-align:center;padding:12px 0;">
+            The mission has finished execution.
+        </div>
+        <div class="btn-row" style="justify-content:center;">
+            <button class="cf-btn primary" id="btn-complete-ack" data-flash>ACKNOWLEDGE</button>
+        </div>
+    </div>
+</div>
+
+<div id="ahi-toast-container"></div>
+
+<div id="dialog-overlay" class="dialog-overlay">
+    <div id="dialog-box" class="dialog-box"></div>
+</div>
+
+<script src="notum_AHI/js/nRegistry.js?v=20260330"></script>
+<script src="notum_AHI/js/nUtils.js?v=20260330"></script>
+<script src="notum_AHI/js/nComp.js?v=20260330"></script>
+<script src="notum_AHI/js/nNotify.js?v=20260330"></script>
+<script src="notum_AHI/js/nDynamic.js?v=20260330"></script>
+<script>
+(function() {
+    'use strict';
+
+    var POLL = 3000;
+    var BASE = '';
+    var connected = false;
+    var activeMissionId = null;
+    var missionsCache = [];
+    var logOffset = 0;
+    var logFilter = 'all';
+    var autoScroll = true;
+    var filesPath = '/home/mission';
+    var completionShown = {};  // mission_id → true once acknowledged
+    var answeredPrompts = {};  // prompt_id → true
+    var _lastFlockData = {};
+    var _lastFlockNames = [];
+
+    // Nav active
+    document.querySelectorAll('.nav-tab').forEach(function(t) {
+        if (t.getAttribute('href') === '/mission.html' || t.getAttribute('href') === '/') t.classList.add('active');
+    });
+
+    // ── Utils ──
+    function toast(msg, level, dur) {
+        level = level || 'info'; dur = dur || 3000;
+        var c = document.getElementById('ahi-toast-container');
+        var el = document.createElement('div');
+        el.className = 'ahi-toast ' + level;
+        el.textContent = msg;
+        c.appendChild(el);
+        requestAnimationFrame(function() { el.classList.add('visible'); });
+        if (typeof nbeep === 'function') nbeep('toast_' + level);
+        setTimeout(function() {
+            el.classList.remove('visible');
+            setTimeout(function() { el.remove(); }, 300);
+        }, dur);
+    }
+
+    function setConn(val) {
+        if (val === connected) return;
+        connected = val;
+        toast(val ? 'LINK RESTORED' : 'LINK DOWN', val ? 'ok' : 'error');
+    }
+
+    function escHtml(s) {
+        if (!s) return '';
+        var d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+    }
+
+    function genId() {
+        var chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+        var s = '';
+        for (var i = 0; i < 8; i++) s += chars[Math.floor(Math.random() * chars.length)];
+        return 'mission-' + s;
+    }
+
+    function fmtTime(ts) {
+        if (!ts) return '—';
+        var d = new Date(ts * 1000);
+        var h = ('0' + d.getHours()).slice(-2);
+        var m = ('0' + d.getMinutes()).slice(-2);
+        var s = ('0' + d.getSeconds()).slice(-2);
+        return h + ':' + m + ':' + s;
+    }
+
+    function statusColor(status) {
+        if (status === 'running' || status === 'initializing') return 'accent';
+        if (status === 'paused') return 'amber';
+        if (status === 'completed' || status === 'complete') return 'accent';
+        if (status === 'error' || status === 'failed') return 'danger';
+        return '';
+    }
+
+    function statusBadgeClass(status) {
+        if (status === 'running' || status === 'initializing') return 'running';
+        if (status === 'paused') return 'paused';
+        if (status === 'completed' || status === 'complete') return 'complete';
+        if (status === 'error' || status === 'failed') return 'failed';
+        return 'stopped';
+    }
+
+    // ── Mission ID ──
+    var missionIdEl = document.getElementById('mission-id');
+    missionIdEl.value = genId();
+
+    document.getElementById('btn-regen-id').addEventListener('click', function() {
+        missionIdEl.value = genId();
+    });
+
+    // ── View Tabs ──
+    var viewTabs = document.getElementById('view-tabs');
+    viewTabs.addEventListener('click', function(e) {
+        var opt = e.target.closest('.tg-option');
+        if (!opt) return;
+        viewTabs.querySelectorAll('.tg-option').forEach(function(o) { o.classList.remove('active'); });
+        opt.classList.add('active');
+        document.querySelectorAll('.view-panel').forEach(function(p) { p.classList.remove('active'); });
+        var panel = document.getElementById('panel-' + opt.dataset.tab);
+        if (panel) panel.classList.add('active');
+
+        // Load data on tab switch
+        if (opt.dataset.tab === 'flock' && activeMissionId) loadFlock();
+        if (opt.dataset.tab === 'context' && activeMissionId) loadContext();
+        if (opt.dataset.tab === 'files' && activeMissionId) loadFiles();
+    });
+
+    // ── Log Filter Tabs ──
+    document.getElementById('log-filters').addEventListener('click', function(e) {
+        var tab = e.target.closest('.log-tab');
+        if (!tab) return;
+        document.querySelectorAll('.log-tab').forEach(function(c) { c.classList.remove('active'); });
+        tab.classList.add('active');
+        logFilter = tab.dataset.filter;
+        logOffset = 0;
+        document.getElementById('activity-log').innerHTML = '';
+        if (activeMissionId) loadLog();
+    });
+
+    // ── Render Missions List ──
+    function renderMissionsList(missions) {
+        missionsCache = missions || [];
+        var grid = document.getElementById('missions-grid');
+        if (!missions.length) {
+            grid.innerHTML = '<div class="status-val" style="padding:8px 0;">[ NO MISSIONS ]</div>';
+            return;
+        }
+
+        var html = '';
+        missions.forEach(function(m) {
+            var st = m.status || 'unknown';
+            var bc = statusBadgeClass(st);
+            html += '<div class="mission-card ' + bc + '" data-mid="' + escHtml(m.mission_id) + '">';
+            html += '<span class="corner corner-tl">⌜</span><span class="corner corner-tr">⌝</span>';
+            html += '<span class="corner corner-bl">⌞</span><span class="corner corner-br">⌟</span>';
+            html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
+            html += '<div class="node-hostname">' + escHtml(m.mission_id) + '</div>';
+            html += '<span class="mission-status-badge ' + bc + '">' + escHtml(st).toUpperCase() + '</span>';
+            html += '</div>';
+            html += '<div class="node-id" style="margin-top:2px;">' + escHtml((m.mission_text || '').substring(0, 120)) + '</div>';
+            // Stats
+            var fCount = m.flock ? Object.keys(m.flock).length : 0;
+            html += '<div style="display:flex;gap:12px;margin-top:4px;">';
+            html += '<span class="metric-label">ROUNDS ' + (m.round_trips || 0) + '</span>';
+            html += '<span class="metric-label">FLOCK ' + fCount + '</span>';
+            html += '<span class="metric-label">TASKS ' + (m.tasks_completed || 0) + '</span>';
+            html += '</div>';
+            html += '</div>';
+        });
+        grid.innerHTML = html;
+
+        // Click to select mission
+        grid.querySelectorAll('.mission-card').forEach(function(card) {
+            card.addEventListener('click', function() {
+                selectMission(card.dataset.mid);
+            });
+        });
+
+        // nComp pips
+        if (typeof nComp !== 'undefined') {
+            grid.querySelectorAll('.mission-card').forEach(function(card) {
+                var cls = card.classList;
+                if (cls.contains('running')) nComp.status(card, 'busy');
+                else if (cls.contains('paused')) nComp.status(card, 'warn');
+                else if (cls.contains('failed')) nComp.status(card, 'error');
+                else if (cls.contains('complete')) nComp.status(card, 'ok');
+            });
+        }
+    }
+
+    // ── Select / Deselect Mission ──
+    function selectMission(mid) {
+        activeMissionId = mid;
+        logOffset = 0;
+        document.getElementById('activity-log').innerHTML = '';
+        document.getElementById('missions-list-section').style.display = 'none';
+        document.getElementById('detail-area').classList.add('active');
+
+        // Populate ID / text from cache
+        var m = missionsCache.find(function(x) { return x.mission_id === mid; });
+        if (m) {
+            missionIdEl.value = m.mission_id;
+            document.getElementById('mission-text').value = m.mission_text || '';
+        }
+        updateButtons(m);
+        updateStats(m);
+        loadLog();
+    }
+
+    function deselectMission() {
+        activeMissionId = null;
+        document.getElementById('missions-list-section').style.display = '';
+        document.getElementById('detail-area').classList.remove('active');
+        missionIdEl.value = genId();
+        document.getElementById('mission-text').value = '';
+        document.getElementById('status-message').textContent = '';
+        updateButtons(null);
+        updateStats(null);
+    }
+
+    // ── Update Buttons ──
+    function updateButtons(m) {
+        var st = m ? m.status : null;
+        var isActive = (st === 'running' || st === 'initializing');
+        var isPaused = (st === 'paused');
+        var isDone = (st === 'completed' || st === 'complete' || st === 'error' || st === 'failed' || st === 'stopped');
+        var hasResult = m && m.has_result;
+
+        document.getElementById('btn-start').style.display = (!m || isDone || !st) ? '' : 'none';
+        document.getElementById('btn-pause').style.display = isActive ? '' : 'none';
+        document.getElementById('btn-resume').style.display = isPaused ? '' : 'none';
+        document.getElementById('btn-stop').style.display = (isActive || isPaused) ? '' : 'none';
+        document.getElementById('btn-delete').style.display = m ? '' : 'none';
+        document.getElementById('btn-result').style.display = hasResult ? '' : 'none';
+        document.getElementById('btn-download').style.display = (m && m.container_id) ? '' : 'none';
+
+        // Disable text editing when running
+        document.getElementById('mission-text').readOnly = isActive || isPaused;
+        missionIdEl.readOnly = !!m;
+
+        // Progress indicator on input area
+        if (typeof nComp !== 'undefined') {
+            var area = document.getElementById('mission-input-area');
+            if (isActive) nComp.progress(area, m.status_progress >= 0 ? m.status_progress : -1);
+            else if (isDone) nComp.progress(area, 100);
+            else nComp.progress(area, null);
+        }
+    }
+
+    // ── Update Stats ──
+    function updateStats(m) {
+        var status = m ? (m.status || '—').toUpperCase() : '—';
+        var sr = m && m.showrunner ? (m.showrunner.model || '—') : '—';
+        var flock = m && m.flock ? Object.keys(m.flock).length : 0;
+        var rounds = m ? (m.round_trips || 0) : 0;
+        var tasks = m ? (m.tasks_completed || 0) : 0;
+
+        var statusEl = document.getElementById('stat-status');
+        statusEl.textContent = '[ ' + status + ' ]';
+        statusEl.className = 'stat-value ' + (m ? statusColor(m.status) : '');
+
+        document.getElementById('stat-showrunner').textContent = '[ ' + sr + ' ]';
+        document.getElementById('stat-flock').textContent = '[ ' + flock + ' ]';
+        document.getElementById('stat-rounds').textContent = '[ ' + rounds + ' ]';
+        document.getElementById('stat-tasks').textContent = '[ ' + tasks + ' ]';
+        document.getElementById('stat-events').textContent = '[ ' + (m ? (m.event_log_count || 0) : 0) + ' ]';
+        document.getElementById('stat-tools').textContent = '[ ' + (m && m.tools ? m.tools.length : 0) + ' ]';
+    }
+
+    // Fetch cluster-level stats (endpoints, VRAM) from /api/v1/nodes
+    function updateClusterStats() {
+        fetch(BASE + '/api/v1/nodes')
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                var nodes = d.nodes || [];
+                var totalVram = 0, readyEp = 0;
+                nodes.forEach(function(n) {
+                    var gpus = (n.hardware || {}).gpu || [];
+                    gpus.forEach(function(g) { totalVram += g.vram_total_mb || 0; });
+                    (n.endpoints || []).forEach(function(ep) { if (ep.status === 'ready') readyEp++; });
+                });
+                var vramStr = totalVram >= 1024 ? (totalVram / 1024).toFixed(1) + ' GB' : totalVram + ' MB';
+                document.getElementById('stat-endpoints').textContent = '[ ' + readyEp + ' ]';
+                document.getElementById('stat-vram').textContent = '[ ' + vramStr + ' ]';
+            })
+            .catch(function() {});
+    }
+
+    // ── Mission Actions ──
+    // Populate showrunner override dropdowns from nodes
+    var _srNodesData = []; // cached node list for filtering
+    function populateShowrunnerOverride() {
+        var nodeSel = document.getElementById('sr-override-node');
+        var modelSel = document.getElementById('sr-override-model');
+        var prevNode = nodeSel.value;
+        var prevModel = modelSel.value;
+        fetch(BASE + '/api/v1/nodes')
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                _srNodesData = (d.nodes || []).filter(function(n) { return n.status === 'healthy'; });
+                nodeSel.innerHTML = '<option value="">Auto (best available)</option>';
+                _srNodesData.forEach(function(n) {
+                    nodeSel.innerHTML += '<option value="' + escHtml(n.node_id) + '">' + escHtml(n.hostname || n.node_id) + '</option>';
+                });
+                // Restore previous selection if still valid
+                if (prevNode) {
+                    var stillExists = _srNodesData.some(function(n) { return n.node_id === prevNode; });
+                    if (stillExists) nodeSel.value = prevNode;
+                }
+                updateSrModelDropdown(prevModel);
+            })
+            .catch(function() {});
+    }
+
+    function updateSrModelDropdown(restoreValue) {
+        var nodeSel = document.getElementById('sr-override-node');
+        var modelSel = document.getElementById('sr-override-model');
+        var selectedNode = nodeSel.value;
+        modelSel.innerHTML = '<option value="">Auto</option>';
+        var models = {};
+        _srNodesData.forEach(function(n) {
+            if (selectedNode && n.node_id !== selectedNode) return;
+            (n.endpoints || []).forEach(function(ep) {
+                if (ep.status === 'ready' && ep.model && !models[ep.model]) {
+                    models[ep.model] = true;
+                    var label = selectedNode ? ep.model : ep.model + ' (' + (n.hostname || n.node_id) + ')';
+                    modelSel.innerHTML += '<option value="' + escHtml(n.node_id) + '::' + escHtml(ep.model) + '">' + escHtml(label) + '</option>';
+                }
+            });
+        });
+        if (restoreValue) modelSel.value = restoreValue;
+    }
+
+    document.getElementById('sr-override-node').addEventListener('change', function() {
+        updateSrModelDropdown();
+    });
+
+    populateShowrunnerOverride();
+    setInterval(populateShowrunnerOverride, 30000);
+
+    document.getElementById('btn-start').addEventListener('click', function() {
+        var mid = missionIdEl.value.trim();
+        var text = document.getElementById('mission-text').value.trim();
+        if (!mid) { toast('ENTER MISSION ID', 'warn'); return; }
+        if (!text) { toast('ENTER MISSION TEXT', 'warn'); return; }
+
+        var body = { mission_id: mid, mission_text: text };
+        var srNode = document.getElementById('sr-override-node').value;
+        var srModelVal = document.getElementById('sr-override-model').value;
+        // Model value is "node_id::model" — extract both parts
+        var srModelNode = '';
+        var srModel = '';
+        if (srModelVal && srModelVal.indexOf('::') !== -1) {
+            var parts = srModelVal.split('::');
+            srModelNode = parts[0];
+            srModel = parts[1];
+        }
+        // Use model's node if no explicit node selected
+        var finalNode = srNode || srModelNode;
+        if (finalNode && srModel) {
+            body.showrunner_override = { node_id: finalNode, model: srModel };
+        }
+
+        fetch(BASE + '/api/v1/missions', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        })
+        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+        .then(function(res) {
+            if (res.ok) {
+                toast('MISSION STARTED', 'ok');
+                if (typeof nbeep === 'function') nbeep('mission_start');
+                selectMission(mid);
+            } else {
+                toast(res.data.error || 'START FAILED', 'error');
+            }
+        })
+        .catch(function() { toast('START FAILED', 'error'); });
+    });
+
+    document.getElementById('btn-pause').addEventListener('click', function() {
+        if (!activeMissionId) return;
+        fetch(BASE + '/api/v1/missions/' + encodeURIComponent(activeMissionId) + '/pause', { method: 'POST' })
+            .then(function(r) { return r.json(); })
+            .then(function() { toast('MISSION PAUSED', 'ok'); })
+            .catch(function() { toast('PAUSE FAILED', 'error'); });
+    });
+
+    document.getElementById('btn-resume').addEventListener('click', function() {
+        if (!activeMissionId) return;
+        fetch(BASE + '/api/v1/missions/' + encodeURIComponent(activeMissionId) + '/resume', { method: 'POST' })
+            .then(function(r) { return r.json(); })
+            .then(function() { toast('MISSION RESUMED', 'ok'); })
+            .catch(function() { toast('RESUME FAILED', 'error'); });
+    });
+
+    document.getElementById('btn-stop').addEventListener('click', function() {
+        if (!activeMissionId) return;
+        nDynamic.showDialog({
+            title: 'Stop Mission',
+            body: 'Stop the current mission?',
+            alarm: false,
+            buttons: [
+                { label: 'STOP', value: 'yes', style: 'danger' },
+                { label: 'CANCEL', value: null }
+            ]
+        }).then(function(val) {
+            if (val !== 'yes') return;
+            fetch(BASE + '/api/v1/missions/' + encodeURIComponent(activeMissionId) + '/stop', { method: 'POST' })
+                .then(function(r) { return r.json(); })
+                .then(function() { toast('MISSION STOPPED', 'ok'); })
+                .catch(function() { toast('STOP FAILED', 'error'); });
+        });
+    });
+
+    document.getElementById('btn-delete').addEventListener('click', function() {
+        if (!activeMissionId) return;
+        nDynamic.showDialog({
+            title: 'Delete Mission',
+            body: 'Delete mission ' + activeMissionId + ' permanently?',
+            alarm: false,
+            buttons: [
+                { label: 'DELETE', value: 'yes', style: 'danger' },
+                { label: 'CANCEL', value: null }
+            ]
+        }).then(function(val) {
+            if (val !== 'yes') return;
+            fetch(BASE + '/api/v1/missions/' + encodeURIComponent(activeMissionId), { method: 'DELETE' })
+                .then(function(r) { return r.json(); })
+                .then(function() {
+                    toast('MISSION DELETED', 'ok');
+                    deselectMission();
+                })
+                .catch(function() { toast('DELETE FAILED', 'error'); });
+        });
+    });
+
+    document.getElementById('btn-result').addEventListener('click', function() {
+        if (!activeMissionId) return;
+        var frame = document.getElementById('result-frame');
+        frame.src = BASE + '/api/v1/missions/' + encodeURIComponent(activeMissionId) + '/result';
+        document.getElementById('result-overlay').classList.add('open');
+        if (typeof nbeep === 'function') nbeep('result_view');
+    });
+
+    document.getElementById('btn-result-close').addEventListener('click', function() {
+        var panel = document.getElementById('result-panel');
+        panel.style.maxWidth = '700px';
+        panel.style.maxHeight = '85vh';
+        panel.style.width = '90%';
+        panel.style.height = '';
+        var icon = document.querySelector('#btn-result-expand i');
+        icon.className = 'ph ph-arrows-out';
+        document.getElementById('result-overlay').classList.remove('open');
+        document.getElementById('result-frame').src = '';
+    });
+
+    document.getElementById('btn-result-expand').addEventListener('click', function() {
+        var panel = document.getElementById('result-panel');
+        var icon = this.querySelector('i');
+        var expanded = panel.style.maxWidth === 'none';
+        if (expanded) {
+            panel.style.maxWidth = '700px';
+            panel.style.maxHeight = '85vh';
+            panel.style.width = '90%';
+            panel.style.height = '';
+            icon.className = 'ph ph-arrows-out';
+        } else {
+            panel.style.maxWidth = 'none';
+            panel.style.maxHeight = 'none';
+            panel.style.width = 'calc(100vw - 32px)';
+            panel.style.height = 'calc(100vh - 32px)';
+            icon.className = 'ph ph-arrows-in';
+        }
+    });
+
+    document.getElementById('btn-download').addEventListener('click', function() {
+        if (!activeMissionId) return;
+        var a = document.createElement('a');
+        a.href = BASE + '/api/v1/missions/' + encodeURIComponent(activeMissionId) + '/download?path=/home/mission';
+        a.download = activeMissionId + '.tar.gz';
+        a.click();
+        toast('DOWNLOAD STARTED', 'ok');
+    });
+
+    // ── Completion overlay ──
+    document.getElementById('btn-complete-ack').addEventListener('click', function() {
+        document.getElementById('complete-overlay').classList.remove('open');
+    });
+
+    // ── Flock agent detail overlay ──
+    function showFlockAgent(name) {
+        var agent = _lastFlockData[name];
+        if (!agent) return;
+        document.getElementById('fa-title').textContent = name;
+        var html = '';
+        html += '<div class="status-row"><span class="status-label">MODEL</span><span class="status-val">' + escHtml(agent.model || '—') + '</span></div>';
+        html += '<div class="status-row"><span class="status-label">ROLE</span><span class="status-val">' + escHtml(agent.role || '—') + '</span></div>';
+        html += '<div class="status-row"><span class="status-label">EXPERIENCE</span><span class="status-val">' + escHtml(agent.experience || '—') + '</span></div>';
+        html += '<div class="status-row"><span class="status-label">NODE</span><span class="status-val">' + escHtml(agent.hostname || agent.node_id || '—') + '</span></div>';
+        html += '<div class="status-row"><span class="status-label">STATUS</span><span class="status-val">' + escHtml((agent.status || 'unknown').toUpperCase()) + '</span></div>';
+        if (agent.toks_per_sec) html += '<div class="status-row"><span class="status-label">TOK/S</span><span class="status-val">' + agent.toks_per_sec + '</span></div>';
+        if (agent.context_length) html += '<div class="status-row"><span class="status-label">CTX</span><span class="status-val">' + agent.context_length + '</span></div>';
+        if (agent.gpu_name) html += '<div class="status-row"><span class="status-label">GPU</span><span class="status-val">' + escHtml(agent.gpu_name) + '</span></div>';
+        if (agent.assigned_task) html += '<div class="status-row"><span class="status-label">TASK</span><span class="status-val accent">' + escHtml(agent.assigned_task) + '</span></div>';
+        document.getElementById('fa-detail').innerHTML = html;
+
+        // Conversation history
+        var hist = agent.conversation_history || [];
+        var hHtml = '';
+        if (hist.length) {
+            hHtml += '<div class="cf-section-label" style="font-size:.55rem;margin-top:8px;">CONVERSATION HISTORY (' + hist.length + ')</div>';
+            hist.forEach(function(msg) {
+                var role = (msg.role || '?').toUpperCase();
+                var cls = msg.role === 'assistant' ? 'accent' : msg.role === 'system' ? 'dim' : '';
+                hHtml += '<div style="margin:4px 0;padding:4px 6px;background:var(--bg);border-radius:var(--radius);border:1px solid var(--border);">';
+                hHtml += '<div class="metric-label" style="margin-bottom:2px;"><span class="' + cls + '">' + role + '</span></div>';
+                hHtml += '<div style="font-family:var(--font-data);font-size:.5rem;color:var(--text);white-space:pre-wrap;word-break:break-word;">' + escHtml(msg.content || '') + '</div>';
+                hHtml += '</div>';
+            });
+        } else {
+            hHtml += '<div class="status-val" style="padding:8px 0;">[ NO CONVERSATION HISTORY ]</div>';
+        }
+        document.getElementById('fa-history').innerHTML = hHtml;
+
+        // Reset expand state
+        var panel = document.getElementById('flock-agent-panel');
+        panel.style.maxWidth = '560px';
+        panel.style.maxHeight = '85vh';
+        panel.style.width = '90%';
+        panel.style.height = '';
+        var icon = document.querySelector('#btn-fa-expand i');
+        icon.className = 'ph ph-arrows-out';
+
+        document.getElementById('flock-agent-overlay').classList.add('open');
+    }
+
+    document.getElementById('btn-fa-close').addEventListener('click', function() {
+        document.getElementById('flock-agent-overlay').classList.remove('open');
+    });
+
+    document.getElementById('btn-fa-expand').addEventListener('click', function() {
+        var panel = document.getElementById('flock-agent-panel');
+        var icon = this.querySelector('i');
+        var expanded = panel.style.maxWidth === 'none';
+        if (expanded) {
+            panel.style.maxWidth = '560px';
+            panel.style.maxHeight = '85vh';
+            panel.style.width = '90%';
+            panel.style.height = '';
+            icon.className = 'ph ph-arrows-out';
+        } else {
+            panel.style.maxWidth = 'none';
+            panel.style.maxHeight = 'none';
+            panel.style.width = 'calc(100vw - 32px)';
+            panel.style.height = 'calc(100vh - 32px)';
+            icon.className = 'ph ph-arrows-in';
+        }
+    });
+
+    // ── Result overlay close on bg click ──
+    document.querySelectorAll('.cf-overlay').forEach(function(ov) {
+        ov.addEventListener('click', function(e) {
+            if (e.target === ov) {
+                ov.classList.remove('open');
+                var frame = document.getElementById('result-frame');
+                if (frame) frame.src = '';
+            }
+        });
+    });
+
+    // ── Activity Log ──
+    function loadLog() {
+        if (!activeMissionId) return;
+        var level = logFilter !== 'all' ? logFilter : '';
+        var url = BASE + '/api/v1/missions/' + encodeURIComponent(activeMissionId) + '/log?offset=' + logOffset + '&limit=200';
+        if (level) url += '&level=' + encodeURIComponent(level.toUpperCase());
+
+        fetch(url)
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                var log = document.getElementById('activity-log');
+                var events = d.events || [];
+                if (!events.length && logOffset === 0) {
+                    log.innerHTML = '<div class="status-val" style="padding:4px 0;">[ NO EVENTS ]</div>';
+                    return;
+                }
+                var html = '';
+                events.forEach(function(ev) {
+                    var lvl = (ev.level || '').toLowerCase();
+                    var msgClass = '';
+                    if (lvl === 'dispatch' || lvl === 'task_dispatch') msgClass = 'dispatch';
+                    else if (lvl === 'action' || lvl === 'tool_call') msgClass = 'action';
+                    else if (lvl === 'error' || lvl === 'task_error') msgClass = 'error';
+                    else if (lvl === 'task_complete' || lvl === 'complete') msgClass = 'complete';
+
+                    var ts = ev.time_str || fmtTime(ev.timestamp);
+                    // Show just HH:MM:SS
+                    if (ts.length > 8) ts = ts.substring(ts.length - 8);
+
+                    html += '<div class="log-entry">';
+                    html += '<span class="log-ts">' + escHtml(ts) + '</span>';
+                    html += '<span class="log-msg ' + msgClass + '">' + escHtml(ev.message || '') + '</span>';
+                    html += '</div>';
+                });
+
+                if (logOffset === 0) {
+                    log.innerHTML = html;
+                } else {
+                    log.insertAdjacentHTML('beforeend', html);
+                }
+
+                logOffset = d.offset + events.length;
+
+                // Auto-scroll
+                if (autoScroll) log.scrollTop = log.scrollHeight;
+            })
+            .catch(function() {});
+    }
+
+    // ── Flock ──
+    function loadFlock() {
+        if (!activeMissionId) return;
+        fetch(BASE + '/api/v1/missions/' + encodeURIComponent(activeMissionId) + '/flock')
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                // Showrunner
+                var srPanel = document.getElementById('showrunner-info');
+                var srDetail = document.getElementById('sr-detail');
+                if (d.showrunner) {
+                    srPanel.style.display = '';
+                    srDetail.innerHTML =
+                        '<div class="status-row"><span class="status-label">MODEL</span><span class="status-val accent">' + escHtml(d.showrunner.model || '—') + '</span></div>' +
+                        '<div class="status-row"><span class="status-label">NODE</span><span class="status-val">' + escHtml(d.showrunner.node_id || '—') + '</span></div>' +
+                        '<div class="status-row"><span class="status-label">SCORE</span><span class="status-val">[ ' + (d.showrunner.score || 0) + ' ]</span></div>';
+                    if (typeof nComp !== 'undefined') nComp.active(srPanel, true);
+                } else {
+                    srPanel.style.display = 'none';
+                }
+
+                // Flock agents
+                var flock = d.flock || {};
+                var grid = document.getElementById('flock-grid');
+                var names = Object.keys(flock);
+                if (!names.length) {
+                    grid.innerHTML = '<div class="status-val" style="padding:4px 0;">[ NO FLOCK AGENTS ]</div>';
+                    return;
+                }
+
+                // Flock utilization card
+                var html = '';
+                var busyCount = 0;
+                names.forEach(function(n) { if (flock[n].status === 'busy') busyCount++; });
+                html += '<div class="flock-card" id="flock-util-card" style="width:100%">';
+                html += '<span class="corner corner-tl">⌜</span><span class="corner corner-tr">⌝</span>';
+                html += '<span class="corner corner-bl">⌞</span><span class="corner corner-br">⌟</span>';
+                html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
+                html += '<span class="cf-section-label" style="border:none;padding:0;">FLOCK UTILIZATION</span>';
+                html += '<span class="metric-label">' + busyCount + ' / ' + names.length + ' BUSY</span>';
+                html += '</div></div>';
+
+                _lastFlockData = flock;
+                _lastFlockNames = names;
+                names.forEach(function(name) {
+                    var agent = flock[name];
+                    var isSR = d.showrunner && d.showrunner.node_id === agent.node_id && d.showrunner.model === agent.model;
+                    html += '<div class="flock-card' + (isSR ? ' showrunner' : '') + '" data-flock-name="' + escHtml(name) + '" style="cursor:pointer;">';
+                    html += '<span class="corner corner-tl">⌜</span><span class="corner corner-tr">⌝</span>';
+                    html += '<span class="corner corner-bl">⌞</span><span class="corner corner-br">⌟</span>';
+                    html += '<div class="fc-name">' + escHtml(name) + '</div>';
+                    html += '<div class="fc-meta">' + escHtml(agent.model || '—') + ' · ' + escHtml(agent.role || 'worker') + ' · ' + escHtml(agent.experience || '—') + '</div>';
+                    html += '<div class="fc-role ' + (isSR ? 'sr' : 'worker') + '">' + (isSR ? 'SHOWRUNNER' : 'WORKER') + ' @ ' + escHtml(agent.hostname || agent.node_id || '—') + '</div>';
+                    html += '<div class="metric-label">' + escHtml((agent.status || 'unknown').toUpperCase());
+                    if (agent.assigned_task) html += ' · ' + escHtml(agent.assigned_task);
+                    html += '</div>';
+                    html += '</div>';
+                });
+                grid.innerHTML = html;
+
+                // Click handler: open flock agent detail
+                grid.querySelectorAll('.flock-card[data-flock-name]').forEach(function(card) {
+                    card.addEventListener('click', function() {
+                        showFlockAgent(card.dataset.flockName);
+                    });
+                });
+
+                // nComp progress on utilization card
+                if (typeof nComp !== 'undefined') {
+                    var utilCard = document.getElementById('flock-util-card');
+                    if (utilCard && names.length > 0) {
+                        var pct = Math.round((busyCount / names.length) * 100);
+                        nComp.progress(utilCard, pct);
+                    }
+                    grid.querySelectorAll('.flock-card:not(#flock-util-card)').forEach(function(card, i) {
+                        var agent = flock[names[i]];
+                        if (!agent) return;
+                        var st = agent.status;
+                        if (st === 'busy' || st === 'working') nComp.status(card, 'busy');
+                        else if (st === 'available' || st === 'idle') nComp.status(card, 'idle');
+                        else nComp.status(card, 'error');
+                    });
+                }
+            })
+            .catch(function() {});
+    }
+
+    // ── Context ──
+    function loadContext() {
+        if (!activeMissionId) return;
+        fetch(BASE + '/api/v1/missions/' + encodeURIComponent(activeMissionId) + '/context')
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                var ctx = d.context || [];
+                var container = document.getElementById('context-blocks');
+                if (!ctx.length) {
+                    container.innerHTML = '<div class="status-val" style="padding:4px 0;">[ NO CONTEXT ]</div>';
+                    return;
+                }
+                var html = '';
+                ctx.forEach(function(msg, i) {
+                    var role = (msg.role || 'unknown').toUpperCase();
+                    var content = msg.content || '';
+                    // Truncate very long messages for display
+                    var preview = content.length > 200 ? content.substring(0, 200) + '...' : content;
+                    html += '<div class="context-block" data-idx="' + i + '">';
+                    html += '<div class="context-header" data-flash data-nbeep="select">';
+                    html += '<span>' + role + ' #' + (i + 1) + '</span>';
+                    html += '<span>[ CLOSED ]</span>';
+                    html += '</div>';
+                    html += '<div class="context-body">' + escHtml(content) + '</div>';
+                    html += '</div>';
+                });
+                container.innerHTML = html;
+
+                // Toggle handlers
+                container.querySelectorAll('.context-header').forEach(function(hdr) {
+                    hdr.addEventListener('click', function() {
+                        var block = hdr.parentElement;
+                        block.classList.toggle('open');
+                        var indicator = hdr.querySelector('span:last-child');
+                        indicator.textContent = block.classList.contains('open') ? '[ OPEN ]' : '[ CLOSED ]';
+                    });
+                });
+            })
+            .catch(function() {});
+    }
+
+    // ── Files ──
+    function loadFiles() {
+        if (!activeMissionId) return;
+        fetch(BASE + '/api/v1/missions/' + encodeURIComponent(activeMissionId) + '/files?path=' + encodeURIComponent(filesPath))
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                document.getElementById('files-path').textContent = '[ ' + (d.path || filesPath) + ' ]';
+                var files = d.files || [];
+                var tree = document.getElementById('file-tree');
+                if (!files.length) {
+                    tree.innerHTML = '<div class="status-val">[ EMPTY ]</div>';
+                    return;
+                }
+                var html = '';
+                files.forEach(function(f) {
+                    var name = f.name || f;
+                    var isDir = name.endsWith('/') || f.type === 'directory';
+                    var icon = isDir ? 'ph ph-folder' : 'ph ph-file-text';
+                    var size = f.size != null ? formatFileSize(f.size) : '';
+                    html += '<div class="file-entry' + (isDir ? ' dir' : '') + '" data-name="' + escHtml(name) + '" data-is-dir="' + isDir + '">';
+                    html += '<i class="' + icon + '"></i>';
+                    html += '<span class="fe-name">' + escHtml(name) + '</span>';
+                    if (size) html += '<span class="fe-size">' + size + '</span>';
+                    html += '</div>';
+                });
+                tree.innerHTML = html;
+
+                tree.querySelectorAll('.file-entry').forEach(function(entry) {
+                    entry.addEventListener('click', function() {
+                        var name = entry.dataset.name;
+                        if (entry.dataset.isDir === 'true') {
+                            filesPath = filesPath.replace(/\/$/, '') + '/' + name.replace(/\/$/, '');
+                            loadFiles();
+                        } else {
+                            previewFile(filesPath.replace(/\/$/, '') + '/' + name);
+                        }
+                    });
+                });
+            })
+            .catch(function() {});
+    }
+
+    function formatFileSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / 1048576).toFixed(1) + ' MB';
+    }
+
+    document.getElementById('btn-files-up').addEventListener('click', function() {
+        var parts = filesPath.split('/').filter(Boolean);
+        if (parts.length > 1) {
+            parts.pop();
+            filesPath = '/' + parts.join('/');
+            loadFiles();
+        }
+    });
+
+    document.getElementById('btn-files-refresh').addEventListener('click', function() {
+        loadFiles();
+    });
+
+    function previewFile(path) {
+        fetch(BASE + '/api/v1/missions/' + encodeURIComponent(activeMissionId) + '/file?path=' + encodeURIComponent(path))
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                document.getElementById('fp-path').textContent = d.path || path;
+                document.getElementById('fp-content').textContent = d.content || '';
+                document.getElementById('file-preview').classList.add('active');
+                document.getElementById('files-tree-container').style.display = 'none';
+            })
+            .catch(function() { toast('FAILED TO LOAD FILE', 'error'); });
+    }
+
+    document.getElementById('btn-preview-close').addEventListener('click', function() {
+        document.getElementById('file-preview').classList.remove('active');
+        document.getElementById('files-tree-container').style.display = '';
+    });
+
+    // ── Terminal ──
+    document.getElementById('btn-term-exec').addEventListener('click', execCommand);
+    document.getElementById('term-input').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); execCommand(); }
+    });
+
+    function execCommand() {
+        if (!activeMissionId) { toast('NO ACTIVE MISSION', 'warn'); return; }
+        var input = document.getElementById('term-input');
+        var cmd = input.value.trim();
+        if (!cmd) return;
+        input.value = '';
+
+        var output = document.getElementById('term-output');
+        output.textContent += '$ ' + cmd + '\n';
+
+        fetch(BASE + '/api/v1/missions/' + encodeURIComponent(activeMissionId) + '/exec', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ command: cmd })
+        })
+        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+        .then(function(res) {
+            if (res.ok) {
+                if (res.data.stdout) output.textContent += res.data.stdout;
+                if (res.data.stderr) output.textContent += res.data.stderr;
+                if (res.data.exit_code !== 0) output.textContent += '[exit ' + res.data.exit_code + ']\n';
+            } else {
+                output.textContent += '[error: ' + (res.data.error || 'unknown') + ']\n';
+            }
+            output.scrollTop = output.scrollHeight;
+        })
+        .catch(function() {
+            output.textContent += '[connection error]\n';
+            output.scrollTop = output.scrollHeight;
+        });
+    }
+
+    // ── User Prompt Toasts ──
+    function updatePromptToasts(pending) {
+        if (!pending || !pending.length) return;
+        var container = document.getElementById('prompt-toast-container');
+
+        pending.forEach(function(p) {
+            if (p.answered || answeredPrompts[p.id]) return;
+            if (document.getElementById('pt-' + p.id)) return;
+
+            var toast = document.createElement('div');
+            toast.className = 'prompt-toast';
+            toast.id = 'pt-' + p.id;
+            toast.innerHTML =
+                '<span class="corner corner-tl">⌜</span><span class="corner corner-tr">⌝</span>' +
+                '<span class="corner corner-bl">⌞</span><span class="corner corner-br">⌟</span>' +
+                '<div class="pt-question">' + escHtml(p.question || 'Agent needs input') + '</div>' +
+                '<div class="pt-input-row">' +
+                '<input type="text" placeholder="Your response..." id="pt-input-' + escHtml(p.id) + '">' +
+                '<button class="pt-send" data-flash data-pid="' + escHtml(p.id) + '">RESPOND</button>' +
+                '</div>';
+            container.appendChild(toast);
+            if (typeof nbeep === 'function') nbeep('user_prompt');
+            if (typeof nComp !== 'undefined') nComp.status(toast, 'warn');
+
+            toast.querySelector('.pt-send').addEventListener('click', function() {
+                var input = document.getElementById('pt-input-' + p.id);
+                var text = input ? input.value.trim() : '';
+                respondToPrompt(p.id, text);
+            });
+
+            var input = toast.querySelector('input');
+            if (input) {
+                input.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        respondToPrompt(p.id, input.value.trim());
+                    }
+                });
+                input.focus();
+            }
+        });
+    }
+
+    function respondToPrompt(promptId, text) {
+        if (!activeMissionId) return;
+        fetch(BASE + '/api/v1/missions/' + encodeURIComponent(activeMissionId) + '/respond', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ prompt_id: promptId, response: text })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function() {
+            answeredPrompts[promptId] = true;
+            var el = document.getElementById('pt-' + promptId);
+            if (el) el.remove();
+            toast('RESPONSE SENT', 'ok');
+        })
+        .catch(function() { toast('RESPOND FAILED', 'error'); });
+    }
+
+    // ── Check Completion ──
+    function checkCompletion(m) {
+        if (!m) return;
+        var st = m.status;
+        if ((st === 'completed' || st === 'complete' || st === 'error' || st === 'failed') && !completionShown[m.mission_id]) {
+            completionShown[m.mission_id] = true;
+            var isFail = (st === 'error' || st === 'failed');
+            document.getElementById('complete-title').textContent = isFail ? 'MISSION FAILED' : 'MISSION COMPLETE';
+            document.getElementById('complete-body').textContent = isFail
+                ? 'The mission encountered an error.'
+                : 'The mission has finished execution.';
+            document.getElementById('complete-overlay').classList.add('open');
+            toast(isFail ? 'MISSION FAILED' : 'MISSION COMPLETE', isFail ? 'error' : 'ok', 5000);
+            if (typeof nbeep === 'function') nbeep(isFail ? 'mission_failed' : 'mission_complete');
+        }
+    }
+
+    // ── Poll ──
+    function poll() {
+        fetch(BASE + '/api/v1/missions')
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                setConn(true);
+                var missions = d.missions || [];
+                renderMissionsList(missions);
+
+                // If we have an active mission, update its state
+                if (activeMissionId) {
+                    var m = missions.find(function(x) { return x.mission_id === activeMissionId; });
+                    if (m) {
+                        updateButtons(m);
+                        updateStats(m);
+                        checkCompletion(m);
+
+                        // Status message
+                        var msgEl = document.getElementById('status-message');
+                        msgEl.textContent = m.status_message || '';
+
+                        // User prompts
+                        updatePromptToasts(m.pending_prompts);
+
+                        // Load log incrementally
+                        loadLog();
+                    } else {
+                        // Mission was deleted externally
+                        deselectMission();
+                    }
+                }
+            })
+            .catch(function() { setConn(false); });
+    }
+
+    // ── Init ──
+    poll();
+    setInterval(poll, POLL);
+    updateClusterStats();
+    setInterval(updateClusterStats, POLL * 5);
+
+    // Also poll flock/context if those tabs are active
+    setInterval(function() {
+        if (!activeMissionId) return;
+        var activeTab = document.querySelector('.tg-option.active');
+        if (activeTab && activeTab.dataset.tab === 'flock') loadFlock();
+    }, POLL * 2);
+
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,1005 @@
+/* ═══════════════════════════════════════════
+   Notum AHI
+   Copyright © 2026 Notum Robotics. Licensed under the MIT License.
+   ═══════════════════════════════════════════ */
+
+/* --- Header layout ----------------------------- */
+#demo-app header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding-left: 16px;
+    padding-right: 16px;
+}
+
+/* --- Scroll fix (body scrolls on demo page) --- */
+html:has(#demo-app),
+html:has(#demo-app) body {
+    overflow-y: auto;
+    height: auto;
+    min-height: 100%;
+}
+html:has(#demo-app) body {
+    overflow-x: hidden;
+}
+html:has(#demo-app)::-webkit-scrollbar,
+html:has(#demo-app) body::-webkit-scrollbar { display: none; }
+
+#demo-app {
+    min-height: 100vh;
+}
+
+/* --- Demo layout ------------------------------ */
+#demo-main {
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    padding: 0 16px 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+    box-sizing: border-box;
+}
+
+.demo-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.section-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: .65rem;
+    color: var(--text-dim);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+}
+
+.demo-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+}
+
+.demo-row > * {
+    min-width: 0;
+}
+
+/* --- Panel (reusable container) --------------- */
+.panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.panel-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: .65rem;
+    color: var(--text-dim);
+    letter-spacing: .1em;
+}
+
+/* --- Toggle Groups ---------------------------- */
+.toggle-group {
+    display: flex;
+    gap: 2px;
+    border-radius: var(--radius);
+    overflow: hidden;
+    border: 1px solid var(--border);
+}
+
+.tg-option {
+    flex: 1;
+    text-align: center;
+    padding: 8px 0;
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 600;
+    font-size: .8rem;
+    letter-spacing: .08em;
+    color: var(--text-dim);
+    background: var(--bg);
+    cursor: pointer;
+    transition: background .15s, color .15s;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.tg-option:hover {
+    color: var(--text);
+}
+
+.tg-option:active {
+    background: rgba(244,244,244, 0.10);
+    color: var(--bg);
+}
+
+.tg-option.active {
+    background: var(--accent);
+    color: var(--bg);
+}
+
+.tg-option.active:active {
+    background: var(--accent);
+    color: var(--bg);
+}
+
+/* --- Segmented Sliders ------------------------ */
+.slider-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.slider-readout {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: .7rem;
+    color: var(--accent);
+    letter-spacing: .06em;
+}
+
+.slider-readout.color-amber  { color: var(--amber); }
+.slider-readout.color-danger { color: var(--danger); }
+
+.seg-slider {
+    display: flex;
+    gap: 3px;
+    height: 28px;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.seg-slider .seg {
+    flex: 1;
+    border-radius: 1px;
+    background: rgba(244,244,244, 0.06);
+    transition: background .1s;
+}
+
+.seg-slider .seg.filled { background: var(--accent); }
+.seg-slider[data-color="amber"] .seg.filled { background: var(--amber); }
+.seg-slider[data-color="danger"] .seg.filled { background: var(--danger); }
+
+.seg-slider[data-color="amber"] + .slider-readout,
+.slider-header:has(+ .seg-slider[data-color="amber"]) .slider-readout { color: var(--amber); }
+.seg-slider[data-color="danger"] + .slider-readout,
+.slider-header:has(+ .seg-slider[data-color="danger"]) .slider-readout { color: var(--danger); }
+
+/* --- Vertical Segmented Slider (interactive) --- */
+.seg-slider-v {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 3px;
+    width: 28px;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.seg-slider-v .seg {
+    flex: 1;
+    border-radius: 1px;
+    background: rgba(244,244,244, 0.06);
+    transition: background .1s;
+    min-height: 0;
+}
+
+.seg-slider-v .seg.filled { background: var(--accent); }
+.seg-slider-v[data-color="amber"] .seg.filled { background: var(--amber); }
+.seg-slider-v[data-color="danger"] .seg.filled { background: var(--danger); }
+
+.seg-slider-v[data-color="amber"] ~ .slider-readout { color: var(--amber); }
+.seg-slider-v[data-color="danger"] ~ .slider-readout { color: var(--danger); }
+
+/* --- Segmented Bar (non-interactive) ---------- */
+.seg-bar {
+    display: flex;
+    gap: 3px;
+    height: 14px;
+}
+
+.seg-bar .seg {
+    flex: 1;
+    border-radius: 1px;
+    background: rgba(244,244,244, 0.06);
+    transition: background 300ms ease, filter 200ms ease;
+}
+
+.seg-bar .seg.filled { background: var(--accent); }
+.seg-bar[data-color="amber"] .seg.filled { background: var(--amber); }
+.seg-bar[data-color="danger"] .seg.filled { background: var(--danger); }
+
+/* Traveling dim square — JS toggles .seg-dim one position at a time, snaps (no transition) */
+.seg-bar .seg.filled.seg-dim  { filter: brightness(0.75); transition: none; }
+
+/* Subtle brighten on newly-filled segments */
+.seg-bar .seg.filled.seg-flash { filter: brightness(1.3); }
+
+/* Full-bar blink — JS toggles .seg-bright on all filled segs (2×50ms + 350ms loop) */
+.seg-bar .seg.filled.seg-bright { filter: brightness(1.35); transition: none; }
+
+/* --- Vertical Segmented Bar (non-interactive) --- */
+.seg-bar-v {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 3px;
+    width: 14px;
+}
+
+.seg-bar-v .seg {
+    flex: 1;
+    border-radius: 1px;
+    background: rgba(244,244,244, 0.06);
+    min-height: 0;
+    transition: background 300ms ease, filter 200ms ease;
+}
+
+.seg-bar-v .seg.filled { background: var(--accent); }
+.seg-bar-v[data-color="amber"] .seg.filled { background: var(--amber); }
+.seg-bar-v[data-color="danger"] .seg.filled { background: var(--danger); }
+
+.seg-bar-v .seg.filled.seg-dim    { filter: brightness(0.75); transition: none; }
+.seg-bar-v .seg.filled.seg-flash  { filter: brightness(1.3); }
+.seg-bar-v .seg.filled.seg-bright  { filter: brightness(1.35); transition: none; }
+
+/* --- Vertical Panel Layout Helpers --- */
+.v-gauge-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+
+.v-gauge-panel .slider-readout {
+    order: -1;
+}
+
+.v-gauge-panel .panel-label {
+    font-size: 0.6rem;
+    writing-mode: horizontal-tb;
+}
+
+/* --- Numeric Steppers ------------------------- */
+.stepper {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+
+.stepper-btn {
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 1.4rem;
+    font-weight: 600;
+    color: var(--text-dim);
+    background: var(--bg);
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    transition: color .15s, background .15s;
+}
+
+.stepper-btn:hover {
+    color: var(--text);
+}
+
+.stepper-btn:active {
+    background: rgba(244,244,244, 0.10);
+    color: var(--bg);
+}
+
+.stepper-val {
+    flex: 1;
+    text-align: center;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 1.1rem;
+    font-weight: 500;
+    color: var(--accent);
+    letter-spacing: .08em;
+}
+
+/* --- Sub-menus -------------------------------- */
+.submenu-panel {
+    gap: 8px;
+}
+
+.submenu {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.submenu-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    background: var(--bg);
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: background .15s;
+    user-select: none;
+    -webkit-user-select: none;
+    position: relative;
+}
+
+.submenu-item:hover {
+    background: rgba(244,244,244, 0.04);
+}
+
+.submenu-item i {
+    font-size: 1.2rem;
+    color: var(--text-dim);
+    width: 24px;
+    text-align: center;
+}
+
+.submenu-item.warning i { color: var(--amber); }
+.submenu-item.danger i { color: var(--danger); }
+
+.submenu-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.submenu-name {
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 600;
+    font-size: .8rem;
+    letter-spacing: .08em;
+    color: var(--text);
+}
+
+.submenu-value {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: .6rem;
+    color: var(--text-dim);
+    letter-spacing: .06em;
+}
+.submenu-value.accent { color: var(--accent); }
+.submenu-value.amber { color: var(--amber); }
+.submenu-value.danger { color: var(--danger); }
+
+.submenu-chevron {
+    font-size: 1.2rem;
+    color: var(--text-dim);
+    opacity: .4;
+}
+
+/* --- Status Grid ------------------------------ */
+.status-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.status-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 7px 10px;
+    background: var(--bg);
+    border-radius: var(--radius);
+}
+
+.status-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: .65rem;
+    color: var(--text-dim);
+    letter-spacing: .08em;
+}
+
+.status-val {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: .7rem;
+    color: var(--text);
+    letter-spacing: .05em;
+}
+.status-val.accent { color: var(--accent); }
+.status-val.amber { color: var(--amber); }
+.status-val.danger { color: var(--danger); }
+
+/* --- Color Palette Swatches ------------------- */
+.palette-row {
+    grid-template-columns: repeat(6, 1fr);
+    gap: 6px;
+}
+
+.swatch {
+    min-width: 0;
+    aspect-ratio: 1;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: flex-end;
+    padding: 8px;
+}
+
+.swatch span {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: .55rem;
+    letter-spacing: .06em;
+    line-height: 1.5;
+    color: inherit;
+}
+
+/* --- Section hint text ------------------------ */
+.section-hint {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: .6rem;
+    color: var(--text-dim);
+    letter-spacing: .04em;
+    line-height: 1.5;
+}
+
+/* --- Auto-fit Grid Section -------------------- */
+.grid-wrap {
+    width: 100%;
+    box-sizing: border-box;
+}
+
+#auto-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    grid-auto-rows: 80px;
+    grid-auto-flow: dense;
+    gap: 6px;
+}
+
+/* Grid cells (non-card, non-button items) */
+.grid-cell {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    position: relative;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+}
+
+.grid-cell.gc-slider {
+    justify-content: center;
+    gap: 8px;
+}
+
+.grid-cell.gc-toggle {
+    justify-content: center;
+    gap: 4px;
+    padding: 6px 8px;
+}
+
+.grid-cell.gc-toggle .toggle-group {
+    min-height: 0;
+    flex-shrink: 1;
+}
+
+.grid-cell.gc-toggle .tg-option {
+    padding: 4px 0;
+    font-size: .7rem;
+}
+
+.grid-cell.gc-stepper {
+    justify-content: center;
+    gap: 6px;
+    container-type: inline-size;
+}
+
+/* Vertical stepper layout for narrow cells (1-col steppers) */
+@container (max-width: 120px) {
+    .stepper {
+        flex-direction: column;
+    }
+    .stepper-btn {
+        width: 100%;
+        height: 36px;
+    }
+    /* + button on top, value in middle, − button on bottom */
+    .stepper-btn[data-dir="+1"] { order: -1; }
+    .stepper-btn[data-dir="-1"] { order: 1; }
+    .stepper-val { order: 0; }
+
+    /* Shrink label to sit above the value compactly */
+    .gc-stepper .panel-label {
+        font-size: .5rem;
+        letter-spacing: .04em;
+        text-align: center;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 100%;
+    }
+}
+
+/* Extreme narrow: label becomes a single-line tag above the stepper.
+   First word is NEVER truncated — overflow just clips after it. */
+@container (max-width: 75px) {
+    .gc-stepper .panel-label {
+        display: -webkit-box;
+        -webkit-line-clamp: 1;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        white-space: normal;      /* allow word-wrap so clamp works */
+        word-break: keep-all;     /* never break mid-word */
+        overflow-wrap: normal;
+        text-overflow: ellipsis;
+        margin: 0 auto;
+        text-align: center;
+    }
+    /* Value always stays — compact it */
+    .stepper-val {
+        font-size: .85rem;
+        padding: 2px 0;
+    }
+    .stepper-btn {
+        height: 28px;
+        font-size: 1.1rem;
+    }
+}
+
+.grid-cell.gc-bar {
+    justify-content: center;
+    gap: 6px;
+}
+
+.grid-cell.gc-status {
+    gap: 4px;
+}
+
+/* --- Gauge (arc gauge) ------------------------ */
+.grid-cell.gc-gauge {
+    justify-content: center;
+    gap: 8px;
+}
+
+.gauge-svg {
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+}
+
+.gauge-track {
+    fill: none;
+    stroke: rgba(244,244,244, 0.06);
+    stroke-linecap: round;
+}
+
+.gauge-fill {
+    fill: none;
+    stroke: var(--accent);
+    stroke-linecap: round;
+    transition: stroke-dashoffset .4s ease;
+    filter: drop-shadow(0 0 3px currentColor);
+}
+
+.gauge-fill.color-amber  { stroke: var(--amber); }
+.gauge-fill.color-danger { stroke: var(--danger); }
+
+.gauge-tick {
+    stroke: rgba(244,244,244, 0.12);
+    stroke-width: 1;
+}
+
+/* --- Wave (animated waveform) ----------------- */
+.grid-cell.gc-wave {
+    justify-content: center;
+    gap: 8px;
+}
+
+.wave-canvas {
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    border-radius: 1px;
+}
+
+/* --- Matrix (pattern grid) -------------------- */
+.grid-cell.gc-matrix {
+    justify-content: center;
+    gap: 8px;
+}
+
+.matrix-grid {
+    display: grid;
+    gap: 2px;
+    flex: 1;
+    min-height: 0;
+}
+
+.matrix-cell {
+    border-radius: 1px;
+    background: rgba(244,244,244, 0.04);
+    transition: background .3s, box-shadow .3s;
+    min-width: 0;
+    min-height: 0;
+}
+
+.matrix-cell.lit {
+    background: var(--accent);
+    box-shadow: 0 0 4px rgba(0,229,255, 0.3);
+}
+
+.matrix-cell.lit.color-amber {
+    background: var(--amber);
+    box-shadow: 0 0 4px rgba(255,179,0, 0.3);
+}
+
+.matrix-cell.lit.color-danger {
+    background: var(--danger);
+    box-shadow: 0 0 4px rgba(255,51,51, 0.3);
+}
+
+/* --- Ring (concentric arcs) ------------------- */
+.grid-cell.gc-ring {
+    justify-content: center;
+    gap: 8px;
+}
+
+.ring-svg {
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+}
+
+.ring-track {
+    fill: none;
+    stroke: rgba(244,244,244, 0.06);
+    stroke-linecap: round;
+}
+
+.ring-fill {
+    fill: none;
+    stroke-linecap: round;
+    transition: stroke-dashoffset .4s ease;
+    filter: drop-shadow(0 0 2px currentColor);
+}
+
+/* Ring corner labels — positioned in each corner */
+.ring-corner {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    font-family: var(--font-data);
+    line-height: 1.25;
+    pointer-events: none;
+    z-index: 1;
+}
+.ring-corner-name {
+    font-size: .5rem;
+    letter-spacing: .08em;
+    opacity: .55;
+    text-transform: uppercase;
+}
+.ring-corner-val {
+    font-size: .55rem;
+    letter-spacing: .06em;
+}
+/* TL / TR top; BL / BR bottom */
+.ring-corner-tl { top: 6px; left: 7px;  align-items: flex-start; }
+.ring-corner-tr { top: 6px; right: 7px; align-items: flex-end; }
+.ring-corner-bl { bottom: 6px; left: 7px;  align-items: flex-start; }
+.ring-corner-br { bottom: 6px; right: 7px; align-items: flex-end; }
+
+/* --- Spark (sparkline) ------------------------ */
+.grid-cell.gc-spark {
+    justify-content: center;
+    gap: 8px;
+}
+
+.spark-canvas {
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    border-radius: 1px;
+}
+
+/* --- Scope (oscilloscope) --------------------- */
+.grid-cell.gc-scope {
+    justify-content: center;
+    gap: 8px;
+}
+
+.scope-canvas {
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    border-radius: 1px;
+    background: rgba(0, 12, 8, 0.6);
+}
+
+/* --- Level (vertical meter) ------------------- */
+.grid-cell.gc-level {
+    justify-content: center;
+    gap: 8px;
+}
+
+.level-meter {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 2px;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    max-width: 48px;
+    align-self: center;
+}
+
+.level-seg {
+    flex: 1;
+    min-height: 3px;
+    border-radius: 1px;
+    background: rgba(244,244,244, 0.06);
+    transition: background .15s, box-shadow .15s;
+}
+
+.level-seg.filled {
+    background: var(--accent);
+}
+
+.level-seg.filled.warn {
+    background: var(--amber);
+}
+
+.level-seg.filled.crit {
+    background: var(--danger);
+}
+
+.level-seg.peak-hold {
+    box-shadow: 0 0 6px var(--accent), inset 0 0 2px rgba(255,255,255,0.3);
+}
+
+.level-seg.peak-hold.warn {
+    box-shadow: 0 0 6px var(--amber);
+}
+
+.level-seg.peak-hold.crit {
+    box-shadow: 0 0 6px var(--danger);
+}
+
+/* Grid buttons: stretch to fill cell */
+#auto-grid .action-btn {
+    display: flex;
+}
+
+/* Grid cards: fill their cell */
+#auto-grid .card {
+    flex: none;
+    min-width: 0;
+    height: 100%;
+}
+
+/* --- nbeep Audio Controls --------------------- */
+.nbeep-input-row {
+    display: flex;
+    gap: 6px;
+    align-items: stretch;
+}
+
+.nbeep-input {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 8px 10px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: .7rem;
+    font-weight: 400;
+    letter-spacing: .06em;
+    color: var(--text);
+    outline: none;
+    text-transform: uppercase;
+}
+
+.nbeep-input::placeholder {
+    color: var(--text-dim);
+    opacity: 0.5;
+}
+
+.nbeep-input:focus {
+    border-color: rgba(0, 229, 255, 0.30);
+}
+
+.nbeep-play-btn {
+    flex-shrink: 0;
+    min-width: 80px;
+}
+
+.nbeep-hash-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 10px;
+    background: var(--bg);
+    border-radius: var(--radius);
+}
+
+.nbeep-test-panel {
+    gap: 8px;
+}
+
+/* --- Responsive ------------------------------- */
+@media (max-width: 600px) {
+    #auto-grid { grid-template-columns: repeat(2, 1fr); }
+    .demo-row { grid-template-columns: repeat(2, 1fr); }
+    .palette-row { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (max-width: 480px) {
+    #demo-main { padding: 0 10px 32px; }
+    .swatch { min-width: 0; }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Mobile Component Optimizations (≤480px)
+   Only affects phones — desktop / iPad rendering is untouched.
+   ══════════════════════════════════════════════════════════════ */
+
+@media (max-width: 480px) {
+    /* Demo layout: tighter section gap */
+    #demo-main {
+        gap: 20px;
+    }
+    .demo-section {
+        gap: 8px;
+    }
+    .section-label {
+        font-size: .58rem;
+        letter-spacing: .08em;
+    }
+    .section-hint {
+        font-size: .55rem;
+    }
+
+    /* Panels: compact padding */
+    .panel {
+        padding: 10px;
+        gap: 8px;
+    }
+    .panel-label {
+        font-size: .58rem;
+    }
+
+    /* Toggle groups: larger touch targets */
+    .tg-option {
+        padding: 10px 0;
+        font-size: .75rem;
+    }
+
+    /* Sliders: slightly shorter */
+    .seg-slider {
+        height: 24px;
+    }
+    .slider-readout {
+        font-size: .65rem;
+    }
+
+    /* Bars: same compact height */
+    .seg-bar {
+        height: 12px;
+    }
+
+    /* Steppers: good touch targets, slightly compact */
+    .stepper-btn {
+        width: 40px;
+        height: 40px;
+        font-size: 1.25rem;
+    }
+    .stepper-val {
+        font-size: 1rem;
+    }
+
+    /* Sub-menus: larger touch targets */
+    .submenu-item {
+        padding: 10px 10px;
+        gap: 10px;
+    }
+    .submenu-name {
+        font-size: .75rem;
+    }
+    .submenu-value {
+        font-size: .55rem;
+    }
+
+    /* Status grid: compact but readable */
+    .status-row {
+        padding: 6px 8px;
+    }
+    .status-label {
+        font-size: .6rem;
+    }
+    .status-val {
+        font-size: .65rem;
+    }
+
+    /* Swatches: remove label padding on small screens */
+    .swatch {
+        padding: 5px;
+    }
+    .swatch span {
+        font-size: .5rem;
+    }
+
+    /* nbeep input row */
+    .nbeep-input {
+        padding: 6px 8px;
+        font-size: .65rem;
+    }
+    .nbeep-play-btn {
+        min-width: 60px;
+    }
+
+    /* Grid cells: already tightened in subpage.css */
+    .grid-cell {
+        padding: 8px;
+    }
+    .grid-cell.gc-slider {
+        gap: 5px;
+    }
+    .grid-cell.gc-toggle {
+        gap: 3px;
+    }
+}
+
+/* Very small phones */
+@media (max-width: 374px) {
+    #demo-main {
+        padding: 0 8px 24px;
+        gap: 16px;
+    }
+    .panel {
+        padding: 8px;
+    }
+    .tg-option {
+        font-size: .68rem;
+        letter-spacing: 0;
+    }
+    .submenu-item {
+        padding: 8px;
+        gap: 8px;
+    }
+    .submenu-item i {
+        font-size: 1rem;
+        width: 20px;
+    }
+    .stepper-btn {
+        width: 36px;
+        height: 36px;
+    }
+}
+
+/* Landscape phone */
+@media (max-width: 768px) and (max-height: 420px) {
+    .demo-section {
+        gap: 6px;
+    }
+    .panel {
+        padding: 8px;
+        gap: 6px;
+    }
+    .seg-slider {
+        height: 20px;
+    }
+    .seg-bar {
+        height: 10px;
+    }
+    .tg-option {
+        padding: 6px 0;
+    }
+}

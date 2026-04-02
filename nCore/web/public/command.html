@@ -1,0 +1,1391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>ClusterFlock — Command</title>
+    <link rel="stylesheet" href="notum_AHI/css/phosphor.css?v=20260330">
+    <link rel="stylesheet" href="notum_AHI/css/style.css?v=20260330">
+    <link rel="stylesheet" href="notum_AHI/css/notum.css?v=20260330">
+    <link rel="stylesheet" href="app.css?v=20260330">
+</head>
+<body>
+<div class="cf-app">
+    <header>
+        <h1>CLUSTER<span class="accent">FLOCK</span></h1>
+    </header>
+
+    <!--#include file="nav.part"-->
+
+    <main>
+        <!-- Action Bar -->
+        <div class="btn-row">
+            <button class="cf-btn primary" id="btn-autoload" data-flash data-lockout="2000">
+                <i class="ph ph-lightning"></i> AUTOLOAD
+            </button>
+            <button class="cf-btn" id="btn-add-node" data-flash>
+                <i class="ph ph-plus-circle"></i> ADD AGENT
+            </button>
+            <button class="cf-btn" id="btn-hf-import" data-flash>
+                <i class="ph ph-download-simple"></i> IMPORT HF
+            </button>
+            <button class="cf-btn" id="btn-toggle-lock" data-flash>
+                <i class="ph ph-lock-simple"></i> <span id="lock-label">LOCK</span>
+            </button>
+            <button class="cf-btn" id="btn-toggle-tight" data-flash style="display:none">
+                <i class="ph ph-rows"></i> <span id="tight-label">TIGHT PACK</span>
+            </button>
+            <button class="cf-btn" id="btn-gc" data-flash data-lockout="2000">
+                <i class="ph ph-broom"></i> GC
+            </button>
+            <button class="cf-btn" id="btn-toggle-access" data-flash>
+                <i class="ph ph-shield-check"></i> <span id="access-label">APPROVE</span>
+            </button>
+        </div>
+
+        <!-- Nodes -->
+        <div class="cf-section">
+            <div class="cf-section-label">NODES</div>
+            <div class="node-grid" id="node-grid"></div>
+        </div>
+
+        <!-- Autoload Status -->
+        <div class="cf-panel" id="autoload-panel" style="display:none;">
+            <span class="corner corner-tl">⌜</span>
+            <span class="corner corner-tr">⌝</span>
+            <span class="corner corner-bl">⌞</span>
+            <span class="corner corner-br">⌟</span>
+            <div class="cf-section-label">AUTOLOAD</div>
+            <div id="al-status-text" class="status-val">[ IDLE ]</div>
+            <div id="al-steps"></div>
+        </div>
+
+        <!-- Benchmark Autoload Status -->
+        <div class="cf-panel" id="bench-panel" style="display:none;">
+            <span class="corner corner-tl">⌜</span>
+            <span class="corner corner-tr">⌝</span>
+            <span class="corner corner-bl">⌞</span>
+            <span class="corner corner-br">⌟</span>
+            <div class="cf-section-label">BENCHMARK AUTOLOAD</div>
+            <div id="bench-status-text" class="status-val">[ IDLE ]</div>
+            <div id="bench-progress" class="status-row" style="margin:4px 0;">
+                <span class="status-label">PROGRESS</span>
+                <span class="status-val" id="bench-progress-val">[ 0 / 0 ]</span>
+            </div>
+            <div id="bench-devices"></div>
+            <div id="bench-log" style="margin-top:8px;max-height:200px;overflow-y:auto;font-size:.5rem;opacity:.7;"></div>
+        </div>
+
+        <!-- Pending Approvals -->
+        <div class="cf-section" id="pending-section" style="display:none;">
+            <div class="cf-section-label">PENDING APPROVAL</div>
+            <div id="pending-grid" class="node-grid"></div>
+        </div>
+
+        <!-- Downloaded Models -->
+        <div class="cf-section" id="downloads-section" style="display:none;">
+            <div class="cf-section-label">DOWNLOADED MODELS</div>
+            <div id="downloads-grid"></div>
+        </div>
+
+        <!-- Prompt -->
+        <div class="cf-section">
+            <div class="cf-section-label">CLUSTER PROMPT</div>
+            <div class="chat-input-row">
+                <textarea id="prompt-input" rows="2" placeholder="Send a prompt to all endpoints..."></textarea>
+                <div class="send-btn" id="btn-send" data-flash data-lockout="1000">
+                    <i class="ph ph-paper-plane-tilt"></i>
+                </div>
+            </div>
+            <div id="responses"></div>
+        </div>
+    </main>
+
+    <!--#include file="footer.part"-->
+</div>
+
+<!-- Add Agent Overlay -->
+<div class="cf-overlay" id="addnode-overlay">
+    <div class="cf-overlay-panel">
+        <span class="corner corner-tl">⌜</span>
+        <span class="corner corner-tr">⌝</span>
+        <span class="corner corner-bl">⌞</span>
+        <span class="corner corner-br">⌟</span>
+        <div class="cf-overlay-title">ADD AGENT</div>
+        <input class="cf-input" id="an-address" placeholder="Agent address (e.g. 192.168.1.50:1903)">
+        <div class="btn-row">
+            <button class="cf-btn primary" id="an-btn-pair" data-flash data-lockout="1500">PAIR</button>
+            <button class="cf-btn" id="an-btn-cancel" data-flash>CANCEL</button>
+        </div>
+        <div id="an-status" class="status-val"></div>
+    </div>
+</div>
+
+<!-- HuggingFace Import Overlay -->
+<div class="cf-overlay" id="hf-overlay">
+    <div class="cf-overlay-panel" style="max-width:520px;">
+        <span class="corner corner-tl">⌜</span>
+        <span class="corner corner-tr">⌝</span>
+        <span class="corner corner-bl">⌞</span>
+        <span class="corner corner-br">⌟</span>
+        <div class="cf-overlay-title">IMPORT FROM HUGGINGFACE</div>
+
+        <!-- Device selector -->
+        <div class="cf-section-label" style="font-size:.55rem;margin:0;">TARGET DEVICE</div>
+        <select class="cf-select" id="hf-device" style="width:100%;">
+            <option value="">Select target device...</option>
+        </select>
+
+        <!-- Model list (populated when device selected) -->
+        <div id="hf-model-list" style="display:none;">
+            <div class="cf-section-label" style="font-size:.55rem;margin:0;">MODELS THAT FIT</div>
+            <div id="hf-model-items" style="max-height:240px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;"></div>
+        </div>
+
+        <!-- Divider -->
+        <div style="border-top:1px solid rgba(244,244,244,0.08);margin:4px 0;"></div>
+
+        <!-- Manual URL entry (always available) -->
+        <div class="cf-section-label" style="font-size:.55rem;margin:0;">MANUAL URL</div>
+        <input class="cf-input" id="hf-url" placeholder="HuggingFace URL or org/model">
+        <select class="cf-select" id="hf-agent" style="width:100%;">
+            <option value="">Select target agent...</option>
+        </select>
+        <select class="cf-select" id="hf-quant" style="width:100%;">
+            <option value="Q4_K_M">Q4_K_M (default)</option>
+            <option value="Q5_K_M">Q5_K_M</option>
+            <option value="Q6_K">Q6_K</option>
+            <option value="Q8_0">Q8_0</option>
+            <option value="IQ4_XS">IQ4_XS</option>
+        </select>
+        <select class="cf-select" id="hf-gpu" style="width:100%;">
+            <option value="">GPU: auto</option>
+        </select>
+        <div class="btn-row">
+            <button class="cf-btn primary" id="hf-btn-go" data-flash data-lockout="2000">DOWNLOAD & LOAD</button>
+            <button class="cf-btn" id="hf-btn-cancel" data-flash>CANCEL</button>
+        </div>
+        <div id="hf-status" class="status-val"></div>
+        <div id="hf-progress" style="display:none;">
+            <div class="metric-row">
+                <span class="metric-label">PROGRESS</span>
+                <span class="metric-val" id="hf-progress-text">[ 0% ]</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Node Detail Overlay -->
+<div class="cf-overlay" id="node-overlay">
+    <div class="cf-overlay-panel" style="max-width:560px;">
+        <span class="corner corner-tl">⌜</span>
+        <span class="corner corner-tr">⌝</span>
+        <span class="corner corner-bl">⌞</span>
+        <span class="corner corner-br">⌟</span>
+        <div class="cf-overlay-title" id="no-title">NODE</div>
+        <div id="no-detail"></div>
+
+        <div id="no-downloaded" style="margin-top:8px;"></div>
+
+        <div id="no-load-section" style="margin-top:8px;">
+            <div class="cf-section-label" style="font-size:.55rem;">LOAD MODEL</div>
+            <select class="cf-select" id="no-load-model" style="width:100%;margin-bottom:4px;">
+                <option value="">Select model...</option>
+            </select>
+            <div style="display:flex;gap:4px;">
+                <select class="cf-select" id="no-load-gpu" style="flex:1;">
+                    <option value="">GPU: auto</option>
+                </select>
+                <input class="cf-input" id="no-load-ctx" placeholder="Context (default)" style="flex:1;width:auto;">
+            </div>
+            <div class="btn-row" style="margin-top:4px;">
+                <button class="cf-btn primary" id="no-btn-load" data-flash data-lockout="1500">LOAD</button>
+            </div>
+        </div>
+
+        <div id="no-configure" style="margin-top:8px;display:none;">
+            <div class="cf-section-label" style="font-size:.55rem;">CONFIGURE</div>
+            <div class="status-row">
+                <span class="status-label">CPU/RAM DEVICE</span>
+                <button class="cf-btn" id="no-btn-cpuram" data-flash data-lockout="800" style="font-size:.55rem;padding:2px 8px;">ENABLE</button>
+            </div>
+        </div>
+
+        <div class="btn-row" style="margin-top:8px;">
+            <button class="cf-btn danger" id="no-btn-remove" data-flash data-lockout="800">REMOVE NODE</button>
+            <button class="cf-btn" id="no-btn-close" data-flash>CLOSE</button>
+        </div>
+    </div>
+</div>
+
+<!-- Autoload Mode Overlay -->
+<div class="cf-overlay" id="autoload-overlay">
+    <div class="cf-overlay-panel">
+        <span class="corner corner-tl">⌜</span>
+        <span class="corner corner-tr">⌝</span>
+        <span class="corner corner-bl">⌞</span>
+        <span class="corner corner-br">⌟</span>
+        <div class="cf-overlay-title">AUTOLOAD MODE</div>
+        <p style="font-size:.55rem;opacity:.7;margin:0 0 12px 0;">Choose how to load models across the cluster.</p>
+        <div class="btn-row" style="flex-direction:column;gap:8px;">
+            <button class="cf-btn primary" id="al-btn-quick" data-flash data-lockout="2000" style="width:100%;text-align:left;padding:8px 12px;">
+                <i class="ph ph-lightning"></i> QUICK AUTOLOAD
+                <div style="font-size:.45rem;opacity:.6;margin-top:2px;">Load best downloaded models instantly. Fast, no benchmarking.</div>
+            </button>
+            <button class="cf-btn" id="al-btn-bench" data-flash style="width:100%;text-align:left;padding:8px 12px;">
+                <i class="ph ph-chart-line-up"></i> BENCHMARK AUTOLOAD
+                <div style="font-size:.45rem;opacity:.6;margin-top:2px;">Progressively find optimal models per device. Downloads &amp; benchmarks.</div>
+            </button>
+        </div>
+        <div id="al-bench-options" style="display:none;margin-top:12px;">
+            <div class="cf-section-label" style="font-size:.5rem;">BENCHMARK OPTIONS</div>
+            <div class="status-row" style="margin:4px 0;">
+                <span class="status-label" style="font-size:.5rem;">TARGET tok/s</span>
+                <input class="cf-input" id="al-target-tps" type="number" value="50" min="1" max="500" step="5" style="width:80px;text-align:center;">
+            </div>
+            <p style="font-size:.45rem;opacity:.5;margin:4px 0 8px 0;">
+                Starts with smallest model (25% VRAM), benchmarks, then progressively
+                tries bigger models until tok/s is near target. Up to 40 iterations per cluster.
+            </p>
+            <div class="btn-row">
+                <button class="cf-btn primary" id="al-btn-bench-go" data-flash data-lockout="2000">
+                    <i class="ph ph-play"></i> START BENCHMARK
+                </button>
+                <button class="cf-btn" id="al-btn-bench-cancel" data-flash>CANCEL</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="ahi-toast-container"></div>
+
+<div id="dialog-overlay" class="dialog-overlay">
+    <div id="dialog-box" class="dialog-box"></div>
+</div>
+
+<script src="notum_AHI/js/nRegistry.js?v=20260330"></script>
+<script src="notum_AHI/js/nUtils.js?v=20260330"></script>
+<script src="notum_AHI/js/nComp.js?v=20260330"></script>
+<script src="notum_AHI/js/nNotify.js?v=20260330"></script>
+<script src="notum_AHI/js/nDynamic.js?v=20260330"></script>
+<script>
+(function() {
+    'use strict';
+
+    var POLL = 5000;
+    var BASE = '';
+    var connected = false;
+    var nodesCache = [];
+    var downloadsCache = [];
+    var selectedNodeId = null;
+    var autoloadActive = false;
+    var activeJobs = []; // {node_id, job_id, model_id}
+    var benchNodeIds = new Set(); // node_ids currently being benchmarked
+
+    // Nav
+    document.querySelectorAll('.nav-tab').forEach(function(t) {
+        if (t.getAttribute('href') === '/command.html') t.classList.add('active');
+    });
+
+    // Toast
+    function toast(msg, level, dur) {
+        level = level || 'info'; dur = dur || 3000;
+        var c = document.getElementById('ahi-toast-container');
+        var el = document.createElement('div');
+        el.className = 'ahi-toast ' + level;
+        el.textContent = msg;
+        c.appendChild(el);
+        requestAnimationFrame(function() { el.classList.add('visible'); });
+        if (typeof nbeep === 'function') nbeep('toast_' + level);
+        setTimeout(function() {
+            el.classList.remove('visible');
+            setTimeout(function() { el.remove(); }, 300);
+        }, dur);
+    }
+
+    // Connection
+    function setConn(val) {
+        if (val === connected) return;
+        connected = val;
+        toast(val ? 'LINK RESTORED' : 'LINK DOWN', val ? 'ok' : 'error');
+    }
+
+    function escHtml(s) {
+        if (!s) return '';
+        var d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+    }
+
+    function fmtBytes(mb) {
+        if (mb == null) return '—';
+        if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
+        return Math.round(mb) + ' MB';
+    }
+
+    function segBar(filled, total, color) {
+        var segs = [];
+        for (var i = 0; i < total; i++) {
+            var cls = i < filled ? 'seg filled' + (color ? ' ' + color : '') : 'seg';
+            segs.push('<div class="' + cls + '"></div>');
+        }
+        return segs.join('');
+    }
+
+    function vramColor(pct) {
+        if (pct >= 90) return 'crit';
+        if (pct >= 70) return 'warn';
+        return '';
+    }
+
+    // ── Render node cards ──
+    function renderNodes(nodes) {
+        nodesCache = nodes || [];
+        var grid = document.getElementById('node-grid');
+        if (!nodes.length) {
+            grid.innerHTML = '<div class="status-val" style="padding:8px 0;">[ NO NODES ]</div>';
+            return;
+        }
+
+        var html = '';
+        nodes.forEach(function(n) {
+            var st = n.status || 'dead';
+            var gpus = (n.hardware && n.hardware.gpu) || [];
+            var eps = n.endpoints || [];
+            var at = (n.agent_type || '').toUpperCase() || 'LMS';
+
+            html += '<div class="node-card ' + st + '" data-node-id="' + escHtml(n.node_id) + '" style="cursor:pointer;">';
+            html += '<span class="corner corner-tl">⌜</span><span class="corner corner-tr">⌝</span>';
+            html += '<span class="corner corner-bl">⌞</span><span class="corner corner-br">⌟</span>';
+            html += '<div class="node-header">';
+            html += '<div><div class="node-hostname">' + escHtml(n.hostname || n.node_id) + '</div>';
+            html += '<div class="node-id">' + escHtml(n.node_id) + '</div></div>';
+            html += '<div class="node-badges">';
+            html += '<span class="node-badge ' + st + '">' + st.toUpperCase() + '</span>';
+            html += '<span class="node-badge agent-type">' + at + '</span>';
+            html += '</div></div>';
+
+            // Endpoints with action buttons
+            if (eps.length) {
+                html += '<div class="endpoint-tags">';
+                eps.forEach(function(ep) {
+                    var cls = ep.status === 'ready' ? 'ready' : ep.status === 'loading' ? 'loading' : ep.status === 'error' ? 'error' : '';
+                    var tps = ep.tokens_per_sec ? Math.round(ep.tokens_per_sec) + ' t/s' : '';
+                    html += '<span class="endpoint-tag ' + cls + '" data-action="unload" data-model="' + escHtml(ep.model) + '" data-flash style="cursor:pointer;">';
+                    if (ep.graylisted) html += '⚠️ ';
+                    html += escHtml(ep.model || '?');
+                    if (tps) html += ' <span class="ep-tps">' + tps + '</span>';
+                    html += '</span>';
+                });
+                html += '</div>';
+            }
+
+            // GPU info (compact)
+            gpus.forEach(function(gpu) {
+                var vt = gpu.vram_total_mb || gpu.vramTotal || 0;
+                var vu = gpu.vram_used_mb || gpu.vramUsed || 0;
+                var pct = vt > 0 ? Math.round((vu / vt) * 100) : 0;
+                html += '<div class="metric-row">';
+                html += '<span class="metric-label">' + escHtml(gpu.name || gpu.device || 'GPU') + '</span>';
+                html += '<span class="metric-val">[ ' + fmtBytes(vu) + ' / ' + fmtBytes(vt) + ' — ' + pct + '% ]</span>';
+                html += '</div>';
+            });
+
+            // Downloaded count
+            var dlCount = (n.downloaded || []).length;
+            if (dlCount > 0) {
+                html += '<div class="metric-row">';
+                html += '<span class="metric-label">DOWNLOADED</span>';
+                html += '<span class="metric-val">[ ' + dlCount + ' model' + (dlCount > 1 ? 's' : '') + ' ]</span>';
+                html += '</div>';
+            }
+
+            html += '</div>';
+        });
+        grid.innerHTML = html;
+
+        // Click handlers for node detail (entire card)
+        grid.querySelectorAll('.node-card').forEach(function(card) {
+            card.addEventListener('click', function() {
+                showNodeDetail(card.dataset.nodeId);
+            });
+        });
+
+        // Click handlers for unload
+        grid.querySelectorAll('[data-action="unload"]').forEach(function(el) {
+            el.addEventListener('click', function(e) {
+                e.stopPropagation();
+                var card = el.closest('.node-card');
+                var model = el.dataset.model;
+                var nodeId = card ? card.dataset.nodeId : null;
+                if (nodeId && model) {
+                    nDynamic.showDialog({
+                        title: 'Unload Model',
+                        body: 'Unload ' + model + '?',
+                        alarm: false,
+                        buttons: [
+                            { label: 'UNLOAD', value: 'yes', style: 'warning' },
+                            { label: 'CANCEL', value: null }
+                        ]
+                    }).then(function(val) {
+                        if (val === 'yes') unloadModel(nodeId, model);
+                    });
+                }
+            });
+        });
+
+        // nComp pips + bench-active highlight
+        if (typeof nComp !== 'undefined') {
+            grid.querySelectorAll('.node-card').forEach(function(card) {
+                if (card.classList.contains('healthy')) nComp.status(card, 'ok');
+                else if (card.classList.contains('stale')) nComp.status(card, 'warn');
+                else nComp.status(card, 'error');
+            });
+        }
+        grid.querySelectorAll('.node-card').forEach(function(card) {
+            var nid = card.dataset.nodeId;
+            if (benchNodeIds.has(nid)) card.classList.add('bench-active');
+            else card.classList.remove('bench-active');
+        });
+    }
+
+    // ── Node Detail ──
+    function showNodeDetail(nodeId) {
+        selectedNodeId = nodeId;
+        var node = nodesCache.find(function(n) { return n.node_id === nodeId; });
+        if (!node) return;
+
+        document.getElementById('no-title').textContent = (node.hostname || nodeId).toUpperCase();
+        var html = '';
+        html += '<div class="status-row"><span class="status-label">NODE ID</span><span class="status-val">' + escHtml(nodeId) + '</span></div>';
+        html += '<div class="status-row"><span class="status-label">STATUS</span><span class="status-val ' + (node.status === 'healthy' ? 'accent' : node.status === 'stale' ? 'amber' : 'danger') + '">[ ' + (node.status || 'UNKNOWN').toUpperCase() + ' ]</span></div>';
+        html += '<div class="status-row"><span class="status-label">AGENT TYPE</span><span class="status-val">' + escHtml((node.agent_type || 'lms').toUpperCase()) + '</span></div>';
+        html += '<div class="status-row"><span class="status-label">CONNECTION</span><span class="status-val">' + escHtml((node.conn_mode || '—').toUpperCase()) + '</span></div>';
+        if (node.address) html += '<div class="status-row"><span class="status-label">ADDRESS</span><span class="status-val">' + escHtml(node.address) + '</span></div>';
+        if (node.agent_version) html += '<div class="status-row"><span class="status-label">AGENT VERSION</span><span class="status-val' + (node.version_ok === false ? ' danger' : '') + '">' + escHtml(node.agent_version) + '</span></div>';
+
+        // Loaded endpoints
+        var eps = node.endpoints || [];
+        if (eps.length) {
+            html += '<div class="cf-section-label" style="font-size:.55rem;margin-top:8px;">LOADED MODELS</div>';
+            eps.forEach(function(ep) {
+                var tps = ep.tokens_per_sec ? ' · ' + Math.round(ep.tokens_per_sec) + ' t/s' : '';
+                var ctx = ep.context_length ? ' · ctx ' + ep.context_length : '';
+                html += '<div class="status-row"><span class="status-label">' + escHtml(ep.model || '?') + '</span><span class="status-val accent">' + escHtml((ep.status || '?').toUpperCase()) + tps + ctx + '</span></div>';
+            });
+        }
+
+        // GPUs
+        var gpus = (node.hardware && node.hardware.gpu) || [];
+        if (gpus.length) {
+            html += '<div class="cf-section-label" style="font-size:.55rem;margin-top:8px;">GPUs</div>';
+            gpus.forEach(function(gpu, i) {
+                var vt = gpu.vram_total_mb || gpu.vramTotal || 0;
+                var vu = gpu.vram_used_mb || gpu.vramUsed || 0;
+                var pct = vt > 0 ? Math.round((vu / vt) * 100) : 0;
+                var filled = Math.round(pct / 10);
+                html += '<div class="status-row"><span class="status-label">GPU ' + i + ': ' + escHtml(gpu.name || '?') + '</span><span class="status-val">' + fmtBytes(vu) + ' / ' + fmtBytes(vt) + '</span></div>';
+                html += '<div class="metric-row" style="margin:2px 0 4px;">';
+                html += '<span class="metric-label">VRAM</span>';
+                html += '<div class="metric-bar">' + segBar(filled, 10, vramColor(pct)) + '</div>';
+                html += '<span class="metric-val">[ ' + pct + '% ]</span>';
+                html += '</div>';
+
+                // GPU utilization
+                var gpuMetrics = (node.metrics && node.metrics.gpu) || [];
+                var gm = gpuMetrics[i];
+                if (gm && gm.utilization_pct != null) {
+                    var uFilled = Math.round(gm.utilization_pct / 10);
+                    html += '<div class="metric-row" style="margin:0 0 4px;">';
+                    html += '<span class="metric-label">UTIL</span>';
+                    html += '<div class="metric-bar">' + segBar(uFilled, 10, vramColor(gm.utilization_pct)) + '</div>';
+                    html += '<span class="metric-val">[ ' + Math.round(gm.utilization_pct) + '% ]</span>';
+                    html += '</div>';
+                }
+            });
+        }
+
+        // System HW grid
+        var hw = node.hardware || {};
+        if (hw.system) {
+            html += '<div class="cf-section-label" style="font-size:.55rem;margin-top:8px;">SYSTEM</div>';
+            if (hw.system.cpu_name) html += '<div class="status-row"><span class="status-label">CPU</span><span class="status-val">' + escHtml(hw.system.cpu_name) + '</span></div>';
+            if (hw.system.cpu_cores) html += '<div class="status-row"><span class="status-label">CORES</span><span class="status-val">' + hw.system.cpu_cores + '</span></div>';
+            if (hw.system.ram_total_mb) html += '<div class="status-row"><span class="status-label">RAM</span><span class="status-val">' + fmtBytes(hw.system.ram_total_mb) + '</span></div>';
+            if (hw.system.os) html += '<div class="status-row"><span class="status-label">OS</span><span class="status-val">' + escHtml(hw.system.os) + '</span></div>';
+            if (hw.system.disk_total_gb) html += '<div class="status-row"><span class="status-label">DISK</span><span class="status-val">' + hw.system.disk_total_gb + ' GB</span></div>';
+        }
+
+        // System metrics bars
+        var sysM = (node.metrics && node.metrics.system) || {};
+        if (sysM.cpu_percent != null || sysM.ram_percent != null || sysM.disk_percent != null) {
+            html += '<div class="cf-section-label" style="font-size:.55rem;margin-top:8px;">METRICS</div>';
+            if (sysM.cpu_percent != null) {
+                var cpuF = Math.round(sysM.cpu_percent / 10);
+                html += '<div class="metric-row" style="margin:2px 0;">';
+                html += '<span class="metric-label">CPU</span>';
+                html += '<div class="metric-bar">' + segBar(cpuF, 10, vramColor(sysM.cpu_percent)) + '</div>';
+                html += '<span class="metric-val">[ ' + Math.round(sysM.cpu_percent) + '% ]</span>';
+                html += '</div>';
+            }
+            if (sysM.ram_percent != null) {
+                var ramF = Math.round(sysM.ram_percent / 10);
+                html += '<div class="metric-row" style="margin:2px 0;">';
+                html += '<span class="metric-label">RAM</span>';
+                html += '<div class="metric-bar">' + segBar(ramF, 10, vramColor(sysM.ram_percent)) + '</div>';
+                html += '<span class="metric-val">[ ' + Math.round(sysM.ram_percent) + '% ]</span>';
+                html += '</div>';
+            }
+            if (sysM.disk_percent != null) {
+                var diskF = Math.round(sysM.disk_percent / 10);
+                html += '<div class="metric-row" style="margin:2px 0;">';
+                html += '<span class="metric-label">DISK</span>';
+                html += '<div class="metric-bar">' + segBar(diskF, 10, vramColor(sysM.disk_percent)) + '</div>';
+                html += '<span class="metric-val">[ ' + Math.round(sysM.disk_percent) + '% ]</span>';
+                html += '</div>';
+            }
+        }
+
+        document.getElementById('no-detail').innerHTML = html;
+
+        // Downloaded models for this node
+        var dlHtml = '';
+        var nodeDownloads = (node.downloaded || []);
+        if (nodeDownloads.length) {
+            dlHtml += '<div class="cf-section-label" style="font-size:.55rem;">DOWNLOADED ON THIS NODE</div>';
+            nodeDownloads.forEach(function(m) {
+                var sz = m.file_size ? fmtBytes(m.file_size / (1024*1024)) : '';
+                var mid = escHtml(m.id || m.name || '?');
+                dlHtml += '<div class="status-row" style="align-items:center;"><span class="status-label" style="font-size:.55rem;flex:1;">' + mid + '</span><span class="status-val" style="margin-right:6px;">' + sz + '</span>';
+                dlHtml += '<span class="cf-btn-del" data-del-model="' + mid + '" title="Delete model" style="cursor:pointer;color:#ff4444;font-size:.6rem;font-weight:700;padding:0 4px;opacity:.6;">✕</span>';
+                dlHtml += '</div>';
+            });
+        }
+        document.getElementById('no-downloaded').innerHTML = dlHtml;
+
+        // Wire up delete buttons
+        document.querySelectorAll('.cf-btn-del[data-del-model]').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var mid = this.getAttribute('data-del-model');
+                if (!confirm('Delete ' + mid + ' from ' + (node.hostname || nodeId) + '?')) return;
+                var self = this;
+                self.style.opacity = '0.3';
+                self.style.pointerEvents = 'none';
+                fetch(BASE + '/api/v1/nodes/' + encodeURIComponent(nodeId) + '/delete_model', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ model_id: mid })
+                })
+                .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+                .then(function(res) {
+                    if (res.ok && res.data.ok) {
+                        toast('DELETED ' + mid + ' — freed ' + (res.data.freed_gb || 0) + ' GB', 'ok', 4000);
+                        var row = self.closest('.status-row');
+                        if (row) row.remove();
+                    } else {
+                        toast('DELETE FAILED: ' + (res.data.error || 'unknown'), 'error', 5000);
+                        self.style.opacity = '.6';
+                        self.style.pointerEvents = '';
+                    }
+                })
+                .catch(function() {
+                    toast('DELETE FAILED: connection error', 'error', 5000);
+                    self.style.opacity = '.6';
+                    self.style.pointerEvents = '';
+                });
+            });
+        });
+
+        // Populate load-model dropdown with downloaded models
+        var loadSel = document.getElementById('no-load-model');
+        loadSel.innerHTML = '<option value="">Select model...</option>';
+        nodeDownloads.forEach(function(m) {
+            loadSel.innerHTML += '<option value="' + escHtml(m.id || m.name || '') + '">' + escHtml(m.id || m.name || '?') + '</option>';
+        });
+
+        // Populate GPU dropdown
+        var gpuSel = document.getElementById('no-load-gpu');
+        gpuSel.innerHTML = '<option value="">GPU: auto</option>';
+        gpus.forEach(function(g, i) {
+            gpuSel.innerHTML += '<option value="' + i + '">GPU ' + i + ': ' + escHtml(g.name || 'GPU') + '</option>';
+        });
+
+        // Show/hide load section based on whether there are downloads
+        document.getElementById('no-load-section').style.display = nodeDownloads.length ? '' : 'none';
+
+        // CPU/RAM configure — only for linux agents
+        var cfgSection = document.getElementById('no-configure');
+        if (node.agent_type === 'linux') {
+            cfgSection.style.display = '';
+            var cpuBtn = document.getElementById('no-btn-cpuram');
+            cpuBtn.textContent = node.cpu_ram_enabled ? 'DISABLE' : 'ENABLE';
+        } else {
+            cfgSection.style.display = 'none';
+        }
+
+        document.getElementById('node-overlay').classList.add('open');
+    }
+
+    // ── Overlays ──
+    function closeOverlay(id) {
+        document.getElementById(id).classList.remove('open');
+    }
+
+    document.getElementById('btn-add-node').addEventListener('click', function() {
+        document.getElementById('addnode-overlay').classList.add('open');
+    });
+    document.getElementById('an-btn-cancel').addEventListener('click', function() {
+        closeOverlay('addnode-overlay');
+    });
+    var hfCatalogCache = null;
+
+    function fmtGB(bytes) { return (bytes / 1073741824).toFixed(1); }
+
+    document.getElementById('btn-hf-import').addEventListener('click', function() {
+        // Populate agent dropdown
+        var sel = document.getElementById('hf-agent');
+        sel.innerHTML = '<option value="">Select target agent...</option>';
+        nodesCache.forEach(function(n) {
+            if (n.status === 'healthy') {
+                sel.innerHTML += '<option value="' + escHtml(n.node_id) + '">' + escHtml(n.hostname || n.node_id) + '</option>';
+            }
+        });
+        // Reset GPU dropdown (populated on agent change)
+        document.getElementById('hf-gpu').innerHTML = '<option value="">GPU: auto</option>';
+        document.getElementById('hf-status').textContent = '';
+        document.getElementById('hf-progress').style.display = 'none';
+
+        // Populate device selector with all GPUs across all nodes
+        var devSel = document.getElementById('hf-device');
+        devSel.innerHTML = '<option value="">Select target device...</option>';
+        nodesCache.forEach(function(n) {
+            if (n.status !== 'healthy') return;
+            var gpus = (n.hardware && n.hardware.gpu) || [];
+            var mgpus = (n.metrics && n.metrics.gpu) || [];
+            gpus.forEach(function(g, i) {
+                var mg = mgpus[i] || {};
+                var freeMB = mg.vram_free_mb || 0;
+                var totalMB = g.vram_total_mb || 0;
+                var label = (n.hostname || n.node_id) + ' — ' + (g.name || 'GPU ' + i) + ' [' + (freeMB / 1024).toFixed(1) + ' / ' + (totalMB / 1024).toFixed(1) + ' GB]';
+                devSel.innerHTML += '<option value="' + escHtml(n.node_id) + ':' + i + ':' + freeMB + '">' + escHtml(label) + '</option>';
+            });
+        });
+        // Reset model list
+        document.getElementById('hf-model-list').style.display = 'none';
+        document.getElementById('hf-model-items').innerHTML = '';
+
+        // Fetch catalog if not cached
+        if (!hfCatalogCache) {
+            fetch(BASE + '/api/v1/catalog').then(function(r) { return r.json(); }).then(function(d) {
+                hfCatalogCache = (d.models || []).filter(function(m) { return m.file_size > 0; });
+            });
+        }
+
+        document.getElementById('hf-overlay').classList.add('open');
+    });
+
+    // Device selector -> populate model list
+    document.getElementById('hf-device').addEventListener('change', function() {
+        var listDiv = document.getElementById('hf-model-list');
+        var itemsDiv = document.getElementById('hf-model-items');
+        itemsDiv.innerHTML = '';
+        if (!this.value) { listDiv.style.display = 'none'; return; }
+
+        var parts = this.value.split(':');
+        var nodeId = parts[0], gpuIdx = parseInt(parts[1]), freeMB = parseInt(parts[2]);
+        var freeBytes = freeMB * 1048576;
+
+        // Auto-set agent + GPU from device selection
+        var agentSel = document.getElementById('hf-agent');
+        agentSel.value = nodeId;
+        var gpuSel = document.getElementById('hf-gpu');
+        gpuSel.innerHTML = '<option value="">GPU: auto</option>';
+        var selNode = nodesCache.find(function(n) { return n.node_id === nodeId; });
+        if (selNode && selNode.hardware && selNode.hardware.gpu) {
+            selNode.hardware.gpu.forEach(function(g, i) {
+                gpuSel.innerHTML += '<option value="' + i + '">GPU ' + i + ': ' + escHtml(g.name || 'GPU') + '</option>';
+            });
+        }
+        gpuSel.value = String(gpuIdx);
+
+        if (!hfCatalogCache) {
+            itemsDiv.innerHTML = '<div style="color:#f4f4f4aa;font-size:.55rem;padding:6px;">Loading catalog...</div>';
+            listDiv.style.display = '';
+            return;
+        }
+
+        // Filter models that fit (file_size within 92.5% of free VRAM) and sort largest first
+        var fits = hfCatalogCache.filter(function(m) { return m.file_size <= freeBytes * 0.925; });
+        fits.sort(function(a, b) { return b.total_mem - a.total_mem; });
+
+        // Limit to top 50
+        fits = fits.slice(0, 50);
+
+        if (fits.length === 0) {
+            itemsDiv.innerHTML = '<div style="color:#f4f4f4aa;font-size:.55rem;padding:6px;">No models fit this device.</div>';
+            listDiv.style.display = '';
+            return;
+        }
+
+        fits.forEach(function(m) {
+            var row = document.createElement('div');
+            row.className = 'hf-model-row';
+            row.innerHTML = '<span class="hf-model-name">' + escHtml(m.name) + '</span>' +
+                '<span class="hf-model-meta">' + fmtGB(m.file_size) + ' GB · ' + (m.params_b || '?') + 'B params · ' + (m.max_ctx / 1024).toFixed(0) + 'K ctx</span>';
+            row.addEventListener('click', function() {
+                // Auto-fill URL field (agent+GPU already set by device selector)
+                document.getElementById('hf-url').value = m.id;
+                // Highlight selected
+                itemsDiv.querySelectorAll('.hf-model-row').forEach(function(r) { r.classList.remove('selected'); });
+                row.classList.add('selected');
+                document.getElementById('hf-status').textContent = '→ ' + m.name + ' selected — click DOWNLOAD & LOAD';
+            });
+            itemsDiv.appendChild(row);
+        });
+        listDiv.style.display = '';
+    });
+
+    // Populate GPU dropdown when agent changes (manual flow)
+    document.getElementById('hf-agent').addEventListener('change', function() {
+        var gpuSel = document.getElementById('hf-gpu');
+        gpuSel.innerHTML = '<option value="">GPU: auto</option>';
+        var nid = this.value;
+        var node = nodesCache.find(function(n) { return n.node_id === nid; });
+        if (node && node.hardware && node.hardware.gpu) {
+            node.hardware.gpu.forEach(function(g, i) {
+                gpuSel.innerHTML += '<option value="' + i + '">GPU ' + i + ': ' + escHtml(g.name || 'GPU') + '</option>';
+            });
+        }
+    });
+    document.getElementById('hf-btn-cancel').addEventListener('click', function() {
+        closeOverlay('hf-overlay');
+    });
+    document.getElementById('no-btn-close').addEventListener('click', function() {
+        closeOverlay('node-overlay');
+    });
+
+    // Close overlays on background click
+    document.querySelectorAll('.cf-overlay').forEach(function(ov) {
+        ov.addEventListener('click', function(e) {
+            if (e.target === ov) ov.classList.remove('open');
+        });
+    });
+
+    // ── Actions ──
+    var benchActive = false;
+
+    document.getElementById('btn-autoload').addEventListener('click', function() {
+        document.getElementById('al-bench-options').style.display = 'none';
+        document.getElementById('autoload-overlay').classList.add('open');
+    });
+
+    document.getElementById('al-btn-quick').addEventListener('click', function() {
+        document.getElementById('autoload-overlay').classList.remove('open');
+        fetch(BASE + '/api/v1/autoload', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}' })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                autoloadActive = true;
+                toast('QUICK AUTOLOAD STARTED — ' + d.count + ' steps', 'ok');
+                if (typeof nbeep === 'function') nbeep('autoload_execute');
+                document.getElementById('autoload-panel').style.display = '';
+            })
+            .catch(function() { toast('AUTOLOAD FAILED', 'error'); });
+    });
+
+    document.getElementById('al-btn-bench').addEventListener('click', function() {
+        document.getElementById('al-btn-quick').classList.remove('primary');
+        document.getElementById('al-btn-bench').classList.add('primary');
+        document.getElementById('al-bench-options').style.display = '';
+    });
+
+    document.getElementById('al-btn-bench-cancel').addEventListener('click', function() {
+        document.getElementById('autoload-overlay').classList.remove('open');
+    });
+
+    document.getElementById('al-btn-bench-go').addEventListener('click', function() {
+        var tps = parseInt(document.getElementById('al-target-tps').value) || 50;
+        document.getElementById('autoload-overlay').classList.remove('open');
+        fetch(BASE + '/api/v1/autoload/benchmark', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ target_tps: tps })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d.error) {
+                toast('BENCHMARK: ' + d.error, 'error');
+                return;
+            }
+            benchActive = true;
+            toast('BENCHMARK AUTOLOAD STARTED — ' + d.devices + ' devices, target ' + d.target_tps + ' tok/s', 'ok');
+            if (typeof nbeep === 'function') nbeep('autoload_execute');
+            document.getElementById('bench-panel').style.display = '';
+        })
+        .catch(function() { toast('BENCHMARK AUTOLOAD FAILED', 'error'); });
+    });
+
+    document.getElementById('btn-toggle-lock').addEventListener('click', function() {
+        var btn = this;
+        fetch(BASE + '/api/v1/config')
+            .then(function(r) { return r.json(); })
+            .then(function(cfg) {
+                return fetch(BASE + '/api/v1/config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ locked: !cfg.locked })
+                });
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                var locked = d.locked != null ? d.locked : !btn.classList.contains('active-state');
+                btn.classList.toggle('active-state', locked);
+                document.getElementById('lock-label').textContent = locked ? 'UNLOCK' : 'LOCK';
+                toast(locked ? 'CLUSTER LOCKED' : 'CLUSTER UNLOCKED', 'ok');
+            })
+            .catch(function() { toast('TOGGLE FAILED', 'error'); });
+    });
+
+    document.getElementById('btn-toggle-tight').addEventListener('click', function() {
+        var btn = this;
+        fetch(BASE + '/api/v1/config')
+            .then(function(r) { return r.json(); })
+            .then(function(cfg) {
+                return fetch(BASE + '/api/v1/config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ tight_pack: !cfg.tight_pack })
+                });
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                var tight = d.tight_pack != null ? d.tight_pack : !btn.classList.contains('active-state');
+                btn.classList.toggle('active-state', tight);
+                document.getElementById('tight-label').textContent = tight ? 'TIGHT PACK ON' : 'TIGHT PACK';
+                toast(tight ? 'TIGHT PACK ENABLED' : 'TIGHT PACK DISABLED', 'ok');
+            })
+            .catch(function() { toast('TOGGLE FAILED', 'error'); });
+    });
+
+    document.getElementById('btn-toggle-access').addEventListener('click', function() {
+        var btn = this;
+        fetch(BASE + '/api/v1/config')
+            .then(function(r) { return r.json(); })
+            .then(function(cfg) {
+                var newMode = cfg.access_mode === 'open' ? 'approve' : 'open';
+                return fetch(BASE + '/api/v1/config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ access_mode: newMode })
+                });
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                var mode = d.access_mode || 'approve';
+                var isApprove = mode === 'approve';
+                btn.classList.toggle('active-state', isApprove);
+                document.getElementById('access-label').textContent = isApprove ? 'APPROVE' : 'OPEN';
+                toast(isApprove ? 'ACCESS: APPROVAL REQUIRED' : 'ACCESS: OPEN TO ALL', 'ok');
+            })
+            .catch(function() { toast('TOGGLE FAILED', 'error'); });
+    });
+
+    document.getElementById('btn-gc').addEventListener('click', function() {
+        fetch(BASE + '/api/v1/gc', { method: 'POST' })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                var removed = (d.removed || []).length;
+                toast('GC: ' + removed + ' container' + (removed !== 1 ? 's' : '') + ' removed', 'ok');
+            })
+            .catch(function() { toast('GC FAILED', 'error'); });
+    });
+
+    document.getElementById('an-btn-pair').addEventListener('click', function() {
+        var addr = document.getElementById('an-address').value.trim();
+        if (!addr) return;
+        if (!/^https?:\/\//i.test(addr)) addr = 'http://' + addr;
+        document.getElementById('an-status').textContent = '[ PAIRING... ]';
+        document.getElementById('an-status').className = 'status-val';
+        fetch(BASE + '/api/v1/nodes/push', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ address: addr })
+        })
+        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+        .then(function(res) {
+            if (res.ok) {
+                document.getElementById('an-status').textContent = '[ PAIRED ]';
+                document.getElementById('an-status').className = 'status-val accent';
+                toast('AGENT PAIRED', 'ok');
+                setTimeout(function() { closeOverlay('addnode-overlay'); }, 1500);
+            } else {
+                document.getElementById('an-status').textContent = '[ ' + (res.data.error || 'FAILED') + ' ]';
+                document.getElementById('an-status').className = 'status-val danger';
+            }
+        })
+        .catch(function() {
+            document.getElementById('an-status').textContent = '[ CONNECTION FAILED ]';
+            document.getElementById('an-status').className = 'status-val danger';
+        });
+    });
+
+    document.getElementById('hf-btn-go').addEventListener('click', function() {
+        var url = document.getElementById('hf-url').value.trim();
+        var agent = document.getElementById('hf-agent').value;
+        var quant = document.getElementById('hf-quant').value;
+        var gpuVal = document.getElementById('hf-gpu').value;
+        if (!url || !agent) { toast('Enter URL and select agent', 'warn'); return; }
+
+        // Parse HF URL → org/model
+        var match = url.match(/huggingface\.co\/([^\/]+\/[^\/\?\#]+)/);
+        if (!match) {
+            // Try plain org/model format (e.g. "FieldMouse-AI/Qwen3.5-Sovereign-Titan-9B-GGUF")
+            match = url.match(/^([^\/\s]+\/[^\/\s]+)$/);
+        }
+        if (!match) {
+            // Accept bare model name from catalog (no slash) — agent will search HF
+            match = url.match(/^([a-zA-Z0-9._-]+)$/);
+        }
+        if (!match) {
+            toast('Invalid URL — use huggingface.co/org/model or org/model format', 'error', 5000);
+            document.getElementById('hf-status').textContent = '[ INVALID URL — need org/model ]';
+            document.getElementById('hf-status').className = 'status-val danger';
+            return;
+        }
+        var modelPath = match[1];
+        // Strip trailing whitespace/parens from pasted URLs
+        modelPath = modelPath.replace(/[\s\(\)]+$/, '');
+        var modelId = modelPath + '/' + quant.toLowerCase();
+
+        var body = { model_id: modelId };
+        if (gpuVal !== '') body.gpu_idx = parseInt(gpuVal, 10);
+
+        document.getElementById('hf-status').textContent = '[ IMPORTING... ]';
+        document.getElementById('hf-status').className = 'status-val';
+        document.getElementById('hf-progress').style.display = 'none';
+
+        fetch(BASE + '/api/v1/nodes/' + encodeURIComponent(agent) + '/download_and_load', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        })
+        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+        .then(function(res) {
+            if (res.ok) {
+                var jobId = res.data.job_id;
+                var queued = res.data.queued;
+                if (jobId) {
+                    document.getElementById('hf-status').textContent = '[ DOWNLOADING... ]';
+                    document.getElementById('hf-status').className = 'status-val accent';
+                    document.getElementById('hf-progress').style.display = '';
+                    toast('HF IMPORT STARTED — ' + modelPath, 'ok');
+                    activeJobs.push({ node_id: agent, job_id: jobId, model_id: modelId });
+                    pollHfJob(agent, jobId);
+                } else if (queued) {
+                    document.getElementById('hf-status').textContent = '[ QUEUED — agent will pick up via heartbeat ]';
+                    document.getElementById('hf-status').className = 'status-val amber';
+                    toast('HF IMPORT QUEUED — ' + modelPath, 'ok', 5000);
+                    setTimeout(function() { closeOverlay('hf-overlay'); }, 3000);
+                } else {
+                    document.getElementById('hf-status').textContent = '[ STARTED ]';
+                    document.getElementById('hf-status').className = 'status-val accent';
+                    toast('HF IMPORT STARTED — ' + modelPath, 'ok');
+                    setTimeout(function() { closeOverlay('hf-overlay'); }, 2000);
+                }
+            } else {
+                document.getElementById('hf-status').textContent = '[ ' + (res.data.error || 'FAILED') + ' ]';
+                document.getElementById('hf-status').className = 'status-val danger';
+                toast('IMPORT FAILED: ' + (res.data.error || 'unknown'), 'error', 5000);
+            }
+        })
+        .catch(function(e) {
+            document.getElementById('hf-status').textContent = '[ FAILED ]';
+            document.getElementById('hf-status').className = 'status-val danger';
+            toast('IMPORT REQUEST FAILED', 'error');
+        });
+    });
+
+    function pollHfJob(nodeId, jobId) {
+        var interval = setInterval(function() {
+            fetch(BASE + '/api/v1/nodes/' + encodeURIComponent(nodeId) + '/jobs/' + encodeURIComponent(jobId))
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    var state = d.state || d.status || 'unknown';
+                    var pct = d.progress != null ? Math.round(d.progress) : null;
+                    var statusEl = document.getElementById('hf-status');
+                    var progEl = document.getElementById('hf-progress-text');
+
+                    if (state === 'downloading') {
+                        statusEl.textContent = '[ DOWNLOADING' + (pct != null ? ' — ' + pct + '%' : '') + ' ]';
+                        if (progEl) progEl.textContent = '[ ' + (pct != null ? pct + '%' : '...') + ' ]';
+                    } else if (state === 'loading') {
+                        statusEl.textContent = '[ LOADING MODEL... ]';
+                        if (progEl) progEl.textContent = '[ LOADING ]';
+                    } else if (state === 'done' || state === 'complete' || state === 'ready') {
+                        clearInterval(interval);
+                        statusEl.textContent = '[ COMPLETE ]';
+                        statusEl.className = 'status-val accent';
+                        if (progEl) progEl.textContent = '[ 100% ]';
+                        toast('HF IMPORT COMPLETE', 'ok');
+                        if (typeof nbeep === 'function') nbeep('import_complete');
+                        activeJobs = activeJobs.filter(function(j) { return j.job_id !== jobId; });
+                        setTimeout(function() { closeOverlay('hf-overlay'); }, 2000);
+                    } else if (state === 'error' || state === 'failed') {
+                        clearInterval(interval);
+                        statusEl.textContent = '[ ERROR: ' + (d.error || 'unknown') + ' ]';
+                        statusEl.className = 'status-val danger';
+                        toast('HF IMPORT FAILED', 'error');
+                        activeJobs = activeJobs.filter(function(j) { return j.job_id !== jobId; });
+                    }
+                })
+                .catch(function() {
+                    // Job polling failed — might be pull-mode with no proxy
+                    clearInterval(interval);
+                });
+        }, 3000);
+    }
+
+    document.getElementById('no-btn-remove').addEventListener('click', function() {
+        if (!selectedNodeId) return;
+        nDynamic.showDialog({
+            title: 'Remove Node',
+            body: 'Remove node ' + selectedNodeId + '?',
+            alarm: false,
+            buttons: [
+                { label: 'REMOVE', value: 'yes', style: 'danger' },
+                { label: 'CANCEL', value: null }
+            ]
+        }).then(function(val) {
+            if (val !== 'yes') return;
+            fetch(BASE + '/api/v1/nodes/' + encodeURIComponent(selectedNodeId), { method: 'DELETE' })
+                .then(function(r) { return r.json(); })
+                .then(function() {
+                    toast('NODE REMOVED', 'ok');
+                    closeOverlay('node-overlay');
+                })
+                .catch(function() { toast('REMOVE FAILED', 'error'); });
+        });
+    });
+
+    function unloadModel(nodeId, model) {
+        fetch(BASE + '/api/v1/nodes/' + encodeURIComponent(nodeId) + '/unload', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ model_id: model })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function() { toast('UNLOADING — ' + model, 'ok'); })
+        .catch(function() { toast('UNLOAD FAILED', 'error'); });
+    }
+
+    // ── Load Model ──
+    document.getElementById('no-btn-load').addEventListener('click', function() {
+        if (!selectedNodeId) return;
+        var modelId = document.getElementById('no-load-model').value;
+        var gpuVal = document.getElementById('no-load-gpu').value;
+        var ctxVal = document.getElementById('no-load-ctx').value.trim();
+        if (!modelId) { toast('Select a model to load', 'warn'); return; }
+
+        var body = { model_id: modelId };
+        if (gpuVal !== '') body.gpu_idx = parseInt(gpuVal, 10);
+        if (ctxVal && !isNaN(parseInt(ctxVal, 10))) body.context_length = parseInt(ctxVal, 10);
+
+        fetch(BASE + '/api/v1/nodes/' + encodeURIComponent(selectedNodeId) + '/load', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        })
+        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+        .then(function(res) {
+            if (res.ok) {
+                toast('LOADING ' + modelId + (gpuVal !== '' ? ' on GPU ' + gpuVal : ''), 'ok');
+                if (typeof nbeep === 'function') nbeep('model_load');
+            } else {
+                toast('LOAD FAILED: ' + (res.data.error || 'unknown'), 'error');
+            }
+        })
+        .catch(function() { toast('LOAD REQUEST FAILED', 'error'); });
+    });
+
+    // ── Configure CPU/RAM ──
+    document.getElementById('no-btn-cpuram').addEventListener('click', function() {
+        if (!selectedNodeId) return;
+        var node = nodesCache.find(function(n) { return n.node_id === selectedNodeId; });
+        var current = node ? !!node.cpu_ram_enabled : false;
+        fetch(BASE + '/api/v1/nodes/' + encodeURIComponent(selectedNodeId) + '/configure', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ cpu_ram_enabled: !current })
+        })
+        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+        .then(function(res) {
+            if (res.ok) {
+                toast('CPU/RAM ' + (!current ? 'ENABLED' : 'DISABLED'), 'ok');
+                document.getElementById('no-btn-cpuram').textContent = !current ? 'DISABLE' : 'ENABLE';
+            } else {
+                toast('CONFIGURE FAILED: ' + (res.data.error || 'unknown'), 'error');
+            }
+        })
+        .catch(function() { toast('CONFIGURE FAILED', 'error'); });
+    });
+
+    // ── Prompt ──
+    document.getElementById('btn-send').addEventListener('click', sendPrompt);
+    document.getElementById('prompt-input').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendPrompt(); }
+    });
+
+    function sendPrompt() {
+        var input = document.getElementById('prompt-input');
+        var text = input.value.trim();
+        if (!text) return;
+        input.value = '';
+
+        fetch(BASE + '/api/v1/prompt', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ messages: [{ role: 'user', content: text }] })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (typeof nbeep === 'function') nbeep('prompt_sent');
+            toast('PROMPT DISPATCHED', 'ok');
+            if (d.task_id) pollResult(d.task_id, text);
+        })
+        .catch(function() { toast('PROMPT FAILED', 'error'); });
+    }
+
+    function pollResult(taskId, promptText) {
+        var resp = document.getElementById('responses');
+        var card = document.createElement('div');
+        card.className = 'cf-panel';
+        card.innerHTML = '<span class="corner corner-tl">⌜</span><span class="corner corner-tr">⌝</span><span class="corner corner-bl">⌞</span><span class="corner corner-br">⌟</span>' +
+            '<div class="status-val">[ WAITING... ]</div>';
+        resp.insertBefore(card, resp.firstChild);
+
+        var interval = setInterval(function() {
+            fetch(BASE + '/api/v1/tasks/' + encodeURIComponent(taskId))
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    if (d.status === 'complete' || d.status === 'error') {
+                        clearInterval(interval);
+                        var results = d.results || [];
+                        var html = '<div class="cf-section-label">' + escHtml(promptText.substring(0, 80)) + '</div>';
+                        results.forEach(function(r) {
+                            html += '<div style="padding:4px 0;border-bottom:1px solid var(--border);">';
+                            html += '<div class="metric-label" style="margin-bottom:2px;">' + escHtml(r.model || '?') + ' · ' + escHtml(r.hostname || '') + '</div>';
+                            html += '<div style="font-family:var(--font-data);font-size:.65rem;color:var(--text);white-space:pre-wrap;">' + escHtml(r.content || r.error || '—') + '</div>';
+                            html += '</div>';
+                        });
+                        card.innerHTML = '<span class="corner corner-tl">⌜</span><span class="corner corner-tr">⌝</span><span class="corner corner-bl">⌞</span><span class="corner corner-br">⌟</span>' + html;
+                    }
+                })
+                .catch(function() {});
+        }, 2000);
+    }
+
+    // ── Autoload status poll ──
+    function pollAutoload() {
+        if (!autoloadActive) return;
+        fetch(BASE + '/api/v1/autoload/status')
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                var panel = document.getElementById('autoload-panel');
+                panel.style.display = '';
+                document.getElementById('al-status-text').textContent = '[ ' + (d.status || 'IDLE').toUpperCase() + ' ]';
+
+                var steps = d.steps || [];
+                var html = '';
+                steps.forEach(function(s) {
+                    var icon = s.status === 'done' ? '✓' : s.status === 'running' ? '▶' : '·';
+                    var color = s.status === 'done' ? 'accent' : s.status === 'running' ? 'amber' : '';
+                    html += '<div class="status-row"><span class="status-label">' + icon + ' ' + escHtml(s.action || '?') + '</span><span class="status-val ' + color + '">[ ' + escHtml(s.model || s.node_id || '') + ' ]</span></div>';
+                });
+                document.getElementById('al-steps').innerHTML = html;
+
+                if (d.status === 'idle' || d.status === 'complete') {
+                    autoloadActive = false;
+                    if (d.status === 'complete') {
+                        toast('AUTOLOAD COMPLETE', 'ok');
+                        if (typeof nbeep === 'function') nbeep('autoload_complete');
+                    }
+                }
+
+                if (typeof nComp !== 'undefined') {
+                    if (d.status === 'running') nComp.progress(panel, -1);
+                    else nComp.progress(panel, d.status === 'complete' ? 100 : null);
+                }
+            })
+            .catch(function() {});
+    }
+
+    // ── Benchmark autoload status poll ──
+    function pollBenchmark() {
+        if (!benchActive) return;
+        fetch(BASE + '/api/v1/autoload/benchmark/status')
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                var panel = document.getElementById('bench-panel');
+                panel.style.display = '';
+                var status = (d.status || 'idle').toUpperCase();
+                document.getElementById('bench-status-text').textContent = '[ ' + status + ' ]';
+                document.getElementById('bench-progress-val').textContent = '[ ' + (d.iteration || 0) + ' / ' + (d.max_iterations || 0) + ' ]';
+
+                var devices = d.devices || [];
+                var html = '';
+                devices.forEach(function(dev) {
+                    var icon = dev.phase === 'done' ? '✓' : dev.phase === 'failed' ? '✗' : dev.phase === 'active' ? '▶' : '·';
+                    var color = dev.phase === 'done' ? 'accent' : dev.phase === 'failed' ? 'danger' : dev.phase === 'active' ? 'amber' : '';
+                    html += '<div class="status-row">';
+                    html += '<span class="status-label">' + icon + ' ' + escHtml(dev.hostname || '?') + ' — ' + escHtml(dev.gpu_name || '?') + '</span>';
+                    html += '<span class="status-val ' + color + '">[ ' + escHtml(dev.message || '...') + ' ]</span>';
+                    html += '</div>';
+                    if (dev.tps > 0) {
+                        html += '<div class="status-row" style="padding-left:16px;">';
+                        html += '<span class="status-label" style="font-size:.45rem;">tok/s</span>';
+                        html += '<span class="status-val accent" style="font-size:.5rem;">[ ' + dev.tps.toFixed(1) + ' ]</span>';
+                        html += '</div>';
+                    }
+                });
+                document.getElementById('bench-devices').innerHTML = html;
+
+                // Track which nodes are being benchmarked for card highlighting
+                benchNodeIds.clear();
+                devices.forEach(function(dev) {
+                    if (dev.phase === 'active' || dev.phase === 'pending' || dev.phase === 'loading' || dev.phase === 'benchmarking') {
+                        if (dev.node_id) benchNodeIds.add(dev.node_id);
+                    }
+                });
+                // If bench is still running, mark all device nodes
+                if (d.status === 'running') {
+                    devices.forEach(function(dev) {
+                        if (dev.node_id) benchNodeIds.add(dev.node_id);
+                    });
+                }
+
+                var logEntries = d.log || [];
+                var logHtml = '';
+                logEntries.forEach(function(entry) {
+                    logHtml += '<div>' + escHtml(entry.ts || '') + ' ' + escHtml(entry.msg || '') + '</div>';
+                });
+                document.getElementById('bench-log').innerHTML = logHtml;
+                // Auto-scroll log
+                var logEl = document.getElementById('bench-log');
+                logEl.scrollTop = logEl.scrollHeight;
+
+                if (d.status === 'done' || d.status === 'error') {
+                    benchActive = false;
+                    benchNodeIds.clear();
+                    toast(d.status === 'done' ? 'BENCHMARK AUTOLOAD COMPLETE' : 'BENCHMARK AUTOLOAD ERROR', d.status === 'done' ? 'ok' : 'error');
+                    if (typeof nbeep === 'function') nbeep(d.status === 'done' ? 'autoload_complete' : 'toast_error');
+                }
+
+                if (typeof nComp !== 'undefined') {
+                    if (d.status === 'running') nComp.progress(panel, -1);
+                    else nComp.progress(panel, d.status === 'done' ? 100 : null);
+                }
+            })
+            .catch(function() {});
+    }
+
+    // ── Pending ──
+    function renderPending(pending) {
+        var section = document.getElementById('pending-section');
+        var grid = document.getElementById('pending-grid');
+        if (!pending || !pending.length) {
+            section.style.display = 'none';
+            return;
+        }
+        section.style.display = '';
+        var html = '';
+        pending.forEach(function(p) {
+            html += '<div class="node-card" style="border-color:rgba(255,179,0,0.3);">';
+            html += '<span class="corner corner-tl">⌜</span><span class="corner corner-tr">⌝</span><span class="corner corner-bl">⌞</span><span class="corner corner-br">⌟</span>';
+            html += '<div class="node-header"><div><div class="node-hostname">' + escHtml(p.hostname || p.node_id) + '</div>';
+            html += '<div class="node-id">' + escHtml(p.node_id) + '</div></div>';
+            html += '<div class="node-badges"><span class="node-badge stale">PENDING</span></div></div>';
+            html += '<div class="btn-row">';
+            html += '<button class="cf-btn primary" data-flash data-action="approve" data-nid="' + escHtml(p.node_id) + '">APPROVE</button>';
+            html += '<button class="cf-btn danger" data-flash data-action="reject" data-nid="' + escHtml(p.node_id) + '">REJECT</button>';
+            html += '</div></div>';
+        });
+        grid.innerHTML = html;
+
+        grid.querySelectorAll('[data-action="approve"]').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                fetch(BASE + '/api/v1/pending/' + encodeURIComponent(btn.dataset.nid) + '/approve', { method: 'POST' })
+                    .then(function() { toast('APPROVED', 'ok'); })
+                    .catch(function() { toast('APPROVE FAILED', 'error'); });
+            });
+        });
+        grid.querySelectorAll('[data-action="reject"]').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                fetch(BASE + '/api/v1/pending/' + encodeURIComponent(btn.dataset.nid) + '/reject', { method: 'POST' })
+                    .then(function() { toast('REJECTED', 'ok'); })
+                    .catch(function() { toast('REJECT FAILED', 'error'); });
+            });
+        });
+    }
+
+    // ── Downloads ──
+    function renderDownloads(models) {
+        downloadsCache = models || [];
+        var section = document.getElementById('downloads-section');
+        var grid = document.getElementById('downloads-grid');
+        if (!models.length) {
+            section.style.display = 'none';
+            return;
+        }
+        section.style.display = '';
+        var html = '';
+        models.forEach(function(m) {
+            var sz = m.file_size ? fmtBytes(m.file_size / (1024*1024)) : '';
+            var nodeNames = (m.nodes || []).map(function(n) { return n.hostname || n.node_id; }).join(', ');
+            html += '<div class="status-row">';
+            html += '<span class="status-label" style="flex:2;">' + escHtml(m.id || m.name || '?') + '</span>';
+            html += '<span class="status-val" style="flex:1;">' + sz + '</span>';
+            html += '<span class="status-val accent" style="flex:2;">' + escHtml(nodeNames) + '</span>';
+            html += '</div>';
+        });
+        grid.innerHTML = html;
+    }
+
+    // ── Poll ──
+    function poll() {
+        fetch(BASE + '/api/v1/nodes')
+            .then(function(r) { return r.json(); })
+            .then(function(d) { setConn(true); renderNodes(d.nodes || []); })
+            .catch(function() { setConn(false); });
+
+        fetch(BASE + '/api/v1/pending')
+            .then(function(r) { return r.json(); })
+            .then(function(d) { renderPending(d.pending || []); })
+            .catch(function() {});
+
+        fetch(BASE + '/api/v1/config')
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                document.getElementById('lock-label').textContent = d.locked ? 'UNLOCK' : 'LOCK';
+                document.getElementById('tight-label').textContent = d.tight_pack ? 'TIGHT PACK ON' : 'TIGHT PACK';
+                document.getElementById('btn-toggle-lock').classList.toggle('active-state', !!d.locked);
+                document.getElementById('btn-toggle-tight').classList.toggle('active-state', !!d.tight_pack);
+                var isApprove = d.access_mode === 'approve';
+                document.getElementById('access-label').textContent = isApprove ? 'APPROVE' : 'OPEN';
+                document.getElementById('btn-toggle-access').classList.toggle('active-state', isApprove);
+            })
+            .catch(function() {});
+
+        fetch(BASE + '/api/v1/autoload/downloads')
+            .then(function(r) { return r.json(); })
+            .then(function(d) { renderDownloads(d.models || []); })
+            .catch(function() {});
+
+        pollAutoload();
+        pollBenchmark();
+    }
+
+    poll();
+    setInterval(poll, POLL);
+})();
+</script>
+</body>
+</html>

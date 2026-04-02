@@ -1,0 +1,2155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0a0a0a">
+    <title>ClusterFlock — nCore</title>
+    <link rel="stylesheet" href="notum_AHI/css/phosphor.css?v=20260228">
+    <link rel="stylesheet" href="notum_AHI/css/style.css?v=20260228">
+    <link rel="stylesheet" href="notum_AHI/css/notum.css?v=20260228">
+    <style>
+        html, body { overflow: hidden; }
+
+        #app {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            height: 100dvh;
+            max-width: 100%;
+        }
+
+        /* ── Header ───────────────────────────────── */
+        .dash-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 20px 10px;
+            flex-shrink: 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .dash-header h1 {
+            font-family: var(--font-label);
+            font-size: 1.3rem;
+            font-weight: 700;
+            letter-spacing: .12em;
+            text-transform: uppercase;
+            color: rgba(244,244,244, 0.45);
+        }
+        .dash-header h1 span { font-weight: 400; color: rgba(244,244,244, 0.25); }
+        .header-right { display: flex; align-items: center; gap: 12px; }
+        .conn { position: static; }
+
+        /* ── Nav tabs ─────────────────────────────── */
+        .nav-tabs {
+            display: flex;
+            gap: 0;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        .nav-tab {
+            flex: 1;
+            text-align: center;
+            font-family: var(--font-data);
+            font-size: .65rem;
+            letter-spacing: .12em;
+            text-transform: uppercase;
+            padding: 8px 12px;
+            color: var(--text-dim);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: color .15s, border-color .15s;
+            text-decoration: none;
+        }
+        .nav-tab:hover { color: var(--text); }
+        .nav-tab.active {
+            color: var(--accent);
+            border-bottom-color: var(--accent);
+        }
+
+        /* ── Main scrollable body ─────────────────── */
+        .dash-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .dash-body::-webkit-scrollbar { display: none; }
+
+        /* ── Node card — expandable ───────────────── */
+        .node-card {
+            position: relative;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+            transition: border-color .2s;
+        }
+        .node-card.healthy { border-color: rgba(0,229,255, 0.25); }
+        .node-card.stale   { border-color: rgba(255,179,0, 0.15); }
+        .node-card.dead    { border-color: rgba(255,51,51, 0.12); }
+
+        .node-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .node-icon {
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            font-size: 1rem;
+            color: var(--text-dim);
+            flex-shrink: 0;
+        }
+        .node-card.healthy .node-icon { background: var(--accent); border-color: rgba(0,229,255, 0.3); color: var(--bg); }
+        .node-card.stale .node-icon   { background: var(--amber); border-color: rgba(255,179,0, 0.3); color: var(--bg); }
+        .node-card.dead .node-icon    { background: var(--danger); border-color: rgba(255,51,51, 0.25); color: var(--bg); }
+
+        .node-summary { flex: 1; min-width: 0; }
+        .node-summary .hostname {
+            font-size: .9rem;
+            font-weight: 600;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .node-summary .meta {
+            font-family: var(--font-data);
+            font-size: .55rem;
+            color: var(--text-dim);
+            letter-spacing: .05em;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .node-badges { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+        .badge {
+            font-family: var(--font-data);
+            font-size: .55rem;
+            font-weight: 500;
+            letter-spacing: .08em;
+            padding: 2px 6px;
+            border-radius: var(--radius);
+            text-transform: uppercase;
+        }
+        .badge-status { border: 1px solid; }
+        .node-card.healthy .badge-status { color: var(--accent); border-color: rgba(0,229,255, 0.25); }
+        .node-card.stale .badge-status   { color: var(--amber); border-color: rgba(255,179,0, 0.25); }
+        .node-card.dead .badge-status    { color: var(--danger); border-color: rgba(255,51,51, 0.2); }
+        .badge-models { color: var(--accent); border: 1px solid rgba(0,229,255, 0.15); }
+        .badge-models.none { color: var(--text-dim); border-color: var(--border); }
+        .badge-version { color: var(--text-dim); border: 1px solid var(--border); }
+        .badge-version.outdated { color: var(--amber); border-color: rgba(255,179,0, 0.3); }
+
+        .expand-chevron {
+            font-size: .7rem;
+            color: var(--text-dim);
+            transition: transform .2s;
+            flex-shrink: 0;
+        }
+        .node-card.open .expand-chevron { transform: rotate(180deg); }
+
+        /* Expandable detail */
+        .node-detail {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height .25s ease;
+        }
+        .node-card.open .node-detail { max-height: 600px; }
+        .node-detail-inner {
+            padding: 0 12px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            border-top: 1px solid var(--border);
+        }
+
+        /* GPU chips */
+        .gpu-chip {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 5px 8px;
+            background: rgba(0,229,255, 0.03);
+            border: 1px solid rgba(0,229,255, 0.08);
+            border-radius: var(--radius);
+        }
+        .gpu-chip .gpu-name {
+            font-family: var(--font-data);
+            font-size: .6rem;
+            color: var(--accent);
+            flex: 1; min-width: 0;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .gpu-chip .gpu-vram {
+            font-family: var(--font-data);
+            font-size: .55rem;
+            color: var(--text-dim);
+            flex-shrink: 0;
+        }
+
+        /* Metric bars (AHI seg-bar) */
+        .metric-row { display: flex; align-items: center; gap: 8px; }
+        .metric-label {
+            font-family: var(--font-data);
+            font-size: .5rem;
+            letter-spacing: .1em;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            width: 42px; text-align: right; flex-shrink: 0;
+        }
+        .metric-seg-bar {
+            flex: 1; display: flex; gap: 1px; height: 5px;
+        }
+        .metric-seg-bar .seg {
+            flex: 1; height: 100%;
+            background: rgba(244,244,244, 0.06); border-radius: 1px;
+        }
+        .metric-seg-bar .seg.filled { background: var(--accent); }
+        .metric-seg-bar .seg.filled.warn { background: var(--amber); }
+        .metric-seg-bar .seg.filled.crit { background: var(--danger); }
+        .metric-pct {
+            font-family: var(--font-data);
+            font-size: .55rem;
+            color: var(--text);
+            width: 32px; text-align: right; flex-shrink: 0;
+        }
+
+        /* Hw grid */
+        .hw-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+            gap: 6px;
+        }
+        .hw-item {
+            background: rgba(244,244,244, 0.02);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 6px 8px;
+            display: flex; flex-direction: column; gap: 2px;
+        }
+        .hw-item .hw-label {
+            font-family: var(--font-data);
+            font-size: .5rem; letter-spacing: .12em;
+            color: var(--text-dim); text-transform: uppercase;
+        }
+        .hw-item .hw-value {
+            font-family: var(--font-data);
+            font-size: .75rem; font-weight: 500; color: var(--text);
+        }
+
+        /* Endpoint tags */
+        .endpoint-tag {
+            display: inline-block;
+            font-family: var(--font-data);
+            font-size: .55rem;
+            padding: 2px 6px;
+            border: 1px solid rgba(0,229,255, 0.2);
+            border-radius: var(--radius);
+            color: var(--accent);
+            margin: 2px 4px 2px 0;
+        }
+        .endpoint-tag.loading { border-color: rgba(255,179,0, 0.2); color: var(--amber); }
+        .endpoint-tag.error   { border-color: rgba(255,51,51, 0.2); color: var(--danger); }
+
+        .detail-label {
+            font-family: var(--font-data);
+            font-size: .5rem;
+            letter-spacing: .12em;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            margin-top: 4px;
+        }
+
+        /* ── Section label ────────────────────────── */
+        .section-label {
+            font-family: var(--font-data);
+            font-size: .6rem;
+            letter-spacing: .15em;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            padding: 4px 4px 0;
+        }
+
+        /* ── Action bar ───────────────────────────── */
+        .action-bar {
+            display: flex;
+            gap: 8px;
+            flex-shrink: 0;
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border);
+        }
+        .act-btn {
+            font-family: var(--font-label);
+            font-size: .7rem;
+            font-weight: 600;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            padding: 6px 14px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text-dim);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: border-color .15s, color .15s;
+        }
+        .act-btn:hover { border-color: rgba(0,229,255, 0.3); color: var(--accent); }
+        .act-btn.primary {
+            border-color: rgba(0,229,255, 0.3);
+            color: var(--accent);
+            background: rgba(0,229,255, 0.06);
+        }
+        .act-btn.primary:hover { background: rgba(0,229,255, 0.12); }
+        .act-btn.green {
+            border-color: rgba(0,200,83, 0.3);
+            color: #00c853;
+            background: rgba(0,200,83, 0.06);
+        }
+        .act-btn.green:hover { background: rgba(0,200,83, 0.12); }
+        .act-btn.active {
+            border-color: rgba(0,229,255, 0.5);
+            color: var(--accent);
+            background: rgba(0,229,255, 0.10);
+        }
+        .act-btn.disabled { opacity: 0.4; pointer-events: none; }
+
+        /* ── Prompt input ─────────────────────────── */
+        .prompt-area {
+            flex-shrink: 0;
+            padding: 10px 12px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 8px;
+            align-items: flex-end;
+        }
+        .prompt-input {
+            flex: 1;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text);
+            font-family: var(--font-data);
+            font-size: .8rem;
+            padding: 10px 12px;
+            resize: none;
+            min-height: 42px;
+            max-height: 120px;
+            line-height: 1.4;
+            outline: none;
+        }
+        .prompt-input::placeholder { color: var(--text-dim); }
+        .prompt-input:focus { border-color: rgba(0,229,255, 0.3); }
+        .send-btn {
+            width: 42px; height: 42px;
+            display: flex; align-items: center; justify-content: center;
+            border: 1px solid rgba(0,229,255, 0.3);
+            border-radius: var(--radius);
+            color: var(--accent);
+            cursor: pointer;
+            flex-shrink: 0;
+            font-size: 1.1rem;
+            background: rgba(0,229,255, 0.06);
+            transition: background .15s;
+        }
+        .send-btn:hover { background: rgba(0,229,255, 0.15); }
+        .send-btn.disabled { opacity: 0.3; pointer-events: none; }
+
+        /* ── Response output area ─────────────────── */
+        .responses-area { display: flex; flex-direction: column; gap: 8px; }
+
+        .response-card {
+            position: relative;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+        .response-card.streaming { border-color: rgba(0,229,255, 0.2); }
+        .response-card.done      { border-color: rgba(0,229,255, 0.12); }
+        .response-card.error     { border-color: rgba(255,51,51, 0.2); }
+        .response-card.timeout   { border-color: rgba(255,179,0, 0.2); }
+
+        .response-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+        }
+        .response-model {
+            font-family: var(--font-data);
+            font-size: .6rem;
+            color: var(--accent);
+            letter-spacing: .05em;
+            flex: 1; min-width: 0;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .response-host {
+            font-family: var(--font-data);
+            font-size: .5rem;
+            color: var(--text-dim);
+            flex-shrink: 0;
+        }
+        .response-status {
+            font-family: var(--font-data);
+            font-size: .5rem;
+            letter-spacing: .1em;
+            text-transform: uppercase;
+            flex-shrink: 0;
+        }
+        .response-card.streaming .response-status { color: var(--accent); }
+        .response-card.done .response-status      { color: var(--text-dim); }
+        .response-card.error .response-status      { color: var(--danger); }
+        .response-card.timeout .response-status    { color: var(--amber); }
+
+        .response-body {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height .25s ease;
+        }
+        .response-card.open .response-body { max-height: 2000px; }
+        .response-body-inner {
+            padding: 10px 12px;
+            font-family: var(--font-data);
+            font-size: .7rem;
+            color: var(--text);
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-break: break-word;
+            user-select: text;
+            -webkit-user-select: text;
+        }
+        .response-meta {
+            font-family: var(--font-data);
+            font-size: .5rem;
+            color: var(--text-dim);
+            padding: 4px 12px 8px;
+        }
+
+        .expand-r-chevron {
+            font-size: .6rem;
+            color: var(--text-dim);
+            transition: transform .2s;
+            flex-shrink: 0;
+        }
+        .response-card.open .expand-r-chevron { transform: rotate(180deg); }
+
+        /* Streaming cursor blink */
+        .stream-cursor::after {
+            content: '\25CC';
+            animation: blink-cursor .6s steps(1) infinite;
+            color: var(--accent);
+        }
+        @keyframes blink-cursor {
+            0%, 100% { opacity: 1; }
+            50%      { opacity: 0; }
+        }
+
+        /* ── Empty state ──────────────────────────── */
+        .empty-state {
+            flex: 1;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            gap: 12px; color: var(--text-dim);
+        }
+        .empty-state i { font-size: 3rem; opacity: 0.3; }
+        .empty-state .msg {
+            font-family: var(--font-data);
+            font-size: .7rem;
+            letter-spacing: .1em;
+            text-transform: uppercase;
+        }
+
+        /* ── Footer ───────────────────────────────── */
+        .dash-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 16px;
+            border-top: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        .footer-info {
+            font-family: var(--font-data);
+            font-size: .55rem;
+            color: var(--text-dim);
+            letter-spacing: .08em;
+        }
+        .footer-info .accent { color: var(--accent); }
+
+        /* ── Pending card ─────────────────────────── */
+        .pending-card {
+            position: relative;
+            background: var(--surface);
+            border: 1px solid rgba(255,179,0, 0.2);
+            border-radius: var(--radius);
+            padding: 10px 12px;
+            display: flex; align-items: center; gap: 10px;
+            overflow: hidden;
+        }
+        .pending-card .corner { color: rgba(255,179,0, 0.2); }
+        .pending-icon {
+            width: 28px; height: 28px;
+            display: flex; align-items: center; justify-content: center;
+            border: 1px solid rgba(255,179,0, 0.25);
+            border-radius: var(--radius);
+            color: var(--amber); font-size: .85rem; flex-shrink: 0;
+            animation: hardBlink 1s steps(1) infinite;
+        }
+        .pending-info { flex: 1; min-width: 0; }
+        .pending-info .p-host {
+            font-size: .8rem; font-weight: 600;
+            letter-spacing: .08em; text-transform: uppercase;
+            color: var(--amber);
+        }
+        .pending-info .p-meta { font-family: var(--font-data); font-size: .5rem; color: var(--text-dim); }
+        .pending-actions { display: flex; gap: 6px; flex-shrink: 0; }
+        .p-btn {
+            font-family: var(--font-label);
+            font-size: .6rem; font-weight: 600;
+            letter-spacing: .06em; text-transform: uppercase;
+            padding: 4px 8px; border-radius: var(--radius);
+            cursor: pointer; border: 1px solid;
+        }
+        .p-btn.approve { color: var(--accent); border-color: rgba(0,229,255, 0.3); background: rgba(0,229,255, 0.06); }
+        .p-btn.reject  { color: var(--danger); border-color: rgba(255,51,51, 0.25); background: rgba(255,51,51, 0.06); }
+
+        /* ── Prompt echo ──────────────────────────── */
+        .prompt-echo {
+            background: rgba(0,229,255, 0.03);
+            border: 1px solid rgba(0,229,255, 0.1);
+            border-radius: var(--radius);
+            padding: 8px 12px;
+            font-family: var(--font-data);
+            font-size: .65rem;
+            color: var(--text-dim);
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .prompt-echo .label {
+            font-size: .5rem;
+            letter-spacing: .12em;
+            text-transform: uppercase;
+            color: var(--accent);
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        /* ── Model selector dropdown ──────────────── */
+        .gpu-model-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 4px;
+        }
+        .gpu-model-select {
+            flex: 1;
+            font-family: var(--font-data);
+            font-size: .6rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text);
+            padding: 4px 6px;
+            outline: none;
+            cursor: pointer;
+        }
+        .gpu-model-select:focus { border-color: rgba(0,229,255, 0.3); }
+        .gpu-model-select option { background: var(--bg); color: var(--text); }
+
+        .model-loading-indicator {
+            font-family: var(--font-data);
+            font-size: .5rem;
+            color: var(--amber);
+            letter-spacing: .08em;
+        }
+
+        /* Activity badge */
+        .badge-activity {
+            color: var(--amber);
+            border: 1px solid rgba(255,179,0, 0.3);
+            background: rgba(255,179,0, 0.06);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .badge-activity i { animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Activity detail row */
+        .activity-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            background: rgba(255,179,0, 0.04);
+            border: 1px solid rgba(255,179,0, 0.15);
+            border-radius: var(--radius);
+        }
+        .activity-icon {
+            color: var(--amber);
+            font-size: .7rem;
+            flex-shrink: 0;
+            animation: spin 1s linear infinite;
+        }
+        .activity-text {
+            font-family: var(--font-data);
+            font-size: .55rem;
+            color: var(--amber);
+            letter-spacing: .06em;
+            flex: 1;
+            min-width: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .activity-pct {
+            font-family: var(--font-data);
+            font-size: .55rem;
+            color: var(--amber);
+            flex-shrink: 0;
+            font-weight: 600;
+        }
+        .dl-progress-bar {
+            height: 3px;
+            background: rgba(255,179,0, 0.12);
+            border-radius: 2px;
+            overflow: hidden;
+            margin-top: 2px;
+        }
+        .dl-progress-fill {
+            height: 100%;
+            background: var(--amber);
+            border-radius: 2px;
+            transition: width .5s ease;
+        }
+        .gpu-model-select optgroup { font-style: normal; font-size: .55rem; color: var(--text-dim); }
+        .gpu-model-select option.dl { color: var(--accent); }
+        .model-load-error {
+            font-family: var(--font-data);
+            font-size: .45rem;
+            color: var(--danger);
+            letter-spacing: .08em;
+            margin-top: 2px;
+        }
+
+        /* ── Lock button ──────────────────────────── */
+        .lock-btn {
+            font-family: var(--font-label);
+            font-size: .7rem;
+            font-weight: 600;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            padding: 6px 14px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text-dim);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: border-color .15s, color .15s;
+            margin-left: auto;
+        }
+        .lock-btn:hover { border-color: rgba(0,229,255, 0.3); color: var(--accent); }
+        .lock-btn.locked {
+            border-color: rgba(255,179,0, 0.4);
+            color: var(--amber);
+            background: rgba(255,179,0, 0.06);
+        }
+
+        .gpu-model-select:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+            border-color: var(--border);
+        }
+        .cfg-btn {
+            font-family: var(--font-label);
+            font-size: .7rem;
+            font-weight: 600;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            padding: 6px 14px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text-dim);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: border-color .15s, color .15s;
+        }
+        .cfg-btn:hover { border-color: rgba(0,229,255, 0.3); color: var(--accent); }
+        .cfg-btn.active {
+            border-color: rgba(0,229,255, 0.4);
+            color: var(--accent);
+            background: rgba(0,229,255, 0.06);
+        }
+
+        /* ── Autoload panel ───────────────────────── */
+        .autoload-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 100;
+            background-color: rgba(0,0,0, 0.55);
+            background-image:
+                url("data:image/svg+xml,%3Csvg width='4' height='4' xmlns='http://www.w3.org/2000/svg'%3E%3Crect x='0' y='0' width='2' height='2' fill='%23000' fill-opacity='0.45'/%3E%3Crect x='2' y='2' width='2' height='2' fill='%23000' fill-opacity='0.45'/%3E%3C/svg%3E");
+            background-size: 4px 4px;
+            image-rendering: pixelated;
+        }
+        .autoload-overlay.open { display: flex; align-items: center; justify-content: center; }
+
+        .autoload-panel {
+            width: 94%; max-width: 520px; max-height: 85vh;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            display: flex; flex-direction: column;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .autoload-header {
+            display: flex; align-items: center; gap: 10px;
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        .autoload-header .al-icon {
+            width: 32px; height: 32px;
+            display: flex; align-items: center; justify-content: center;
+            border: 1px solid rgba(0,229,255, 0.25);
+            border-radius: var(--radius);
+            color: var(--accent); font-size: 1rem;
+        }
+        .autoload-header .al-title {
+            font-family: var(--font-label);
+            font-size: 1rem; font-weight: 700;
+            letter-spacing: .1em; text-transform: uppercase;
+            color: var(--text); flex: 1;
+        }
+        .autoload-header .al-close {
+            width: 28px; height: 28px;
+            display: flex; align-items: center; justify-content: center;
+            border: 1px solid var(--border); border-radius: var(--radius);
+            color: var(--text-dim); cursor: pointer; font-size: .8rem;
+        }
+        .autoload-header .al-close:hover { border-color: rgba(255,51,51, 0.3); color: var(--danger); }
+
+        /* Segmented progress bar inside autoload */
+        .al-progress-wrap {
+            padding: 10px 14px 6px;
+            flex-shrink: 0;
+        }
+        .al-progress-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 6px;
+        }
+        .al-progress-label {
+            font-family: var(--font-data); font-size: .55rem;
+            letter-spacing: .1em; text-transform: uppercase;
+            color: var(--text-dim);
+        }
+        .al-progress-pct {
+            font-family: var(--font-data); font-size: .65rem;
+            font-weight: 500; color: var(--accent);
+            letter-spacing: .05em;
+        }
+        .al-seg-bar {
+            display: flex; gap: 2px; height: 8px;
+        }
+        .al-seg-bar .seg {
+            flex: 1; height: 100%;
+            background: rgba(244,244,244, 0.06); border-radius: 1px;
+            transition: background .15s, filter .15s;
+        }
+        .al-seg-bar .seg.filled { background: var(--accent); }
+        .al-seg-bar .seg.filled.seg-bright { filter: brightness(1.35); }
+        .al-seg-bar .seg.filled.seg-dim { filter: brightness(0.7); transition: none; }
+        .al-seg-bar .seg.pending { background: rgba(0,229,255, 0.15); }
+
+        .al-summary {
+            padding: 0 14px 8px;
+            font-family: var(--font-data); font-size: .55rem;
+            color: var(--text-dim); letter-spacing: .06em;
+        }
+        .al-summary .accent { color: var(--accent); }
+
+        /* Step log area */
+        .al-steps {
+            flex: 1; overflow-y: auto;
+            padding: 0 14px 10px;
+            display: flex; flex-direction: column; gap: 4px;
+        }
+        .al-steps::-webkit-scrollbar { display: none; }
+
+        .al-step {
+            display: flex; align-items: center; gap: 8px;
+            padding: 6px 8px;
+            background: rgba(244,244,244, 0.02);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            font-family: var(--font-data); font-size: .55rem;
+            color: var(--text-dim);
+        }
+        .al-step.done { border-color: rgba(0,229,255, 0.15); }
+        .al-step.active { border-color: rgba(0,229,255, 0.3); color: var(--text); }
+        .al-step.queued { opacity: 0.5; }
+
+        .al-step-icon {
+            width: 20px; height: 20px; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
+            border: 1px solid var(--border); border-radius: var(--radius);
+            font-size: .6rem; color: var(--text-dim);
+        }
+        .al-step.done .al-step-icon { background: var(--accent); border-color: rgba(0,229,255, 0.3); color: var(--bg); }
+        .al-step.active .al-step-icon { background: rgba(0,229,255, 0.15); border-color: rgba(0,229,255, 0.3); color: var(--accent); }
+
+        .al-step-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+        .al-step-model {
+            font-weight: 500; color: var(--text);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .al-step.queued .al-step-model { color: var(--text-dim); }
+        .al-step-meta {
+            font-size: .5rem; color: var(--text-dim);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .al-step-status {
+            flex-shrink: 0; font-size: .5rem;
+            letter-spacing: .08em; text-transform: uppercase;
+        }
+        .al-step.done .al-step-status { color: var(--accent); }
+        .al-step.active .al-step-status { color: var(--amber); }
+        .al-step.queued .al-step-status { color: var(--text-dim); }
+
+        .al-actions {
+            display: flex; gap: 8px;
+            padding: 10px 14px;
+            border-top: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        .al-actions .act-btn { flex: 1; justify-content: center; }
+
+        /* Mode toggle (AHI toggle-group) */
+        .al-mode-toggle {
+            display: flex;
+            padding: 8px 14px 4px;
+            flex-shrink: 0;
+        }
+        .al-mode-toggle .toggle-group {
+            flex: 1;
+        }
+
+        /* Manual model checklist */
+        .al-manual-list {
+            flex: 1; overflow-y: auto;
+            padding: 0 14px 6px;
+            display: flex; flex-direction: column; gap: 3px;
+        }
+        .al-manual-list::-webkit-scrollbar { display: none; }
+        .al-mitem {
+            display: flex; align-items: center; gap: 8px;
+            padding: 6px 8px;
+            background: rgba(244,244,244, 0.02);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            cursor: pointer;
+            transition: border-color .15s, background .15s;
+        }
+        .al-mitem:hover { border-color: rgba(0,229,255, 0.2); background: rgba(0,229,255, 0.03); }
+        .al-mitem.selected { border-color: rgba(0,229,255, 0.35); background: rgba(0,229,255, 0.06); }
+        .al-mitem-check {
+            width: 18px; height: 18px; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
+            border: 1px solid var(--border); border-radius: 3px;
+            font-size: .6rem; color: transparent;
+            transition: border-color .15s, color .15s, background .15s;
+        }
+        .al-mitem.selected .al-mitem-check {
+            border-color: var(--accent); color: var(--accent);
+            background: rgba(0,229,255, 0.1);
+        }
+        .al-mitem-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+        .al-mitem-name {
+            font-family: var(--font-data); font-size: .55rem; font-weight: 500;
+            color: var(--text);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .al-mitem-meta {
+            font-family: var(--font-data); font-size: .45rem;
+            color: var(--text-dim);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .al-mitem-size {
+            flex-shrink: 0;
+            font-family: var(--font-data); font-size: .5rem;
+            color: var(--text-dim); letter-spacing: .05em;
+        }
+    </style>
+</head>
+
+<body>
+<div id="app">
+
+    <!-- Header -->
+    <div class="dash-header">
+        <h1>Cluster<span>Flock</span></h1>
+        <div class="header-right">
+            <span style="font-family:var(--font-data);font-size:.55rem;color:var(--text-dim);letter-spacing:.08em" id="poll-timer">POLLING...</span>
+            <div class="conn off" id="conn-indicator" title="LINK_DOWN"></div>
+        </div>
+    </div>
+
+    <!-- Nav -->
+    <div class="nav-tabs">
+        <a class="nav-tab" href="/" data-flash data-nbeep="select">MISSION</a>
+        <div class="nav-tab active" data-flash data-nbeep="select">COMMAND</div>
+        <a class="nav-tab" href="status.html" data-flash data-nbeep="select">STATUS</a>
+        <a class="nav-tab" id="oapi-link" href="oapi.html" data-flash data-nbeep="select">OAPI</a>
+    </div>
+    <script>document.getElementById('oapi-link').href=location.protocol+'//'+location.hostname+':1919/';</script>
+
+    <!-- Action bar -->
+    <div class="action-bar">
+        <div class="act-btn" id="btn-expand-all" data-flash><i class="ph ph-arrows-out-simple"></i> EXPAND ALL</div>
+        <div class="act-btn" id="btn-collapse-all" data-flash><i class="ph ph-arrows-in-simple"></i> COLLAPSE</div>
+        <div class="act-btn green" id="btn-autoload" data-flash><i class="ph ph-rocket-launch"></i> AUTOLOAD</div>
+        <div class="cfg-btn" id="btn-tight-pack" data-flash title="Tight pack: load multiple models per GPU" style="display:none"><i class="ph ph-stack"></i> <span>1 PER GPU</span></div>
+        <div class="lock-btn" id="btn-lock" data-flash title="Lock model selection"><i class="ph ph-lock-simple-open"></i> <span>UNLOCKED</span></div>
+    </div>
+
+    <!-- Autoload overlay panel -->
+    <div class="autoload-overlay" id="autoload-overlay">
+        <div class="autoload-panel">
+            <span class="corner corner-tl">&#x231C;</span><span class="corner corner-tr">&#x231D;</span>
+            <span class="corner corner-bl">&#x231E;</span><span class="corner corner-br">&#x231F;</span>
+            <div class="autoload-header">
+                <div class="al-icon"><i class="ph ph-rocket-launch"></i></div>
+                <span class="al-title">AUTOLOAD</span>
+                <span id="al-mode-label" style="font-family:var(--font-data);font-size:.5rem;letter-spacing:.1em;text-transform:uppercase;color:var(--accent)">TIGHT PACK</span>
+                <div class="al-close" id="al-close"><i class="ph ph-x"></i></div>
+            </div>
+            <div class="al-mode-toggle" id="al-mode-toggle">
+                <div class="toggle-group">
+                    <div class="tg-option active" data-mode="auto" data-flash data-nbeep="select"><i class="ph ph-robot"></i> FULL AUTO</div>
+                    <div class="tg-option" data-mode="manual" data-flash data-nbeep="select"><i class="ph ph-list-checks"></i> MANUAL</div>
+                </div>
+            </div>
+            <div class="al-progress-wrap" id="al-progress-wrap" style="display:none">
+                <div class="al-progress-header">
+                    <span class="al-progress-label" id="al-progress-label">LOADING MODELS...</span>
+                    <span class="al-progress-pct" id="al-progress-pct">[ 0% ]</span>
+                </div>
+                <div class="al-seg-bar" id="al-seg-bar"></div>
+            </div>
+            <div class="al-summary" id="al-summary"></div>
+            <div class="al-manual-list" id="al-manual-list" style="display:none"></div>
+            <div class="al-steps" id="al-steps"></div>
+            <div class="al-actions" id="al-actions">
+                <div class="act-btn primary" id="al-btn-execute" data-flash><i class="ph ph-play"></i> EXECUTE</div>
+                <div class="act-btn" id="al-btn-cancel" data-flash><i class="ph ph-x"></i> CLOSE</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Node cards + responses -->
+    <div class="dash-body" id="main-body">
+        <div class="empty-state" id="empty-state">
+            <i class="ph ph-circle-notch"></i>
+            <div class="msg">CONNECTING TO NCORE...</div>
+        </div>
+    </div>
+
+    <!-- Prompt input -->
+    <div class="prompt-area">
+        <textarea class="prompt-input" id="prompt-input" rows="1" placeholder="PROMPT ALL ENDPOINTS..." spellcheck="false"></textarea>
+        <div class="send-btn" id="btn-send" data-flash data-lockout="500" title="Send to all endpoints"><i class="ph ph-paper-plane-tilt"></i></div>
+    </div>
+
+    <!-- Footer -->
+    <!--#include file="footer.part"-->
+
+</div>
+
+<script src="notum_AHI/js/nRegistry.js?v=20260228"></script>
+<script src="notum_AHI/js/nUtils.js?v=20260228"></script>
+<script src="notum_AHI/js/nComp.js?v=20260228"></script>
+<script src="notum_AHI/js/nNotify.js?v=20260228"></script>
+
+<script>
+(function () {
+    'use strict';
+
+    var POLL = 5000;
+    var bodyEl = document.getElementById('main-body');
+    var emptyEl = document.getElementById('empty-state');
+    var connDot = document.getElementById('conn-indicator');
+    var pollTimerEl = document.getElementById('poll-timer');
+    var promptInput = document.getElementById('prompt-input');
+    var btnSend = document.getElementById('btn-send');
+    var btnExpandAll = document.getElementById('btn-expand-all');
+    var btnCollapseAll = document.getElementById('btn-collapse-all');
+
+    var connected = false;
+    var lastNodesJSON = '';
+    var lastPendingJSON = '';
+    var lastRenderKey = '';
+    var openNodes = {};
+    var openResponses = {};
+    var activeTaskId = null;
+    var taskResults = {};
+    var catalogModels = [];
+    var modelLocked = false;
+    var tightPack = false;
+    var pendingLoadOps = {};  // "nodeId:gpuIdx" → true while loading
+    // ── Helpers ─────────────────────────────────────────────────────
+
+    function esc(s) {
+        if (!s) return '';
+        var d = document.createElement('div');
+        d.appendChild(document.createTextNode(s));
+        return d.innerHTML;
+    }
+
+    function fmtMB(mb) {
+        if (!mb && mb !== 0) return '\u2014';
+        if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
+        return Math.round(mb) + ' MB';
+    }
+
+    function fmtPct(val) {
+        if (val === null || val === undefined) return '\u2014';
+        return Math.round(val) + '%';
+    }
+
+    function barClass(pct) {
+        if (pct > 85) return 'crit';
+        if (pct > 65) return 'warn';
+        return '';
+    }
+
+    function ageStr(ts) {
+        if (!ts) return 'never';
+        var age = (Date.now() / 1000) - ts;
+        if (age < 60) return Math.round(age) + 's ago';
+        if (age < 3600) return Math.round(age / 60) + 'm ago';
+        return Math.round(age / 3600) + 'h ago';
+    }
+
+    function segBarHtml(pct, cssClass) {
+        var SEGS = 10;
+        var filled = Math.round(Math.min(100, Math.max(0, pct)) / 10);
+        var cls = barClass(pct);
+        var html = '<div class="' + (cssClass || 'metric-seg-bar') + '">';
+        for (var i = 0; i < SEGS; i++) {
+            html += '<div class="seg' + (i < filled ? ' filled' + (cls ? ' ' + cls : '') : '') + '"></div>';
+        }
+        html += '</div>';
+        return html;
+    }
+
+    function metricBar(label, pct) {
+        if (pct === null || pct === undefined) return '';
+        return '<div class="metric-row">' +
+            '<span class="metric-label">' + esc(label) + '</span>' +
+            segBarHtml(pct, 'metric-seg-bar') +
+            '<span class="metric-pct">' + fmtPct(pct) + '</span></div>';
+    }
+
+    var prevConnected = null;
+
+    function setConnected(ok) {
+        if (ok === connected) return;
+        connected = ok;
+        connDot.className = ok ? 'conn on' : 'conn off';
+        connDot.title = ok ? 'LINK_OK' : 'LINK_DOWN';
+        if (typeof nComp !== 'undefined') nComp.status(connDot, ok ? 'ok' : 'error');
+        if (prevConnected !== null && prevConnected !== ok && typeof nNotify !== 'undefined') {
+            nNotify.show(ok ? 'CONNECTION RESTORED' : 'CONNECTION LOST', ok ? 'ok' : 'error');
+            if (typeof nbeep !== 'undefined') nbeep(ok ? 'confirm' : 'error');
+        }
+        prevConnected = ok;
+    }
+
+    // ── Auto-resize textarea ────────────────────────────────────────
+
+    promptInput.addEventListener('input', function () {
+        this.style.height = 'auto';
+        this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+    });
+
+    // ── Pending card ────────────────────────────────────────────────
+
+    function renderPending(p) {
+        return '<div class="pending-card">' +
+            '<span class="corner corner-tl">\u231C</span><span class="corner corner-tr">\u231D</span>' +
+            '<span class="corner corner-bl">\u231E</span><span class="corner corner-br">\u231F</span>' +
+            '<div class="pending-icon"><i class="ph ph-shield-warning"></i></div>' +
+            '<div class="pending-info">' +
+            '<div class="p-host">' + esc(p.hostname || p.node_id) + '</div>' +
+            '<div class="p-meta">' + esc(p.node_id) + ' \u00B7 REQUESTED ' + ageStr(p.requested_at) + '</div>' +
+            '</div><div class="pending-actions">' +
+            '<div class="p-btn approve" data-action="approve" data-node="' + esc(p.node_id) + '"><i class="ph ph-check-circle"></i> APPROVE</div>' +
+            '<div class="p-btn reject" data-action="reject" data-node="' + esc(p.node_id) + '"><i class="ph ph-x-circle"></i> REJECT</div>' +
+            '</div></div>';
+    }
+
+    // ── Expandable node card ────────────────────────────────────────
+
+    function renderNode(node) {
+        var status = node.status || 'dead';
+        var hw = node.hardware || {};
+        var metrics = node.metrics || {};
+        var endpoints = node.endpoints || [];
+        var gpus = hw.gpu || [];
+        var sys = hw.system || {};
+        var sysMetrics = metrics.system || {};
+        var gpuMetrics = metrics.gpu || [];
+        var isOpen = openNodes[node.node_id];
+        var readyCount = 0;
+        for (var rc = 0; rc < endpoints.length; rc++) {
+            if (endpoints[rc].status === 'ready') readyCount++;
+        }
+        var activity = node.activity || {};
+        var actState = activity.state || 'idle';
+        var actModel = activity.model || '';
+        var actDetail = activity.detail || null;
+
+        var html = '<div class="node-card ' + esc(status) + (isOpen ? ' open' : '') + '" data-node="' + esc(node.node_id) + '">';
+        html += '<span class="corner corner-tl">\u231C</span><span class="corner corner-tr">\u231D</span>';
+        html += '<span class="corner corner-bl">\u231E</span><span class="corner corner-br">\u231F</span>';
+
+        // Compact header
+        html += '<div class="node-header" data-toggle="' + esc(node.node_id) + '">';
+        html += '<div class="node-icon"><i class="ph ph-cpu"></i></div>';
+        html += '<div class="node-summary">';
+        html += '<div class="hostname">' + esc(node.hostname || node.node_id) + '</div>';
+        var gpuSum = '';
+        if (gpus.length > 0) {
+            gpuSum = esc(gpus[0].name || 'GPU');
+            if (gpus.length > 1) gpuSum += ' +' + (gpus.length - 1);
+        }
+        html += '<div class="meta">' + gpuSum + (gpuSum ? ' \u00B7 ' : '') + 'SEEN ' + ageStr(node.last_seen) + '</div>';
+        html += '</div>';
+        html += '<div class="node-badges">';
+        html += '<span class="badge badge-models' + (readyCount === 0 ? ' none' : '') + '">' + readyCount + ' MODEL' + (readyCount !== 1 ? 'S' : '') + '</span>';
+        // Activity badge (non-idle)
+        if (actState !== 'idle') {
+            var actLabels = {downloading: 'DOWNLOADING', loading: 'LOADING', benchmarking: 'BENCHMARKING', generating: 'GENERATING'};
+            var actLabel = actLabels[actState] || actState.toUpperCase();
+            html += '<span class="badge badge-activity"><i class="ph ph-circle-notch"></i>' + actLabel + '</span>';
+        }
+        if (node.agent_version) {
+            var vOk = node.version_ok;
+            var vCls = vOk === false ? ' outdated' : '';
+            html += '<span class="badge badge-version' + vCls + '" title="Agent v' + esc(node.agent_version) + (vOk === false ? ' — UPDATE REQUIRED' : '') + '">v' + esc(node.agent_version) + '</span>';
+        }
+        html += '<span class="badge badge-status">' + esc(status.toUpperCase()) + '</span>';
+        html += '</div>';
+        html += '<i class="ph ph-caret-down expand-chevron"></i>';
+        html += '</div>';
+
+        // Activity detail row (non-idle, shown always below header)
+        if (actState !== 'idle') {
+            var actIcon = actState === 'downloading' ? 'ph-download-simple' : actState === 'loading' ? 'ph-hard-drives' : actState === 'benchmarking' ? 'ph-chart-line-up' : 'ph-lightning';
+            var modelShort = actModel ? actModel.split('/').pop() : '';
+            html += '<div class="activity-row">';
+            html += '<i class="ph ' + actIcon + ' activity-icon"></i>';
+            if (actState === 'downloading' && actDetail) {
+                var dlPct = actDetail.pct || 0;
+                var dlBytes = actDetail.downloaded_bytes || 0;
+                var dlExpected = actDetail.expected_bytes || 0;
+                var dlGB = (dlBytes / (1024*1024*1024)).toFixed(1);
+                var dlTotalGB = dlExpected > 0 ? (dlExpected / (1024*1024*1024)).toFixed(1) : '?';
+                html += '<div style="flex:1;min-width:0">';
+                html += '<div class="activity-text">DOWNLOADING ' + esc(modelShort) + ' \u2014 ' + dlGB + ' / ' + dlTotalGB + ' GB</div>';
+                if (dlExpected > 0) {
+                    html += '<div class="dl-progress-bar"><div class="dl-progress-fill" style="width:' + dlPct + '%"></div></div>';
+                }
+                html += '</div>';
+                if (dlExpected > 0) html += '<span class="activity-pct">' + dlPct + '%</span>';
+            } else {
+                var actVerbs = {loading: 'LOADING', benchmarking: 'BENCHMARKING', generating: 'GENERATING', downloading: 'DOWNLOADING'};
+                html += '<span class="activity-text">' + (actVerbs[actState] || actState.toUpperCase()) + (modelShort ? ' ' + esc(modelShort) : '') + '\u2026</span>';
+            }
+            html += '</div>';
+        }
+
+        // Expandable detail
+
+        html += '<div class="node-detail"><div class="node-detail-inner">';
+
+        // GPUs + model dropdowns
+        if (gpus.length > 0) {
+            html += '<div class="detail-label">GPU</div>';
+            for (var g = 0; g < gpus.length; g++) {
+                var gpu = gpus[g];
+                var gm = gpuMetrics[g] || {};
+                var vt = gpu.vram_total_mb || 0;
+                var vf = gm.vram_free_mb;
+                var vp = (vf !== null && vf !== undefined && vt) ? Math.round(((vt - vf) / vt) * 100) : null;
+                html += '<div class="gpu-chip"><i class="ph ph-gpu" style="color:var(--accent);font-size:.75rem;flex-shrink:0"></i>';
+                html += '<span class="gpu-name">' + esc(gpu.name || 'GPU ' + g) + '</span>';
+                html += '<span class="gpu-vram">' + (vf !== null && vf !== undefined ? fmtMB(vf) + ' FREE / ' + fmtMB(vt) : fmtMB(vt)) + '</span></div>';
+                if (vp !== null) html += metricBar('VRAM', vp);
+                if (gm.utilization_pct !== null && gm.utilization_pct !== undefined) html += metricBar('GPU', gm.utilization_pct);
+
+                // Model dropdown for this GPU
+                var fittingModels = modelsForVram(vt);
+                var currentModel = currentModelForGpu(endpoints, g);
+                var loadKey = node.node_id + ':' + g;
+                var pending = pendingLoadOps[loadKey];
+                // Auto-clear pending if target model is now loaded
+                if (pending && pending.model && currentModel === pending.model) {
+                    delete pendingLoadOps[loadKey];
+                    pending = null;
+                }
+                // Build set of downloaded model IDs on this node
+                var dlSet = {};
+                var nodeDownloaded = node.downloaded || [];
+                for (var di = 0; di < nodeDownloaded.length; di++) {
+                    if (nodeDownloaded[di].id) dlSet[nodeDownloaded[di].id] = true;
+                }
+                html += '<div class="gpu-model-row">';
+                if (pending) {
+                    var pendingName = pending.name || pending.model || '';
+                    html += '<span class="model-loading-indicator"><i class="ph ph-circle-notch"></i> LOADING ' + esc(pendingName) + '\u2026</span>';
+                    if (pending.error) {
+                        html += '<div class="model-load-error"><i class="ph ph-warning"></i> ' + esc(pending.error) + '</div>';
+                    }
+                } else {
+                    var disabledAttr = modelLocked ? ' disabled' : '';
+                    html += '<select class="gpu-model-select" data-node="' + esc(node.node_id) + '" data-gpu="' + g + '" data-current="' + esc(currentModel) + '"' + disabledAttr + '>';
+                    html += '<option value="">' + (currentModel ? '\u2014 UNLOAD \u2014' : '\u2014 SELECT MODEL \u2014') + '</option>';
+                    // If current model is loaded but not in catalog, add it
+                    var currentInCatalog = false;
+                    for (var fi = 0; fi < fittingModels.length; fi++) {
+                        if (fittingModels[fi].id === currentModel) { currentInCatalog = true; break; }
+                    }
+                    if (currentModel && !currentInCatalog) {
+                        html += '<option value="' + esc(currentModel) + '" selected>\u2713 ' + esc(currentModel) + ' (loaded)</option>';
+                    }
+                    // Split into downloaded and catalog-only
+                    var dlModels = [];
+                    var catModels = [];
+                    for (var fi = 0; fi < fittingModels.length; fi++) {
+                        if (dlSet[fittingModels[fi].id]) dlModels.push(fittingModels[fi]);
+                        else catModels.push(fittingModels[fi]);
+                    }
+                    if (dlModels.length > 0) {
+                        html += '<optgroup label="\u2605 DOWNLOADED (LOCAL)">';
+                        for (var di = 0; di < dlModels.length; di++) {
+                            var dm = dlModels[di];
+                            var sel = (dm.id === currentModel) ? ' selected' : '';
+                            var sizeMB = Math.round(dm.file_size / (1024 * 1024));
+                            html += '<option value="' + esc(dm.id) + '"' + sel + ' class="dl">\u2605 ' + esc(dm.name) + ' (' + fmtMB(sizeMB) + ')</option>';
+                        }
+                        html += '</optgroup>';
+                    }
+                    if (catModels.length > 0) {
+                        html += '<optgroup label="CATALOG (REQUIRES DOWNLOAD)">';
+                        for (var ci = 0; ci < catModels.length; ci++) {
+                            var cm = catModels[ci];
+                            var sel = (cm.id === currentModel) ? ' selected' : '';
+                            var sizeMB = Math.round(cm.file_size / (1024 * 1024));
+                            html += '<option value="' + esc(cm.id) + '"' + sel + '>' + esc(cm.name) + ' (' + fmtMB(sizeMB) + ')</option>';
+                        }
+                        html += '</optgroup>';
+                    }
+                    html += '</select>';
+                }
+                html += '</div>';
+            }
+        }
+
+        // System HW
+        var hwItems = [];
+        if (sys.ram_total_mb) hwItems.push({l: 'RAM', v: fmtMB(sys.ram_total_mb)});
+        if (sys.cpu_name) hwItems.push({l: 'CPU', v: sys.cpu_name});
+        if (sys.cpu_cores) hwItems.push({l: 'CORES', v: String(sys.cpu_cores)});
+        if (sys.os) hwItems.push({l: 'OS', v: sys.os});
+        if (sys.disk_total_gb) hwItems.push({l: 'DISK', v: sys.disk_total_gb.toFixed(0) + ' GB'});
+        if (hwItems.length > 0) {
+            html += '<div class="detail-label">SYSTEM</div><div class="hw-grid">';
+            for (var h = 0; h < hwItems.length; h++) {
+                html += '<div class="hw-item"><span class="hw-label">' + esc(hwItems[h].l) + '</span><span class="hw-value">' + esc(hwItems[h].v) + '</span></div>';
+            }
+            html += '</div>';
+        }
+
+        // System metrics
+        var sm = '';
+        if (sysMetrics.cpu_pct !== null && sysMetrics.cpu_pct !== undefined) sm += metricBar('CPU', sysMetrics.cpu_pct);
+        if (sysMetrics.ram_used_pct !== null && sysMetrics.ram_used_pct !== undefined) {
+            sm += metricBar('RAM', sysMetrics.ram_used_pct);
+        } else if (sys.ram_total_mb && sysMetrics.ram_free_mb !== null && sysMetrics.ram_free_mb !== undefined) {
+            sm += metricBar('RAM', Math.round(((sys.ram_total_mb - sysMetrics.ram_free_mb) / sys.ram_total_mb) * 100));
+        }
+        if (sysMetrics.disk_free_gb !== null && sysMetrics.disk_free_gb !== undefined && sys.disk_total_gb) {
+            sm += metricBar('DISK', Math.round(((sys.disk_total_gb - sysMetrics.disk_free_gb) / sys.disk_total_gb) * 100));
+        }
+        if (sm) html += '<div class="detail-label">UTILIZATION</div>' + sm;
+
+        // Endpoints
+        if (endpoints.length > 0) {
+            html += '<div class="detail-label">LOADED MODELS</div><div>';
+            for (var e = 0; e < endpoints.length; e++) {
+                var ep = endpoints[e];
+                var ec = ep.status === 'ready' ? '' : ep.status === 'loading' ? ' loading' : ' error';
+                html += '<span class="endpoint-tag' + ec + '">' + esc(ep.model || 'unknown');
+                if (ep.gpu !== null && ep.gpu !== undefined) html += ' \u00B7 GPU' + ep.gpu;
+                html += '</span>';
+            }
+            html += '</div>';
+        }
+
+        html += '</div></div></div>';
+        return html;
+    }
+
+    // ── Response card ───────────────────────────────────────────────
+
+    function renderResponses() {
+        if (!activeTaskId || !taskResults[activeTaskId]) return '';
+        var task = taskResults[activeTaskId];
+        var results = task.results || [];
+
+        var html = '';
+
+        // Echo the prompt
+        if (task.prompt) {
+            html += '<div class="prompt-echo"><span class="label">PROMPT</span>' + esc(task.prompt) + '</div>';
+        }
+
+        if (results.length === 0 && (task.status === 'pending' || task.status === 'running')) {
+            html += '<div class="section-label"><i class="ph ph-circle-notch" style="color:var(--accent)"></i> WAITING FOR RESPONSES\u2026</div>';
+            return html;
+        }
+
+        var doneCount = 0;
+        for (var c = 0; c < results.length; c++) {
+            if (results[c].status === 'done' || results[c].status === 'error') doneCount++;
+        }
+
+        html += '<div class="section-label">' + results.length + ' RESPONSE' + (results.length !== 1 ? 'S' : '') +
+            (task.expected ? ' / ' + task.expected + ' EXPECTED' : '') +
+            (doneCount < results.length ? ' \u00B7 STREAMING...' : ' \u00B7 COMPLETE') + '</div>';
+        html += '<div class="responses-area">';
+
+        for (var i = 0; i < results.length; i++) {
+            var r = results[i];
+            var rKey = activeTaskId + '-' + (r.node_id || '') + '-' + (r.model || i);
+            var isOpen = openResponses[rKey] !== false;
+            var rStatus = r.status || 'done';
+            var content = '';
+            if (r.choices && r.choices.length > 0 && r.choices[0].message) {
+                content = r.choices[0].message.content || '';
+            } else if (r.error) {
+                content = r.error;
+                rStatus = 'error';
+            }
+
+            html += '<div class="response-card ' + esc(rStatus) + (isOpen ? ' open' : '') + '">';
+            html += '<div class="response-header" data-rtoggle="' + esc(rKey) + '">';
+            html += '<span class="response-model">' + esc(r.model || 'unknown') + '</span>';
+            html += '<span class="response-host">' + esc(r.hostname || r.node_id || '') + '</span>';
+            var sLabel = rStatus === 'streaming' ? 'STREAMING\u2026' : rStatus === 'done' ? 'DONE' : rStatus === 'error' ? 'ERROR' : 'TIMEOUT';
+            html += '<span class="response-status">' + sLabel + '</span>';
+            if (r.usage) {
+                html += '<span style="font-family:var(--font-data);font-size:.45rem;color:var(--text-dim);flex-shrink:0">' + (r.usage.total_tokens || 0) + ' TOK</span>';
+            }
+            html += '<i class="ph ph-caret-down expand-r-chevron"></i>';
+            html += '</div>';
+
+            html += '<div class="response-body"><div class="response-body-inner' + (rStatus === 'streaming' ? ' stream-cursor' : '') + '">' + esc(content) + '</div>';
+            if (r.usage) {
+                html += '<div class="response-meta">PROMPT: ' + (r.usage.prompt_tokens || 0) + ' \u00B7 COMPLETION: ' + (r.usage.completion_tokens || 0) + ' \u00B7 TOTAL: ' + (r.usage.total_tokens || 0) + '</div>';
+            }
+            html += '</div></div>';
+        }
+
+        html += '</div>';
+        return html;
+    }
+
+    // ── Catalog helpers ────────────────────────────────────────────
+
+    function modelsForVram(vramMB) {
+        var budget = vramMB * 1024 * 1024;
+        return catalogModels.filter(function (m) { return m.total_mem <= budget; });
+    }
+
+    function currentModelForGpu(endpoints, gpuIdx) {
+        // Find the model loaded on this GPU index (or first model if gpu unspecified)
+        for (var i = 0; i < endpoints.length; i++) {
+            var ep = endpoints[i];
+            if (ep.status === 'ready') {
+                var epGpu = ep.gpu;
+                if (epGpu === gpuIdx || (epGpu === null || epGpu === undefined)) {
+                    // For single-GPU or when gpu not reported, return first match if idx matches count
+                    if (epGpu === gpuIdx) return ep.model || '';
+                    if (i === gpuIdx) return ep.model || '';
+                }
+            }
+        }
+        // Fallback: if only one endpoint and one GPU, match them
+        if (endpoints.length === 1 && gpuIdx === 0 && endpoints[0].status === 'ready') {
+            return endpoints[0].model || '';
+        }
+        return '';
+    }
+
+    function fetchCatalog() {
+        fetch('/api/v1/catalog')
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                catalogModels = d.models || [];
+            })
+            .catch(function () {});
+    }
+
+    function fetchLockState() {
+        fetch('/api/v1/config')
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                modelLocked = d.locked || false;
+                tightPack = d.tight_pack || false;
+                updateLockUI();
+                updateTightPackUI();
+            })
+            .catch(function () {});
+    }
+
+    function updateLockUI() {
+        var btn = document.getElementById('btn-lock');
+        if (modelLocked) {
+            btn.className = 'lock-btn locked';
+            btn.innerHTML = '<i class="ph ph-lock-simple"></i> <span>LOCKED</span>';
+            btn.title = 'Model selection locked — click to unlock';
+        } else {
+            btn.className = 'lock-btn';
+            btn.innerHTML = '<i class="ph ph-lock-simple-open"></i> <span>UNLOCKED</span>';
+            btn.title = 'Lock model selection';
+        }
+    }
+
+    function toggleLock() {
+        fetch('/api/v1/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ locked: !modelLocked }),
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+            modelLocked = d.locked || false;
+            tightPack = d.tight_pack || false;
+            updateLockUI();
+            updateTightPackUI();
+            render();
+            if (typeof nbeep === 'function') nbeep(modelLocked ? 'lock' : 'unlock');
+        });
+    }
+
+    function updateTightPackUI() {
+        var btn = document.getElementById('btn-tight-pack');
+        if (tightPack) {
+            btn.className = 'cfg-btn active';
+            btn.innerHTML = '<i class="ph ph-stack"></i> <span>TIGHT PACK</span>';
+            btn.title = 'Tight packing ON \u2014 multiple models per GPU';
+        } else {
+            btn.className = 'cfg-btn';
+            btn.innerHTML = '<i class="ph ph-stack"></i> <span>1 PER GPU</span>';
+            btn.title = 'One model per GPU \u2014 click to enable tight packing';
+        }
+    }
+
+    function toggleTightPack() {
+        fetch('/api/v1/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tight_pack: !tightPack }),
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+            modelLocked = d.locked || false;
+            tightPack = d.tight_pack || false;
+            updateLockUI();
+            updateTightPackUI();
+        });
+    }
+
+    function handleModelChange(nodeId, gpuIdx, newModelId, currentModel) {
+        var loadKey = nodeId + ':' + gpuIdx;
+        // Find model name for better loading feedback
+        var modelName = newModelId;
+        for (var ci = 0; ci < catalogModels.length; ci++) {
+            if (catalogModels[ci].id === newModelId) { modelName = catalogModels[ci].name; break; }
+        }
+        // Check if model is already downloaded on this node
+        var isDownloaded = false;
+        for (var ni = 0; ni < nodesCache.length; ni++) {
+            if (nodesCache[ni].node_id === nodeId) {
+                var dl = nodesCache[ni].downloaded || [];
+                for (var di = 0; di < dl.length; di++) {
+                    if (dl[di].id === newModelId) { isDownloaded = true; break; }
+                }
+                break;
+            }
+        }
+        // Store target model so spinner persists until heartbeat confirms load
+        pendingLoadOps[loadKey] = { model: newModelId, name: modelName, error: null };
+        render();
+
+        function doLoad() {
+            if (!newModelId) {
+                // Just unloading — clear pending once unload command is sent
+                delete pendingLoadOps[loadKey];
+                render();
+                return;
+            }
+            // Use download_and_load for catalog models not yet downloaded
+            var endpoint = isDownloaded ? '/load' : '/download_and_load';
+            fetch('/api/v1/nodes/' + encodeURIComponent(nodeId) + endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model_id: newModelId }),
+            })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                if (d.error) {
+                    pendingLoadOps[loadKey] = { model: newModelId, name: modelName, error: d.error };
+                    setTimeout(function () { delete pendingLoadOps[loadKey]; render(); }, 5000);
+                }
+                // Don't delete pendingLoadOps — spinner stays until model shows in heartbeat
+                render();
+            })
+            .catch(function (err) {
+                pendingLoadOps[loadKey] = { model: newModelId, name: modelName, error: 'Network error' };
+                setTimeout(function () { delete pendingLoadOps[loadKey]; render(); }, 5000);
+                render();
+            });
+        }
+
+        // Unload current model first if one is loaded
+        if (currentModel) {
+            fetch('/api/v1/nodes/' + encodeURIComponent(nodeId) + '/unload', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model_id: currentModel }),
+            })
+            .then(doLoad)
+            .catch(function () { doLoad(); });
+        } else {
+            doLoad();
+        }
+    }
+
+    // ── Full render ─────────────────────────────────────────────────
+
+    var nodesCache = [];
+    var pendingCache = [];
+
+    function render(nodes, pending) {
+        nodesCache = nodes || nodesCache;
+        pendingCache = pending || pendingCache;
+
+        if (nodesCache.length === 0 && pendingCache.length === 0 && !activeTaskId) {
+            bodyEl.innerHTML = '';
+            bodyEl.appendChild(emptyEl);
+            emptyEl.querySelector('.msg').textContent = 'NO AGENTS CONNECTED';
+            emptyEl.querySelector('i').className = 'ph ph-plugs';
+            return;
+        }
+
+        var order = { healthy: 0, stale: 1, dead: 2 };
+        nodesCache.sort(function (a, b) {
+            var d = (order[a.status] || 9) - (order[b.status] || 9);
+            return d !== 0 ? d : (a.hostname || '').localeCompare(b.hostname || '');
+        });
+
+        var html = '';
+
+        if (pendingCache.length > 0) {
+            html += '<div class="section-label"><i class="ph ph-warning" style="color:var(--amber)"></i> ' + pendingCache.length + ' PENDING APPROVAL</div>';
+            for (var p = 0; p < pendingCache.length; p++) html += renderPending(pendingCache[p]);
+        }
+
+        html += '<div class="section-label">' + nodesCache.length + ' AGENT' + (nodesCache.length !== 1 ? 'S' : '') + '</div>';
+        for (var n = 0; n < nodesCache.length; n++) html += renderNode(nodesCache[n]);
+
+        html += renderResponses();
+
+        bodyEl.innerHTML = html;
+        wireEvents();
+
+        // AHI nComp.status pips on node cards
+        if (typeof nComp !== 'undefined') {
+            var nodeCards = bodyEl.querySelectorAll('.node-card');
+            for (var nc = 0; nc < nodeCards.length; nc++) {
+                var card = nodeCards[nc];
+                if (card.classList.contains('healthy')) nComp.status(card, 'ok');
+                else if (card.classList.contains('stale')) nComp.status(card, 'warn');
+                else nComp.status(card, 'error');
+            }
+        }
+    }
+
+    // ── Wire event handlers ─────────────────────────────────────────
+
+    function wireEvents() {
+        bodyEl.querySelectorAll('[data-toggle]').forEach(function (el) {
+            el.addEventListener('click', function () {
+                var nid = this.dataset.toggle;
+                openNodes[nid] = !openNodes[nid];
+                if (typeof nbeep === 'function') nbeep(openNodes[nid] ? 'expand_' + nid : 'collapse_' + nid);
+                render();
+            });
+        });
+
+        bodyEl.querySelectorAll('[data-rtoggle]').forEach(function (el) {
+            el.addEventListener('click', function () {
+                var rk = this.dataset.rtoggle;
+                openResponses[rk] = openResponses[rk] === false;
+                render();
+            });
+        });
+
+        bodyEl.querySelectorAll('.p-btn').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var action = this.dataset.action;
+                var nodeId = this.dataset.node;
+                if (typeof nbeep === 'function') nbeep(action + '_' + nodeId);
+                fetch('/api/v1/pending/' + encodeURIComponent(nodeId) + '/' + action, { method: 'POST' })
+                    .then(function () { lastNodesJSON = ''; lastPendingJSON = ''; poll(); });
+            });
+        });
+
+        bodyEl.querySelectorAll('.gpu-model-select').forEach(function (sel) {
+            sel.addEventListener('change', function () {
+                var nodeId = this.dataset.node;
+                var gpuIdx = parseInt(this.dataset.gpu, 10);
+                var current = this.dataset.current || '';
+                var newModel = this.value;
+                if (typeof nbeep === 'function') nbeep('model_change');
+                handleModelChange(nodeId, gpuIdx, newModel, current);
+            });
+        });
+    }
+
+    // ── Poll cluster state ──────────────────────────────────────────
+
+    function poll() {
+        var healthDone = false, nodesDone = false, pendingDone = false;
+        var healthData = null, nodesData = null, pendingData = null;
+
+        function tryRender() {
+            if (!healthDone || !nodesDone || !pendingDone) return;
+            if (!healthData || !nodesData) { setConnected(false); return; }
+            setConnected(true);
+
+            var nodes = nodesData.nodes || [];
+            var pending = (pendingData && pendingData.pending) || [];
+            var nj = JSON.stringify(nodes);
+            var pj = JSON.stringify(pending);
+            if (nj !== lastNodesJSON || pj !== lastPendingJSON) {
+                lastNodesJSON = nj;
+                lastPendingJSON = pj;
+                render(nodes, pending);
+            }
+
+            // Update send button — enable if any non-dead node exists
+            var hasNode = false;
+            for (var i = 0; i < nodes.length; i++) {
+                if (nodes[i].status !== 'dead') { hasNode = true; break; }
+            }
+            btnSend.className = hasNode ? 'send-btn' : 'send-btn disabled';
+        }
+
+        fetch('/api/v1/health').then(function (r) { return r.json(); }).then(function (d) { healthData = d; }).catch(function () {}).finally(function () { healthDone = true; tryRender(); });
+        fetch('/api/v1/nodes').then(function (r) { return r.json(); }).then(function (d) { nodesData = d; }).catch(function () {}).finally(function () { nodesDone = true; tryRender(); });
+        fetch('/api/v1/pending').then(function (r) { return r.json(); }).then(function (d) { pendingData = d; }).catch(function () {}).finally(function () { pendingDone = true; tryRender(); });
+    }
+
+    // ── Poll active task ────────────────────────────────────────────
+
+    function pollTask() {
+        if (!activeTaskId) return;
+        fetch('/api/v1/tasks/' + encodeURIComponent(activeTaskId))
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                if (!d || d.error) return;
+                taskResults[activeTaskId] = {
+                    status: d.status,
+                    results: d.results || [],
+                    expected: d.expected || 0,
+                    prompt: taskResults[activeTaskId] ? taskResults[activeTaskId].prompt : '',
+                };
+                render();
+                if (d.status === 'pending' || d.status === 'running') setTimeout(pollTask, 1000);
+            })
+            .catch(function () { setTimeout(pollTask, 2000); });
+    }
+
+    // ── Send prompt ─────────────────────────────────────────────────
+
+    function sendPrompt() {
+        var text = promptInput.value.trim();
+        if (!text) return;
+        if (typeof nbeep === 'function') nbeep('send_prompt');
+        promptInput.value = '';
+        promptInput.style.height = 'auto';
+
+        fetch('/api/v1/prompt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: text }),
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+            if (d.error) return;
+            activeTaskId = d.task_id;
+            taskResults[d.task_id] = { status: 'pending', results: [], expected: d.expected || 0, prompt: text };
+            openResponses = {};
+            render();
+            pollTask();
+        });
+    }
+
+    btnSend.addEventListener('click', sendPrompt);
+    promptInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendPrompt(); }
+    });
+
+    // ── Expand / Collapse ───────────────────────────────────────────
+
+    btnExpandAll.addEventListener('click', function () {
+        if (typeof nbeep === 'function') nbeep('expand_all');
+        for (var i = 0; i < nodesCache.length; i++) openNodes[nodesCache[i].node_id] = true;
+        render();
+    });
+
+    btnCollapseAll.addEventListener('click', function () {
+        if (typeof nbeep === 'function') nbeep('collapse_all');
+        openNodes = {};
+        render();
+    });
+
+    // ── Countdown ───────────────────────────────────────────────────
+
+    var pollCountdown = 0;
+    function startCountdown() {
+        pollCountdown = POLL / 1000;
+        (function tick() {
+            pollTimerEl.textContent = 'POLL ' + pollCountdown + 'S';
+            if (--pollCountdown >= 0) setTimeout(tick, 1000);
+        })();
+    }
+
+    // ── Boot ────────────────────────────────────────────────────────
+
+    document.getElementById('btn-lock').addEventListener('click', toggleLock);
+    document.getElementById('btn-tight-pack').addEventListener('click', toggleTightPack);
+
+    // ── Autoload system ─────────────────────────────────────────────
+
+    var alOverlay = document.getElementById('autoload-overlay');
+    var alSteps = document.getElementById('al-steps');
+    var alSummary = document.getElementById('al-summary');
+    var alProgressWrap = document.getElementById('al-progress-wrap');
+    var alSegBar = document.getElementById('al-seg-bar');
+    var alProgressPct = document.getElementById('al-progress-pct');
+    var alProgressLabel = document.getElementById('al-progress-label');
+    var alModeLabel = document.getElementById('al-mode-label');
+    var alBtnExecute = document.getElementById('al-btn-execute');
+    var alBtnCancel = document.getElementById('al-btn-cancel');
+    var alManualList = document.getElementById('al-manual-list');
+    var alModeToggle = document.getElementById('al-mode-toggle');
+    var alPlan = [];
+    var alRunning = false;
+    var alTravelTimer = null;
+    var alPollTimer = null;
+    var alMode = 'auto';          // 'auto' or 'manual'
+    var alDownloads = [];          // deduplicated model list from server
+    var alSelected = {};           // model_id → true for manual selections
+
+    function alSetMode(mode) {
+        alMode = mode;
+        var btns = alModeToggle.querySelectorAll('.tg-option[data-mode]');
+        for (var i = 0; i < btns.length; i++) {
+            btns[i].classList.toggle('active', btns[i].getAttribute('data-mode') === mode);
+        }
+        if (mode === 'auto') {
+            alManualList.style.display = 'none';
+            alSteps.style.display = '';
+            alModeLabel.textContent = '1 PER GPU';
+            alFetchPlan();
+        } else {
+            alManualList.style.display = '';
+            alSteps.style.display = 'none';
+            alModeLabel.textContent = 'SELECT MODELS';
+            alFetchDownloads();
+        }
+    }
+
+    function alFetchPlan() {
+        alSteps.innerHTML = '<div style="padding:16px 0;text-align:center;font-family:var(--font-data);font-size:.6rem;color:var(--text-dim);letter-spacing:.1em"><i class="ph ph-circle-notch"></i> ANALYZING CLUSTER...</div>';
+        alSummary.innerHTML = '';
+        fetch('/api/v1/autoload/plan')
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                alPlan = d.steps || [];
+                alRenderPlan();
+            })
+            .catch(function () {
+                alSteps.innerHTML = '<div style="padding:16px 0;text-align:center;font-family:var(--font-data);font-size:.6rem;color:var(--danger)">FAILED TO FETCH PLAN</div>';
+            });
+    }
+
+    function alFetchDownloads() {
+        alManualList.innerHTML = '<div style="padding:16px 0;text-align:center;font-family:var(--font-data);font-size:.6rem;color:var(--text-dim);letter-spacing:.1em"><i class="ph ph-circle-notch"></i> LOADING MODELS...</div>';
+        alSummary.innerHTML = '';
+        fetch('/api/v1/autoload/downloads')
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                alDownloads = d.models || [];
+                alRenderManualList();
+            })
+            .catch(function () {
+                alManualList.innerHTML = '<div style="padding:16px 0;text-align:center;font-family:var(--font-data);font-size:.6rem;color:var(--danger)">FAILED TO FETCH DOWNLOADS</div>';
+            });
+    }
+
+    function alRenderManualList() {
+        if (alDownloads.length === 0) {
+            alManualList.innerHTML = '<div style="padding:16px 0;text-align:center;font-family:var(--font-data);font-size:.6rem;color:var(--text-dim)">NO DOWNLOADED MODELS</div>';
+            alSummary.innerHTML = '';
+            return;
+        }
+        var selCount = 0;
+        for (var k in alSelected) { if (alSelected[k]) selCount++; }
+        alSummary.innerHTML = '<span class="accent">' + alDownloads.length + '</span> MODEL' + (alDownloads.length !== 1 ? 'S' : '') +
+            ' AVAILABLE' + (selCount > 0 ? ' \u00B7 <span class="accent">' + selCount + '</span> SELECTED' : ' \u00B7 SELECT PRIORITY MODELS OR EXECUTE FOR FULL AUTO');
+        var html = '';
+        for (var i = 0; i < alDownloads.length; i++) {
+            var m = alDownloads[i];
+            var sel = alSelected[m.id] ? ' selected' : '';
+            var nodes = [];
+            for (var j = 0; j < (m.nodes || []).length; j++) {
+                nodes.push(m.nodes[j].hostname || m.nodes[j].node_id);
+            }
+            html += '<div class="al-mitem' + sel + '" data-mid="' + esc(m.id) + '">';
+            html += '<div class="al-mitem-check"><i class="ph ph-check"></i></div>';
+            html += '<div class="al-mitem-info">';
+            html += '<div class="al-mitem-name">' + esc(m.name || m.id) + '</div>';
+            html += '<div class="al-mitem-meta">' + esc(nodes.join(', ')) + '</div>';
+            html += '</div>';
+            html += '<div class="al-mitem-size">' + fmtMB(Math.round((m.file_size || 0) / (1024 * 1024))) + '</div>';
+            html += '</div>';
+        }
+        alManualList.innerHTML = html;
+
+        // Click to toggle selection
+        var items = alManualList.querySelectorAll('.al-mitem');
+        for (var t = 0; t < items.length; t++) {
+            items[t].addEventListener('click', function () {
+                var mid = this.getAttribute('data-mid');
+                alSelected[mid] = !alSelected[mid];
+                this.classList.toggle('selected', !!alSelected[mid]);
+                // Update summary count
+                var c = 0;
+                for (var k in alSelected) { if (alSelected[k]) c++; }
+                alSummary.innerHTML = '<span class="accent">' + alDownloads.length + '</span> MODEL' + (alDownloads.length !== 1 ? 'S' : '') +
+                    ' AVAILABLE' + (c > 0 ? ' \u00B7 <span class="accent">' + c + '</span> SELECTED' : ' \u00B7 SELECT PRIORITY MODELS OR EXECUTE FOR FULL AUTO');
+            });
+        }
+    }
+
+    function alOpen() {
+        if (typeof nbeep === 'function') nbeep('autoload_open');
+        alOverlay.classList.add('open');
+        alPlan = [];
+        alRunning = false;
+        alSelected = {};
+        alProgressWrap.style.display = 'none';
+        alBtnExecute.className = 'act-btn primary';
+        alBtnExecute.innerHTML = '<i class="ph ph-play"></i> EXECUTE';
+        alSummary.innerHTML = '';
+        // Reset mode toggle to auto
+        alSetMode('auto');
+    }
+
+    function alClose() {
+        if (alTravelTimer) { clearInterval(alTravelTimer); alTravelTimer = null; }
+        if (alPollTimer) { clearInterval(alPollTimer); alPollTimer = null; }
+        alOverlay.classList.remove('open');
+        if (typeof nbeep === 'function') nbeep('autoload_close');
+    }
+
+    function alRenderPlan() {
+        if (alPlan.length === 0) {
+            alSteps.innerHTML = '<div style="padding:16px 0;text-align:center;font-family:var(--font-data);font-size:.6rem;color:var(--text-dim);letter-spacing:.1em"><i class="ph ph-check-circle" style="color:var(--accent)"></i> ALL GPUS OPTIMALLY LOADED</div>';
+            alSummary.innerHTML = '';
+            alBtnExecute.className = 'act-btn disabled';
+            return;
+        }
+
+        // Summary
+        var totalSize = 0;
+        var nodeSet = {};
+        for (var i = 0; i < alPlan.length; i++) {
+            totalSize += alPlan[i].file_size || 0;
+            nodeSet[alPlan[i].hostname || alPlan[i].node_id] = true;
+        }
+        var nodeCount = Object.keys(nodeSet).length;
+        alSummary.innerHTML = '<span class="accent">' + alPlan.length + '</span> MODEL' + (alPlan.length !== 1 ? 'S' : '') +
+            ' \u00B7 <span class="accent">' + nodeCount + '</span> NODE' + (nodeCount !== 1 ? 'S' : '') +
+            ' \u00B7 ' + fmtMB(Math.round(totalSize / (1024 * 1024))) + ' TOTAL';
+
+        // Render steps
+        var html = '';
+        for (var s = 0; s < alPlan.length; s++) {
+            var step = alPlan[s];
+            var icon = '<i class="ph ph-download-simple"></i>';
+            var statusText = 'QUEUED';
+            html += '<div class="al-step queued" data-step="' + s + '">';
+            html += '<div class="al-step-icon">' + icon + '</div>';
+            html += '<div class="al-step-info">';
+            html += '<div class="al-step-model">' + esc(step.model_name || step.model_id) + '</div>';
+            html += '<div class="al-step-meta">' + esc(step.hostname || step.node_id) + ' \u00B7 ' + esc(step.gpu_name) + ' \u00B7 ' + fmtMB(Math.round((step.file_size || 0) / (1024 * 1024))) + '</div>';
+            html += '</div>';
+            html += '<span class="al-step-status">' + statusText + '</span>';
+            html += '</div>';
+        }
+        alSteps.innerHTML = html;
+    }
+
+    function alBuildSegBar(count) {
+        var html = '';
+        for (var i = 0; i < count; i++) {
+            html += '<div class="seg"></div>';
+        }
+        alSegBar.innerHTML = html;
+    }
+
+    function alUpdateProgress(done, failed, total) {
+        var segs = alSegBar.querySelectorAll('.seg');
+        var completed = done + failed;
+        for (var i = 0; i < segs.length; i++) {
+            segs[i].className = 'seg' + (i < completed ? ' filled' : (i === completed ? ' pending' : ''));
+        }
+        var pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+        alProgressPct.textContent = '[ ' + pct + '% ]';
+        if (completed >= total) {
+            alProgressLabel.textContent = failed > 0 ? 'DONE \u2014 ' + failed + ' FAILED' : 'COMPLETE';
+            alProgressPct.style.color = failed > 0 ? 'var(--danger)' : 'var(--accent)';
+            alStartBlink();
+        } else {
+            alProgressLabel.textContent = 'LOADING MODELS... ' + done + '/' + total;
+            alProgressPct.style.color = '';
+            alStartTravel();
+        }
+    }
+
+    function alStartTravel() {
+        if (alTravelTimer) { clearInterval(alTravelTimer); alTravelTimer = null; }
+        var segs = alSegBar.querySelectorAll('.seg.filled');
+        if (segs.length < 2) return;
+        var pos = 0;
+        segs[0].classList.add('seg-dim');
+        alTravelTimer = setInterval(function () {
+            var s = alSegBar.querySelectorAll('.seg.filled');
+            if (s.length < 2) return;
+            if (pos < s.length) s[pos].classList.remove('seg-dim');
+            pos = (pos + 1) % s.length;
+            s[pos].classList.add('seg-dim');
+        }, 120);
+    }
+
+    function alStartBlink() {
+        if (alTravelTimer) { clearInterval(alTravelTimer); alTravelTimer = null; }
+        var step = 0;
+        alTravelTimer = setInterval(function () {
+            var segs = alSegBar.querySelectorAll('.seg.filled');
+            if (step < 4) {
+                var on = (step % 2 === 0);
+                for (var i = 0; i < segs.length; i++) {
+                    if (on) segs[i].classList.add('seg-bright');
+                    else segs[i].classList.remove('seg-bright');
+                }
+                step++;
+            } else {
+                step = 0;
+            }
+        }, step < 4 ? 50 : 350);
+    }
+
+    function alMarkStep(idx, state) {
+        var stepEl = alSteps.querySelector('[data-step="' + idx + '"]');
+        if (!stepEl) return;
+        if (state === 'sending') {
+            stepEl.className = 'al-step active';
+            stepEl.querySelector('.al-step-icon').innerHTML = '<i class="ph ph-circle-notch"></i>';
+            stepEl.querySelector('.al-step-status').textContent = 'LOADING\u2026';
+            stepEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        } else if (state === 'done') {
+            stepEl.className = 'al-step done';
+            stepEl.querySelector('.al-step-icon').innerHTML = '<i class="ph ph-check"></i>';
+            stepEl.querySelector('.al-step-status').textContent = 'LOADED';
+            if (typeof nbeep === 'function') nbeep('autoload_step_' + idx);
+        } else if (state === 'failed') {
+            stepEl.className = 'al-step done';
+            stepEl.querySelector('.al-step-icon').innerHTML = '<i class="ph ph-x"></i>';
+            stepEl.querySelector('.al-step-status').textContent = 'FAILED';
+            stepEl.querySelector('.al-step-icon').style.color = 'var(--danger)';
+            stepEl.style.borderColor = 'rgba(255,51,51, 0.3)';
+        }
+    }
+
+    function alExecute() {
+        if (alRunning) return;
+
+        // In manual mode with no selections, behave like full auto
+        var priorities = [];
+        if (alMode === 'manual') {
+            for (var k in alSelected) { if (alSelected[k]) priorities.push(k); }
+        }
+
+        // Switch to plan view for execution
+        alManualList.style.display = 'none';
+        alSteps.style.display = '';
+
+        alRunning = true;
+        if (typeof nbeep === 'function') nbeep('autoload_execute');
+
+        alBtnExecute.className = 'act-btn disabled';
+        alBtnExecute.innerHTML = '<i class="ph ph-circle-notch"></i> RUNNING...';
+
+        // Hide mode toggle during execution
+        alModeToggle.style.display = 'none';
+
+        // Show progress bar
+        alProgressWrap.style.display = 'block';
+        if (alPlan.length > 0) {
+            alBuildSegBar(alPlan.length);
+            alUpdateProgress(0, 0, alPlan.length);
+        }
+
+        // Execute via API — send priorities if any
+        var fetchOpts = { method: 'POST', headers: { 'Content-Type': 'application/json' } };
+        if (priorities.length > 0) {
+            fetchOpts.body = JSON.stringify({ priorities: priorities });
+        }
+        fetch('/api/v1/autoload', fetchOpts)
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                var execSteps = d.steps || [];
+                if (execSteps.length > 0) {
+                    alPlan = execSteps;
+                    alRenderPlan();
+                    alBuildSegBar(alPlan.length);
+                    alUpdateProgress(0, 0, alPlan.length);
+                } else if (alPlan.length === 0) {
+                    alSteps.innerHTML = '<div style="padding:16px 0;text-align:center;font-family:var(--font-data);font-size:.6rem;color:var(--text-dim)"><i class="ph ph-check-circle" style="color:var(--accent)"></i> NOTHING TO LOAD</div>';
+                    alRunning = false;
+                    alBtnExecute.className = 'act-btn';
+                    alBtnExecute.innerHTML = '<i class="ph ph-check-circle"></i> DONE';
+                    return;
+                }
+                alBtnExecute.className = 'act-btn disabled';
+                alBtnExecute.innerHTML = '<i class="ph ph-circle-notch"></i> RUNNING...';
+                alTrackProgress();
+            })
+            .catch(function () {
+                alProgressLabel.textContent = 'FAILED TO EXECUTE';
+                alProgressLabel.style.color = 'var(--danger)';
+                alRunning = false;
+            });
+    }
+
+    function alTrackProgress() {
+        var total = alPlan.length;
+        if (alPollTimer) { clearInterval(alPollTimer); alPollTimer = null; }
+
+        function checkStatus() {
+            fetch('/api/v1/autoload/status')
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                    var steps = d.steps || [];
+                    var done = 0;
+                    var failed = 0;
+                    for (var i = 0; i < steps.length; i++) {
+                        var s = steps[i];
+                        alMarkStep(i, s.state);
+                        if (s.state === 'done') done++;
+                        else if (s.state === 'failed') failed++;
+                    }
+                    alUpdateProgress(done, failed, steps.length || total);
+
+                    if (d.status === 'done' || (done + failed) >= (steps.length || total)) {
+                        if (alPollTimer) { clearInterval(alPollTimer); alPollTimer = null; }
+                        alRunning = false;
+                        var label = failed > 0 ? 'DONE (' + failed + ' FAILED)' : 'DONE';
+                        alBtnExecute.className = 'act-btn';
+                        alBtnExecute.innerHTML = '<i class="ph ph-check-circle"></i> ' + label;
+                        alModeToggle.style.display = '';
+                        if (typeof nbeep === 'function') nbeep('autoload_complete');
+                        lastNodesJSON = '';
+                        poll();
+                    }
+                })
+                .catch(function () { /* retry on next interval */ });
+        }
+
+        // Poll every 2 seconds
+        setTimeout(checkStatus, 1000);
+        alPollTimer = setInterval(checkStatus, 2000);
+    }
+
+    document.getElementById('btn-autoload').addEventListener('click', alOpen);
+    document.getElementById('al-close').addEventListener('click', alClose);
+    alBtnCancel.addEventListener('click', alClose);
+    alBtnExecute.addEventListener('click', alExecute);
+    alOverlay.addEventListener('click', function (e) {
+        if (e.target === alOverlay && !alRunning) alClose();
+    });
+    // Mode toggle clicks
+    var alModeBtns = alModeToggle.querySelectorAll('.tg-option[data-mode]');
+    for (var mi = 0; mi < alModeBtns.length; mi++) {
+        alModeBtns[mi].addEventListener('click', function () {
+            if (alRunning) return;
+            alSetMode(this.getAttribute('data-mode'));
+        });
+    }
+
+    fetchCatalog();
+    fetchLockState();
+    if (typeof nNotify !== 'undefined') nNotify.init(bodyEl);
+    poll();
+    setInterval(function () { poll(); startCountdown(); }, POLL);
+    setInterval(fetchCatalog, 60000);  // refresh catalog every minute
+    startCountdown();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+<nav class="nav-tabs">
+    <a class="nav-tab" href="/mission.html" data-flash data-nbeep="select">MISSION</a>
+    <a class="nav-tab" href="/command.html" data-flash data-nbeep="select">COMMAND</a>
+    <a class="nav-tab" href="/status.html" data-flash data-nbeep="select">STATUS</a>
+    <a class="nav-tab" href="/oapi.html" data-flash data-nbeep="select">OAPI</a>
+</nav>
