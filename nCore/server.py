@@ -90,14 +90,11 @@ class Handler(BaseHTTPRequestHandler):
             self._get_task()
         elif self.path == "/api/v1/catalog":
             self._get_catalog()
-        elif self.path == "/api/v1/graylist":
-            self._json(200, catalog_mod.get_graylist())
         elif self.path == "/api/v1/lock":
             self._json(200, {"locked": orch_mod.is_locked()})
         elif self.path == "/api/v1/config":
             self._json(200, {"locked": orch_mod.is_locked(), "tight_pack": orch_mod.is_tight_pack(),
-                             "heartbeat_interval": push_mod.get_interval(),
-                             "access_mode": access_mod.mode()})
+                             "heartbeat_interval": push_mod.get_interval()})
         elif self.path == "/api/v1/sessions":
             self._list_sessions()
         elif self.path.startswith("/api/v1/sessions/"):
@@ -161,8 +158,6 @@ class Handler(BaseHTTPRequestHandler):
             self._node_configure()
         elif self.path.startswith("/api/v1/nodes/") and self.path.endswith("/restart"):
             self._node_restart()
-        elif self.path.startswith("/api/v1/nodes/") and self.path.endswith("/delete_model"):
-            self._node_delete_model()
         elif self.path == "/api/v1/lock":
             self._set_lock()
         elif self.path == "/api/v1/config":
@@ -217,12 +212,6 @@ class Handler(BaseHTTPRequestHandler):
             self._delete_mission()
         elif self.path.startswith("/api/v1/sessions/"):
             self._delete_session()
-        elif self.path.startswith("/api/v1/graylist/"):
-            model_id = urllib.parse.unquote(self.path.rsplit("/", 1)[-1])
-            if catalog_mod.graylist_remove(model_id):
-                self._json(200, {"ok": True, "removed": model_id})
-            else:
-                self._json(404, {"error": "model not in graylist"})
         elif self.path.startswith("/api/v1/nodes/"):
             self._delete_node()
         elif self.path.startswith("/api/v1/tokens/"):
@@ -385,9 +374,6 @@ class Handler(BaseHTTPRequestHandler):
             n.pop("orchestrator_token", None)
             av = n.get("agent_version")
             n["version_ok"] = (av == _EXPECTED_AGENT_VER) if av else None
-            for ep in n.get("endpoints", []):
-                if ep.get("model"):
-                    ep["graylisted"] = catalog_mod.is_graylisted(ep["model"])
         self._json(200, {"nodes": nodes, "expected_agent_version": _EXPECTED_AGENT_VER})
 
     def _get_node(self):
@@ -769,46 +755,6 @@ class Handler(BaseHTTPRequestHandler):
             _log(f"dl+load     {nid} ← {model_id} FAIL {e}")
             self._json(502, {"error": str(e)})
 
-    def _node_delete_model(self):
-        """POST /api/v1/nodes/:id/delete_model — delete a model on a node."""
-        parts = self.path.split("/")
-        nid = parts[4] if len(parts) >= 6 else ""
-        if not nid or not _IDENT_RE.match(nid):
-            return self._json(400, {"error": "invalid node_id"})
-        body = self._body()
-        if body is None:
-            return
-        model_id = body.get("model_id", "")
-        if not model_id:
-            return self._json(400, {"error": "model_id required"})
-        node = get_node(nid)
-        if not node:
-            return self._json(404, {"error": "node not found"})
-        cmd = {"action": "delete_model", "model_id": model_id}
-        address = node.get("address")
-        token = node.get("orchestrator_token")
-        if not address or not token:
-            orch_mod.enqueue(nid, cmd)
-            _log(f"delete      {nid} ← {model_id} (queued for pull-mode)")
-            return self._json(200, {"ok": True, "queued": True,
-                                     "node_id": nid, "model_id": model_id})
-        try:
-            data = json.dumps(cmd).encode()
-            req = urllib.request.Request(
-                f"{address}/api/v1/command",
-                data=data,
-                headers={"Content-Type": "application/json",
-                         "Authorization": f"Bearer {token}"},
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                result = json.loads(resp.read())
-            _log(f"delete      {nid} ← {model_id} freed={result.get('freed_gb',0)}GB")
-            self._json(200, result)
-        except Exception as e:
-            _log(f"delete      {nid} ← {model_id} FAIL {e}")
-            self._json(502, {"error": str(e)})
-
     def _node_job_status(self):
         """GET /api/v1/nodes/:id/jobs/:job_id — proxy to agent."""
         parts = self.path.split("/")
@@ -845,18 +791,16 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, local_agent_mod.status())
 
     def _start_local_agent(self):
-        """POST /api/v1/local-agent — start a local agent."""
+        """POST /api/v1/local-agent — start the local agent."""
         body = self._body()
         if body is None:
             return
-        agent_type = body.get("agent_type", "").strip()
-        if not agent_type:
-            return self._json(400, {"error": "agent_type required"})
+        agent_type = body.get("agent_type", "agent")
         ok, err = local_agent_mod.start_agent(agent_type, ncore_port=_ncore_port)
         if not ok:
             return self._json(409, {"error": err})
         _persist()
-        _log(f"local-agent▶ {agent_type}")
+        _log("local-agent▶ started")
         self._json(200, local_agent_mod.status())
 
     def _stop_local_agent(self):
@@ -896,15 +840,9 @@ class Handler(BaseHTTPRequestHandler):
             hb = push_mod.get_interval()
             registry.STALE_AFTER = hb * 4
             registry.DEAD_AFTER = hb * 12
-        if "access_mode" in body:
-            try:
-                set_mode(body["access_mode"])
-            except ValueError as e:
-                return self._json(400, {"error": str(e)})
         _persist()
         self._json(200, {"locked": orch_mod.is_locked(), "tight_pack": orch_mod.is_tight_pack(),
-                         "heartbeat_interval": push_mod.get_interval(),
-                         "access_mode": access_mod.mode()})
+                         "heartbeat_interval": push_mod.get_interval()})
 
     def _autoload_plan(self):
         """GET /api/v1/autoload/plan — preview autoload steps (clean_slate matches execution)."""

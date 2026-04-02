@@ -1,7 +1,7 @@
-"""First-time setup for DGX Spark agent.
+"""First-time setup — unified for all platforms.
 
-Builds llama.cpp, profiles hardware, picks models, registers with nCore.
-No LM Studio or Ollama dependency — uses llama.cpp directly.
+Profiles hardware, checks/builds llama.cpp, registers with nCore.
+Auto-detects platform to configure correct build flags and service type.
 """
 
 import json
@@ -15,32 +15,60 @@ import urllib.error
 import uuid
 from pathlib import Path
 
+_IS_DARWIN = platform.system() == "Darwin"
 CONFIG = Path(__file__).parent / "cluster.json"
 
 
 def run_setup():
-    print("=== ClusterFlock Spark Agent Setup ===\n")
+    print("=== ClusterFlock Agent Setup ===\n")
 
-    # 1. Clean GPU: kill LM Studio / Ollama if present
+    from hardware import detect_platform
+    plat = detect_platform()
+
+    # 1. Clean up competing inference servers
     from gpu_cleanup import cleanup_gpu
     cleanup_gpu()
 
     # 2. Check / build llama.cpp
-    from server import is_built, build, LLAMA_CPP_DIR
-    if not LLAMA_CPP_DIR.exists():
-        print("✗ llama.cpp source not found.")
-        print(f"  Expected at: {LLAMA_CPP_DIR}")
-        print("  Clone it:  git clone --depth 1 https://github.com/ggerganov/llama.cpp.git llama_cpp")
-        sys.exit(1)
+    from server import is_built, server_binary, build, LLAMA_CPP_DIR, PREBUILT_DIR
+
+    if not _IS_DARWIN:
+        from server import _detect_cuda_version
+        cuda_ver = _detect_cuda_version()
+        if cuda_ver:
+            print(f"✓ CUDA {cuda_ver} driver detected")
+        else:
+            print("⚠ No NVIDIA driver found — GPU inference unavailable")
 
     if is_built():
-        print("✓ llama-server already built")
-    else:
-        print("Building llama.cpp with CUDA (Spark-optimized)...")
+        binary = server_binary()
+        print(f"✓ llama-server: {binary}")
+    elif LLAMA_CPP_DIR.exists():
+        print("Building llama.cpp...")
         build()
+    else:
+        if _IS_DARWIN:
+            prebuilt = PREBUILT_DIR / "llama-server"
+            if prebuilt.exists():
+                print("✓ llama-server prebuilt binary found")
+            else:
+                print("✗ llama-server binary not found.")
+                print(f"  Expected prebuilt at: {PREBUILT_DIR}")
+                print(f"  Or source at: {LLAMA_CPP_DIR}")
+                print("  To build from source:")
+                print("    git clone --depth 1 https://github.com/ggerganov/llama.cpp.git llama_cpp")
+                sys.exit(1)
+        else:
+            print("✗ llama-server not found")
+            print("  No prebuilt binaries and no source tree.")
+            print("  Options:")
+            print("    1. Run build.sh on a build machine, copy build/ here")
+            print("    2. git clone --depth 1 https://github.com/ggerganov/llama.cpp.git llama_cpp")
+            print("       python3 run.py build")
+            sys.exit(1)
 
-    # 3. Check memlock (critical for mlock on large models)
-    if platform.system() == "Linux":
+    # 3. Check memlock (Linux only)
+    if not _IS_DARWIN:
         _check_memlock()
 
     # 4. Check huggingface_hub
@@ -53,7 +81,7 @@ def run_setup():
             subprocess.run([sys.executable, "-m", "pip", "install", "huggingface_hub"],
                            check=False)
 
-    # Load existing config for reuse
+    # Load existing config
     existing = {}
     if CONFIG.exists():
         try:
@@ -61,21 +89,21 @@ def run_setup():
         except (json.JSONDecodeError, ValueError):
             pass
 
-    # 5. Hardware profile (GPU is clean after cleanup)
-    from hardware import snapshot, is_dgx_spark
+    # 5. Hardware profile
+    from hardware import snapshot, is_apple_silicon, is_dgx_spark
     hw = snapshot()
     _print_hw(hw)
-    gpus = hw["gpu"]
 
-    if is_dgx_spark():
+    if plat == "mac":
+        print("\n  ✓ Apple Silicon detected — Metal GPU acceleration enabled")
+    elif plat == "spark":
         print("\n  ✓ DGX Spark detected — NVFP4 + FlashAttention optimizations enabled")
     else:
-        print("\n  ⚠ Not a DGX Spark — some optimizations may not apply")
+        n_gpus = len(hw.get("gpu", []))
+        print(f"\n  {n_gpus} NVIDIA GPU(s) available for inference")
 
-    # 6. Model selection skipped — models are managed via nCore commands
+    # 6. Models managed via nCore
     tight_pack = existing.get("tight_pack", False)
-    models = []
-    benchmarks = []
     print("\n✓ Skipping model selection — models are loaded on-demand via nCore")
 
     # 7. Connection mode
@@ -90,11 +118,12 @@ def run_setup():
     config = {
         "node_id": node_id,
         "hostname": platform.node(),
-        "agent_type": "spark",
+        "agent_type": plat,
         "hardware": hw,
-        "models": models,
-        "benchmarks": benchmarks,
+        "models": [],
+        "benchmarks": [],
         "tight_pack": tight_pack,
+        "cpu_ram_enabled": existing.get("cpu_ram_enabled", False),
     }
 
     if use_push:
@@ -103,7 +132,8 @@ def run_setup():
         config["listen_port"] = int(port)
         print(f"  → Push mode on port {port}")
     else:
-        address = input("\nnCore address [http://localhost:1903]: ").strip() or "http://localhost:1903"
+        address = (input("\nnCore address [http://localhost:1903]: ").strip()
+                   or "http://localhost:1903")
         if not address.startswith("http"):
             address = f"http://{address}"
         config["address"] = address
@@ -143,16 +173,14 @@ def _check_memlock():
         print("✓ memlock unlimited")
         return
     soft_mb = soft // (1024 * 1024)
-    print(f"⚠ memlock limit is {soft_mb} MB — models may fail to lock in memory")
+    print(f"⚠ memlock limit is {soft_mb} MB — models may fail to lock memory")
     limits_file = Path("/etc/security/limits.d/99-memlock.conf")
     user = os.environ.get("USER", "notum")
     line = f"{user} - memlock unlimited\n"
     print(f"  Setting memlock unlimited via {limits_file} (requires sudo)")
     try:
-        subprocess.run(
-            ["sudo", "tee", str(limits_file)],
-            input=line.encode(), capture_output=True, check=True,
-        )
+        subprocess.run(["sudo", "tee", str(limits_file)],
+                       input=line.encode(), capture_output=True, check=True)
         print(f"  ✓ Written {limits_file} — log out/reboot to apply")
     except subprocess.CalledProcessError:
         print(f"  Could not write — set manually:")
@@ -165,11 +193,11 @@ def _print_hw(hw):
     print(f"  CPU:   {s['cpu_count']} cores")
     print(f"  RAM:   {s['ram_free_mb']:,}/{s['ram_total_mb']:,} MB free")
     print(f"  Disk:  {s['disk_free_gb']} GB free")
-    for g in hw["gpu"]:
+    for i, g in enumerate(hw["gpu"]):
         tag = " (unified)" if g.get("unified") else ""
         vfree = g.get("vram_free_mb", 0)
         vtotal = g.get("vram_total_mb", 0)
-        print(f"  GPU:   {g['name']}{tag} — {vfree:,}/{vtotal:,} MB VRAM")
+        print(f"  GPU{i}: {g['name']}{tag} — {vfree:,}/{vtotal:,} MB VRAM")
 
 
 def _register(address, config):
@@ -200,19 +228,16 @@ def _register(address, config):
 def _install_service():
     agent_dir = Path(__file__).parent.resolve()
     py = sys.executable
-    sysname = platform.system()
 
-    if sysname == "Linux":
-        _systemd(py, agent_dir)
-    elif sysname == "Darwin":
+    if _IS_DARWIN:
         _launchd(py, agent_dir)
     else:
-        print(f"  Unsupported OS for service install: {sysname}")
+        _systemd(py, agent_dir)
 
 
 def _systemd(py, agent_dir):
     unit = f"""[Unit]
-Description=ClusterFlock Spark Agent
+Description=ClusterFlock Agent
 After=network.target
 
 [Service]
@@ -225,16 +250,18 @@ LimitMEMLOCK=infinity
 
 [Install]
 WantedBy=multi-user.target"""
-    path = "/etc/systemd/system/clusterflock-spark.service"
+    path = "/etc/systemd/system/clusterflock-agent.service"
     print(f"  Writing {path} (requires sudo)")
-    subprocess.run(["sudo", "tee", path], input=unit.encode(), capture_output=True)
+    subprocess.run(["sudo", "tee", path], input=unit.encode(),
+                   capture_output=True)
     subprocess.run(["sudo", "systemctl", "daemon-reload"])
-    subprocess.run(["sudo", "systemctl", "enable", "--now", "clusterflock-spark"])
+    subprocess.run(["sudo", "systemctl", "enable", "--now",
+                    "clusterflock-agent"])
     print("  ✓ systemd service enabled")
 
 
 def _launchd(py, agent_dir):
-    label = "com.notum.clusterflock.spark"
+    label = "com.notum.clusterflock.agent"
     plist = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
     plist.parent.mkdir(parents=True, exist_ok=True)
     plist.write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -251,8 +278,8 @@ def _launchd(py, agent_dir):
     <key>WorkingDirectory</key><string>{agent_dir}</string>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
-    <key>StandardOutPath</key><string>/tmp/clusterflock-spark.log</string>
-    <key>StandardErrorPath</key><string>/tmp/clusterflock-spark.log</string>
+    <key>StandardOutPath</key><string>/tmp/clusterflock-agent.log</string>
+    <key>StandardErrorPath</key><string>/tmp/clusterflock-agent.log</string>
 </dict></plist>""")
     subprocess.run(["launchctl", "load", str(plist)])
     print(f"  ✓ launchd: {plist}")

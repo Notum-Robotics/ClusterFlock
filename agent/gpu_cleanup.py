@@ -1,13 +1,18 @@
 """GPU cleanup: detect and shut down LM Studio and Ollama, freeing all GPU memory.
 
-Ensures the GPU(s) are fully available before llama.cpp takes over.
+Ensures GPU/unified memory is fully available before llama.cpp takes over.
+Works on both macOS and Linux.
 """
 
+import json
 import os
+import platform
 import shutil
-import signal
 import subprocess
 import time
+import urllib.request
+
+_IS_DARWIN = platform.system() == "Darwin"
 
 
 # ── LM Studio ───────────────────────────────────────────────────────────────
@@ -17,10 +22,13 @@ def _lms_path():
     p = shutil.which("lms")
     if p:
         return p
-    for candidate in [
+    candidates = [
         os.path.expanduser("~/.lmstudio/bin/lms"),
         os.path.expanduser("~/.cache/lm-studio/bin/lms"),
-    ]:
+    ]
+    if _IS_DARWIN:
+        candidates.append("/Applications/LM Studio.app/Contents/Resources/bin/lms")
+    for candidate in candidates:
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
     return None
@@ -43,7 +51,6 @@ def _lms_run(args, timeout=30):
 
 def _lms_ps():
     """List loaded models in LM Studio via `lms ps --json`."""
-    import json
     out = _lms_run(["ps", "--json"])
     if not out:
         return []
@@ -65,13 +72,14 @@ def _lms_unload_all():
 
 def _kill_lmstudio():
     """Terminate LM Studio server and GUI processes."""
-    # Stop via CLI first
     _lms_run(["server", "stop"], timeout=15)
     time.sleep(1)
 
-    # Kill any remaining processes
     killed = 0
-    for proc_name in ["lm-studio", "lm studio", "LM Studio", "llmster"]:
+    proc_names = ["LM Studio", "lm-studio"]
+    if not _IS_DARWIN:
+        proc_names.extend(["lm studio", "llmster"])
+    for proc_name in proc_names:
         try:
             r = subprocess.run(
                 ["pkill", "-f", proc_name],
@@ -85,17 +93,12 @@ def _kill_lmstudio():
 
 
 def cleanup_lmstudio():
-    """Full LM Studio cleanup: list models, unload, terminate.
-
-    Returns dict with cleanup summary.
-    """
+    """Full LM Studio cleanup."""
     lms = _lms_path()
     if not lms:
         return {"installed": False, "skipped": True}
 
     result = {"installed": True}
-
-    # List loaded models
     models = _lms_ps()
     result["models_found"] = len(models)
     if models:
@@ -108,7 +111,6 @@ def cleanup_lmstudio():
         print("[cleanup] LM Studio: no models loaded")
         result["models_unloaded"] = 0
 
-    # Terminate
     killed = _kill_lmstudio()
     result["processes_killed"] = killed
     if killed:
@@ -128,7 +130,6 @@ def _ollama_path():
 
 def _ollama_ps():
     """List running models in Ollama."""
-    import json
     ollama = _ollama_path()
     if not ollama:
         return []
@@ -139,12 +140,11 @@ def _ollama_ps():
         )
         if r.returncode != 0:
             return []
-        # Parse ps output (table format: NAME ID SIZE PROCESSOR UNTIL)
         lines = r.stdout.strip().splitlines()
         if len(lines) < 2:
             return []
         models = []
-        for line in lines[1:]:  # skip header
+        for line in lines[1:]:
             parts = line.split()
             if parts:
                 models.append({"name": parts[0]})
@@ -155,15 +155,12 @@ def _ollama_ps():
 
 def _ollama_unload_all():
     """Unload all models from Ollama by sending an empty keep-alive."""
-    import json
-    import urllib.request
     models = _ollama_ps()
     for m in models:
         name = m.get("name", "")
         if not name:
             continue
         try:
-            # Set keep_alive to 0 to immediately unload
             data = json.dumps({"model": name, "keep_alive": 0}).encode()
             req = urllib.request.Request(
                 "http://localhost:11434/api/generate",
@@ -180,20 +177,28 @@ def _ollama_unload_all():
 def _kill_ollama():
     """Terminate Ollama server process."""
     killed = 0
+    if _IS_DARWIN:
+        try:
+            subprocess.run(
+                ["launchctl", "stop", "com.ollama.ollama"],
+                capture_output=True, timeout=15,
+            )
+        except Exception:
+            pass
+        proc_names = ["Ollama", "ollama serve", "ollama"]
+    else:
+        try:
+            r = subprocess.run(
+                ["systemctl", "stop", "ollama"],
+                capture_output=True, timeout=15,
+            )
+            if r.returncode == 0:
+                killed += 1
+        except Exception:
+            pass
+        proc_names = ["ollama serve", "ollama"]
 
-    # Try systemctl first (common on Linux)
-    try:
-        r = subprocess.run(
-            ["systemctl", "stop", "ollama"],
-            capture_output=True, timeout=15,
-        )
-        if r.returncode == 0:
-            killed += 1
-    except Exception:
-        pass
-
-    # Also try direct kill
-    for proc_name in ["ollama serve", "ollama"]:
+    for proc_name in proc_names:
         try:
             r = subprocess.run(
                 ["pkill", "-f", proc_name],
@@ -207,17 +212,12 @@ def _kill_ollama():
 
 
 def cleanup_ollama():
-    """Full Ollama cleanup: list models, unload, terminate.
-
-    Returns dict with cleanup summary.
-    """
+    """Full Ollama cleanup."""
     ollama = _ollama_path()
     if not ollama:
         return {"installed": False, "skipped": True}
 
     result = {"installed": True}
-
-    # List loaded models
     models = _ollama_ps()
     result["models_found"] = len(models)
     if models:
@@ -230,7 +230,6 @@ def cleanup_ollama():
         print("[cleanup] Ollama: no models running")
         result["models_unloaded"] = 0
 
-    # Terminate
     killed = _kill_ollama()
     result["processes_killed"] = killed
     if killed:
@@ -246,7 +245,7 @@ def cleanup_ollama():
 def cleanup_gpu():
     """Clean up ALL competing inference servers (LM Studio + Ollama).
 
-    Call this before starting llama.cpp to ensure GPUs are fully available.
+    Call this before starting llama.cpp to ensure GPU/memory is fully available.
     Returns summary dict.
     """
     print("[cleanup] Checking for competing inference servers...")
@@ -255,7 +254,6 @@ def cleanup_gpu():
         "ollama": cleanup_ollama(),
     }
 
-    # Wait for GPU memory to settle
     time.sleep(2)
-    print("[cleanup] GPU cleanup complete")
+    print("[cleanup] Cleanup complete")
     return summary

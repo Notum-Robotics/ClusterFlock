@@ -1,16 +1,18 @@
-"""llama.cpp server management for Linux (amd64 + CUDA).
+"""llama.cpp server management — unified for all platforms.
 
-Manages multiple llama-server instances — one per device (GPU or CPU).
-Each GPU gets its own server pinned via CUDA_VISIBLE_DEVICES.
-CPU-only mode runs with --n-gpu-layers 0 for system RAM inference.
+Manages llama-server instances with platform-aware defaults:
+  macOS:  Metal GPU acceleration, f16 KV cache, DYLD_LIBRARY_PATH
+  Linux:  CUDA multi-GPU, q4_0 KV cache, LD_LIBRARY_PATH, CUDA_VISIBLE_DEVICES
 
-Prebuilt binaries are shipped in build/{cuda12,cuda11,cpu}/.
-The host only needs NVIDIA drivers installed, not the CUDA toolkit.
-All CUDA runtime libs are bundled alongside the binaries.
+Multi-device model (from agent_linux):
+  Each GPU gets its own server instance pinned via CUDA_VISIBLE_DEVICES.
+  On macOS/unified-memory, a single device "gpu0" covers the whole SoC.
+  Port allocation: gpu0=8080, gpu1=8081, ..., cpu=8090.
 """
 
 import json
 import os
+import platform
 import re
 import signal
 import subprocess
@@ -19,9 +21,11 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
+_IS_DARWIN = platform.system() == "Darwin"
+
 AGENT_DIR = Path(__file__).parent
 PREBUILT_DIR = AGENT_DIR / "build"
-LLAMA_CPP_DIR = AGENT_DIR / "llama_cpp"       # source tree (for build from source)
+LLAMA_CPP_DIR = AGENT_DIR / "llama_cpp"
 SOURCE_BUILD_DIR = LLAMA_CPP_DIR / "build"
 MODELS_DIR = AGENT_DIR / "models"
 
@@ -30,7 +34,7 @@ _BASE_GPU_PORT = 8080
 _CPU_PORT = 8090
 DEFAULT_PORT = _BASE_GPU_PORT
 
-# Active server instances: device_id → {proc, port, model_id, model_path}
+# Active server instances: device_id → {proc, port, host, model_id, model_path}
 _servers = {}
 
 
@@ -42,18 +46,17 @@ def _port_for_device(device_id):
     return _BASE_GPU_PORT + idx
 
 
-# ── CUDA version detection ───────────────────────────────────────────────
+# ── CUDA version detection (Linux only) ─────────────────────────────────
 
 def _detect_cuda_version():
-    """Detect CUDA version from the installed NVIDIA driver.
-
-    Returns major version (e.g. 12, 11) or None if no driver found.
-    """
-    from hardware import _find_nvidia_smi
-    nvsmi = _find_nvidia_smi()
-    if not nvsmi:
+    """Detect CUDA version from NVIDIA driver. Returns major version or None."""
+    if _IS_DARWIN:
         return None
     try:
+        from hardware import _find_nvidia_smi
+        nvsmi = _find_nvidia_smi()
+        if not nvsmi:
+            return None
         out = subprocess.check_output(
             [nvsmi], timeout=5, text=True, stderr=subprocess.DEVNULL,
         )
@@ -70,16 +73,26 @@ def _detect_cuda_version():
 def server_binary(device_id="gpu0"):
     """Return path to the best available llama-server binary.
 
-    GPU devices: prefers build/cuda{ver}/ matching host CUDA driver.
-    CPU device:  prefers build/cpu/ (no CUDA dependency).
+    macOS: flat build/ directory (single Metal binary).
+    Linux GPU: build/cuda{ver}/ matching host CUDA driver.
+    Linux CPU: build/cpu/ (no CUDA dependency).
     Falls back through available variants.
     """
-    # CPU device prefers the CPU-only build (zero CUDA dependency)
+    if _IS_DARWIN:
+        # macOS: single binary in flat build/ or source build
+        prebuilt = PREBUILT_DIR / "llama-server"
+        if prebuilt.exists():
+            return str(prebuilt)
+        src = SOURCE_BUILD_DIR / "bin" / "llama-server"
+        if src.exists():
+            return str(src)
+        return None
+
+    # Linux: CPU device prefers CPU-only build
     if device_id == "cpu":
         cpu_bin = PREBUILT_DIR / "cpu" / "llama-server"
         if cpu_bin.exists():
             return str(cpu_bin)
-        # Fall through to CUDA binary (works with n_gpu_layers=0 if driver present)
 
     # Match host CUDA driver version
     cuda_ver = _detect_cuda_version()
@@ -94,12 +107,12 @@ def server_binary(device_id="gpu0"):
         if candidate.exists():
             return str(candidate)
 
-    # Legacy flat layout (single binary in build/)
+    # Flat layout fallback
     flat = PREBUILT_DIR / "llama-server"
     if flat.exists():
         return str(flat)
 
-    # Source build output
+    # Source build
     for p in (SOURCE_BUILD_DIR / "bin" / "llama-server",
               SOURCE_BUILD_DIR / "bin" / "Release" / "llama-server"):
         if p.exists():
@@ -113,38 +126,53 @@ def is_built():
     return server_binary() is not None
 
 
-# ── Build from source (fallback) ────────────────────────────────────────
+# ── Build from source ────────────────────────────────────────────────────
 
 def build(jobs=None):
-    """Build llama.cpp from source with CUDA.
+    """Build llama.cpp from source with platform-appropriate flags.
 
-    For production, use build.sh to create prebuilt binaries for
-    multiple CUDA versions. This is a single-variant fallback.
+    macOS:  Metal + arm64 optimizations.
+    Linux:  CUDA + Flash Attention kernels.
     """
     if not LLAMA_CPP_DIR.exists():
         raise RuntimeError(
             f"llama.cpp source not found at {LLAMA_CPP_DIR}\n"
             "Clone:  git clone --depth 1 https://github.com/ggerganov/llama.cpp.git llama_cpp"
         )
+
     build_dir = SOURCE_BUILD_DIR
     build_dir.mkdir(parents=True, exist_ok=True)
+
     if jobs is None:
         jobs = max(1, os.cpu_count() or 4)
 
-    print(f"[build] Configuring llama.cpp with CUDA...")
-    cmake_args = [
-        "cmake", "-B", str(build_dir), "-S", str(LLAMA_CPP_DIR),
-        "-DCMAKE_BUILD_TYPE=Release",
-        "-DGGML_CUDA=ON",
-        "-DGGML_CUDA_FA=ON",
-        "-DGGML_CUDA_FA_ALL_QUANTS=ON",
-        "-DLLAMA_CURL=ON",
-    ]
+    if _IS_DARWIN:
+        print("[build] Configuring llama.cpp with Metal (Apple Silicon)...")
+        cmake_args = [
+            "cmake", "-B", str(build_dir), "-S", str(LLAMA_CPP_DIR),
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DGGML_METAL=ON",
+            "-DLLAMA_CURL=OFF",
+            "-DLLAMA_OPENSSL=OFF",
+            "-DCMAKE_OSX_ARCHITECTURES=arm64",
+        ]
+    else:
+        print("[build] Configuring llama.cpp with CUDA...")
+        cmake_args = [
+            "cmake", "-B", str(build_dir), "-S", str(LLAMA_CPP_DIR),
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DGGML_CUDA=ON",
+            "-DGGML_CUDA_FA=ON",
+            "-DGGML_CUDA_FA_ALL_QUANTS=ON",
+            "-DGGML_CUDA_GRAPHS=ON",
+            "-DLLAMA_CURL=ON",
+        ]
+
     r = subprocess.run(cmake_args, capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError(f"cmake configure failed:\n{r.stderr}")
 
-    print(f"[build] Building with {jobs} jobs...")
+    print(f"[build] Building with {jobs} parallel jobs...")
     r = subprocess.run(
         ["cmake", "--build", str(build_dir), "--config", "Release",
          "-j", str(jobs), "--target", "llama-server"],
@@ -158,22 +186,42 @@ def build(jobs=None):
     print(f"[build] ✓ llama-server: {server_binary()}")
 
 
+# ── Context auto-detection (macOS unified memory) ────────────────────────
+
+def _auto_context_size(model_path):
+    """Pick a context size based on available memory and model size.
+
+    Primarily useful on macOS unified memory where GPU/CPU share RAM.
+    """
+    from hardware import _mem_info
+    _, free_mb = _mem_info()
+    model_size_mb = os.path.getsize(model_path) / (1024 * 1024)
+    available_for_ctx = (free_mb - model_size_mb * 1.2) * 0.7
+    if available_for_ctx > 20000:
+        return 131072
+    elif available_for_ctx > 8000:
+        return 65536
+    elif available_for_ctx > 4000:
+        return 32768
+    elif available_for_ctx > 2000:
+        return 16384
+    else:
+        return 8192
+
+
 # ── Server lifecycle ─────────────────────────────────────────────────────
 
-def start_server(model_path, *, device="gpu0", port=None, ctx_size=131072,
-                 parallel=4, threads=None, host="127.0.0.1", extra_args=None,
+def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
+                 n_gpu_layers=9999, parallel=4, threads=None,
+                 flash_attn="on", cache_type_k=None, cache_type_v=None,
+                 host="127.0.0.1", extra_args=None,
                  _retry_count=0, _max_retries=5):
     """Start a llama-server instance pinned to a specific device.
 
-    Args:
-        model_path: Path to GGUF model file.
-        device: "gpu0", "gpu1", ..., "gpuN", or "cpu".
-        port: Override port (default: auto-assigned from device).
-        ctx_size: Context window size.
-        parallel: Parallel inference slots.
-        threads: CPU threads (auto for GPU, fixed 4 for CPU device).
-        host: Listen address.
-        extra_args: Additional CLI arguments.
+    Platform-aware defaults:
+      macOS:  f16 KV cache, auto context from memory, Metal offload.
+      Linux GPU: q4_0 KV cache, 131072 context, CUDA_VISIBLE_DEVICES.
+      Linux CPU: no GPU offload, f16 KV cache, 4 threads.
     """
     if port is None:
         port = _port_for_device(device)
@@ -184,29 +232,40 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=131072,
     if not os.path.isfile(model_path):
         raise FileNotFoundError(f"Model not found: {model_path}")
 
-    # Stop existing server on this device if any
     stop_server(device)
 
     is_cpu = (device == "cpu")
 
+    # Platform-aware defaults
     if is_cpu:
-        # ── LINUX-ONLY: CPU/RAM device ──
-        # Runs model entirely in system RAM, no GPU offload.
-        # Fixed 4 CPU cores as specified in requirements.
         n_gpu_layers = 0
         threads = 4
         flash_attn = "off"
-        cache_type_k = "f16"
-        cache_type_v = "f16"
-    else:
-        # GPU device: full offload, flash attention, quantized KV cache.
-        # Absolutely no model splitting — entire model on one GPU.
-        n_gpu_layers = 9999
+        if cache_type_k is None:
+            cache_type_k = "f16"
+        if cache_type_v is None:
+            cache_type_v = "f16"
+        if ctx_size is None:
+            ctx_size = 32768
+    elif _IS_DARWIN:
         if threads is None:
             threads = max(1, (os.cpu_count() or 4) // 2)
-        flash_attn = "on"
-        cache_type_k = "q4_0"
-        cache_type_v = "q4_0"
+        if cache_type_k is None:
+            cache_type_k = "f16"
+        if cache_type_v is None:
+            cache_type_v = "f16"
+        if ctx_size is None:
+            ctx_size = _auto_context_size(model_path)
+    else:
+        # Linux GPU
+        if threads is None:
+            threads = max(1, (os.cpu_count() or 4) // 2)
+        if cache_type_k is None:
+            cache_type_k = "q4_0"
+        if cache_type_v is None:
+            cache_type_v = "q4_0"
+        if ctx_size is None:
+            ctx_size = 131072
 
     cmd = [
         binary,
@@ -228,28 +287,36 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=131072,
 
     # Environment
     env = os.environ.copy()
-    if is_cpu:
-        env["CUDA_VISIBLE_DEVICES"] = ""
-    else:
-        gpu_idx = int(device.replace("gpu", ""))
-        env["CUDA_VISIBLE_DEVICES"] = str(gpu_idx)
-    # Bundled shared libs (CUDA runtime, cuBLAS, etc.) — host needs only the driver
     bin_dir = str(Path(binary).parent)
-    env["LD_LIBRARY_PATH"] = bin_dir + ":" + env.get("LD_LIBRARY_PATH", "")
 
-    tag = "CPU/RAM" if is_cpu else device.upper()
+    if _IS_DARWIN:
+        env["DYLD_LIBRARY_PATH"] = bin_dir + ":" + env.get("DYLD_LIBRARY_PATH", "")
+    else:
+        env["LD_LIBRARY_PATH"] = bin_dir + ":" + env.get("LD_LIBRARY_PATH", "")
+        if is_cpu:
+            env["CUDA_VISIBLE_DEVICES"] = ""
+        else:
+            gpu_idx = int(device.replace("gpu", ""))
+            env["CUDA_VISIBLE_DEVICES"] = str(gpu_idx)
+
+    # Logging
+    if is_cpu:
+        tag = "CPU/RAM"
+    elif _IS_DARWIN:
+        tag = "Metal"
+    else:
+        tag = device.upper()
     print(f"[server] Starting llama-server [{tag}] on {host}:{port}")
     print(f"[server]   Model: {model_path}")
     print(f"[server]   Context: {ctx_size}, GPU layers: {n_gpu_layers}")
+    print(f"[server]   Flash Attention: {flash_attn}, KV: {cache_type_k}")
     if is_cpu:
-        print(f"[server]   CPU-only mode (4 threads, system RAM)")
-    else:
-        print(f"[server]   Flash Attention: {flash_attn}, KV: {cache_type_k}")
+        print(f"[server]   CPU-only mode ({threads} threads, system RAM)")
 
     proc = subprocess.Popen(cmd, env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    # Scale load timeout with model size (CPU loads are slower)
+    # Scale load timeout with model size
     model_file = Path(model_path)
     shard_match = re.search(r'(\d{5})-of-(\d{5})', model_file.name)
     if shard_match:
@@ -275,9 +342,12 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=131072,
             print(f"[server] ↻ Retry {_retry_count + 1}/{_max_retries}: "
                   f"reducing context {ctx_size} → {new_ctx}")
             return start_server(model_path, device=device, port=port,
-                                ctx_size=new_ctx, parallel=parallel,
-                                threads=threads, host=host,
-                                extra_args=extra_args,
+                                ctx_size=new_ctx, n_gpu_layers=n_gpu_layers,
+                                parallel=parallel, threads=threads,
+                                flash_attn=flash_attn,
+                                cache_type_k=cache_type_k,
+                                cache_type_v=cache_type_v,
+                                host=host, extra_args=extra_args,
                                 _retry_count=_retry_count + 1,
                                 _max_retries=_max_retries)
         raise RuntimeError(f"llama-server [{tag}] failed to start after "
@@ -300,14 +370,12 @@ def stop_server(device=None):
             tag = "CPU/RAM" if device == "cpu" else device.upper()
             print(f"[server] [{tag}] stopped")
         else:
-            # Kill any orphaned llama-server on this device's port
-            port = _CPU_PORT if device == "cpu" else (_BASE_GPU_PORT + int(device.replace("gpu", "")))
+            port = _port_for_device(device)
             _kill_port(port)
     else:
         for dev in list(_servers.keys()):
             stop_server(dev)
         if not _servers:
-            # Kill orphans on all known ports
             for p in range(_BASE_GPU_PORT, _BASE_GPU_PORT + 8):
                 _kill_port(p)
             _kill_port(_CPU_PORT)
@@ -325,19 +393,37 @@ def _kill_proc(proc):
 
 
 def _kill_port(port):
-    """Kill any process listening on the given TCP port."""
-    try:
-        out = subprocess.check_output(
-            ["fuser", f"{port}/tcp"], stderr=subprocess.DEVNULL, timeout=5
-        ).decode().strip()
-        for pid_str in out.split():
-            pid = int(pid_str)
-            os.kill(pid, signal.SIGTERM)
-        if out:
-            time.sleep(2)
-            print(f"[server] Killed orphaned process on port {port}")
-    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
-        pass
+    """Kill any process listening on a TCP port."""
+    if _IS_DARWIN:
+        # macOS: use lsof
+        try:
+            out = subprocess.check_output(
+                ["lsof", "-ti", f":{port}"],
+                stderr=subprocess.DEVNULL, timeout=5,
+            ).decode().strip()
+            for pid_str in out.splitlines():
+                pid = int(pid_str.strip())
+                os.kill(pid, signal.SIGTERM)
+            if out:
+                time.sleep(2)
+                print(f"[server] Killed orphaned process on port {port}")
+        except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+            pass
+    else:
+        # Linux: use fuser
+        try:
+            out = subprocess.check_output(
+                ["fuser", f"{port}/tcp"],
+                stderr=subprocess.DEVNULL, timeout=5,
+            ).decode().strip()
+            for pid_str in out.split():
+                pid = int(pid_str)
+                os.kill(pid, signal.SIGTERM)
+            if out:
+                time.sleep(2)
+                print(f"[server] Killed orphaned process on port {port}")
+        except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+            pass
 
 
 def _wait_for_server(port, host="127.0.0.1", timeout=120, proc=None):
@@ -391,6 +477,30 @@ def active_devices():
     return alive
 
 
+def server_pid(device="gpu0"):
+    """Return the PID of a running server, or None."""
+    info = _servers.get(device)
+    if info and info["proc"].poll() is None:
+        return info["proc"].pid
+    return None
+
+
+def get_server_context(device="gpu0", port=None, host="127.0.0.1"):
+    """Get the actual per-slot context size from a running server.
+
+    Returns the n_ctx value from /slots, or 0 if unavailable.
+    """
+    if port is None:
+        port = _port_for_device(device)
+    try:
+        data = api_call("GET", "/slots", port=port, host=host, timeout=5)
+        if isinstance(data, list) and data:
+            return data[0].get("n_ctx", 0)
+    except Exception:
+        pass
+    return 0
+
+
 def loaded_models(device=None, port=None, host="127.0.0.1"):
     """List models from a server (OpenAI compatible)."""
     if port is None and device is not None:
@@ -429,7 +539,10 @@ def complete(messages, model=None, *, max_tokens=-1, temperature=0.7,
              top_p=None, frequency_penalty=None, presence_penalty=None,
              stop=None,
              port=DEFAULT_PORT, host="127.0.0.1", generation_timeout=300):
-    """Chat completion against a specific server port."""
+    """Chat completion against a specific server port.
+
+    Returns full OpenAI-compatible response dict with tokens_per_sec added.
+    """
     body = {"messages": messages, "max_tokens": max_tokens,
             "temperature": temperature}
     if model:
@@ -455,7 +568,7 @@ def complete(messages, model=None, *, max_tokens=-1, temperature=0.7,
 
     msg = choice.get("message", {})
     return {
-        "id": data.get("id", "chatcmpl-linux"),
+        "id": data.get("id", "chatcmpl-agent"),
         "object": "chat.completion",
         "created": int(t0),
         "model": data.get("model", ""),

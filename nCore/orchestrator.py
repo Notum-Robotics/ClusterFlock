@@ -14,7 +14,6 @@ import urllib.request
 import urllib.error
 
 from registry import all_nodes, get_node
-from catalog import is_graylisted
 
 _lock = threading.Lock()
 
@@ -163,33 +162,6 @@ def cleanup_old_tasks(max_age=600):
 _VRAM_OVERHEAD = 1.2
 # Safety margin: reserve 15% of total VRAM to keep host responsive
 _VRAM_SAFETY = 0.85
-# Conservative safety margin for devices with < 16 GB VRAM
-_VRAM_SAFETY_SMALL = 0.75
-# Minimum context length (tokens) — skip models that can't sustain this
-_MIN_CONTEXT_TOKENS = 8192
-# Estimated KV-cache bytes per billion parameters per token (conservative)
-_KV_BYTES_PER_BP_PER_TOKEN = 10000
-
-
-def _effective_safety(vram_mb):
-    """Return the VRAM safety factor for a device.
-    Devices with < 16 GB get a more conservative margin (0.75)
-    to leave room for KV cache and OS/driver overhead."""
-    return _VRAM_SAFETY_SMALL if vram_mb < 16384 else _VRAM_SAFETY
-
-
-def _passes_min_context(file_size, vram_budget_bytes, model_name):
-    """Check whether a model leaves enough VRAM for >= 8 K context.
-    Estimates KV-cache cost from params parsed from the model name.
-    Returns True when the check passes or when params can't be determined."""
-    from catalog import _parse_params_from_name
-    params_b = _parse_params_from_name(model_name or "")
-    if not params_b:
-        return True  # can't check — allow
-    cost = int(file_size * _VRAM_OVERHEAD)
-    remaining_after_load = vram_budget_bytes - cost
-    min_kv = int(params_b * _KV_BYTES_PER_BP_PER_TOKEN * _MIN_CONTEXT_TOKENS)
-    return remaining_after_load >= min_kv
 
 
 def all_downloads():
@@ -269,10 +241,6 @@ def plan_autoload(clean_slate=False, priorities=None):
                            key=lambda m: (m["id"] in priority_set, m["file_size"]),
                            reverse=True)
 
-        # Skip graylisted models (unless explicitly prioritized)
-        dl_sorted = [m for m in dl_sorted
-                     if m["id"] in priority_set or not is_graylisted(m["id"])]
-
         # Build set of currently loaded model IDs on this node
         loaded_set = set()
         if not clean_slate:
@@ -293,16 +261,15 @@ def plan_autoload(clean_slate=False, priorities=None):
         if multi_gpu:
             # Treat all GPUs as one combined pool
             total_vram_mb = sum(g.get("vram_total_mb", 0) for g in gpus)
-            safety = _effective_safety(total_vram_mb)
             if clean_slate:
-                remaining = int(total_vram_mb * safety) * 1024 * 1024
+                remaining = int(total_vram_mb * _VRAM_SAFETY) * 1024 * 1024
             else:
                 total_free_mb = sum(
                     (gpu_metrics[i].get("vram_free_mb", 0)
                      if i < len(gpu_metrics) else 0)
                     for i in range(len(gpus))
                 )
-                remaining = int(total_free_mb * safety) * 1024 * 1024
+                remaining = int(total_free_mb * _VRAM_SAFETY) * 1024 * 1024
 
             gpu_label = " + ".join(g.get("name", f"GPU {i}") for i, g in enumerate(gpus))
             num_desired = len(gpus) if not tight else 999  # at least one per GPU, or fill
@@ -310,8 +277,6 @@ def plan_autoload(clean_slate=False, priorities=None):
             for m in dl_sorted:
                 cost = int(m["file_size"] * _VRAM_OVERHEAD)
                 if cost > remaining:
-                    continue
-                if not _passes_min_context(m["file_size"], remaining, m.get("name", m["id"])):
                     continue
                 if m["id"] in loaded_set:
                     continue
@@ -342,16 +307,15 @@ def plan_autoload(clean_slate=False, priorities=None):
                     continue
 
                 # Budget = total * safety margin (clean slate) or free VRAM * safety
-                safety = _effective_safety(vram_mb)
                 if clean_slate:
-                    remaining = int(vram_mb * safety) * 1024 * 1024
+                    remaining = int(vram_mb * _VRAM_SAFETY) * 1024 * 1024
                 else:
                     gm = gpu_metrics[g_idx] if g_idx < len(gpu_metrics) else {}
                     vram_free_mb = gm.get("vram_free_mb")
                     if vram_free_mb is not None:
-                        remaining = int(vram_free_mb * safety) * 1024 * 1024
+                        remaining = int(vram_free_mb * _VRAM_SAFETY) * 1024 * 1024
                     else:
-                        remaining = int(vram_mb * safety) * 1024 * 1024
+                        remaining = int(vram_mb * _VRAM_SAFETY) * 1024 * 1024
 
                 step_gpu_idx = "cpu" if is_cpu_device else g_idx
 
@@ -360,8 +324,6 @@ def plan_autoload(clean_slate=False, priorities=None):
                     for m in dl_sorted:
                         cost = int(m["file_size"] * _VRAM_OVERHEAD)
                         if cost > remaining:
-                            continue
-                        if not _passes_min_context(m["file_size"], remaining, m.get("name", m["id"])):
                             continue
                         if m["id"] in loaded_set:
                             continue
@@ -396,8 +358,6 @@ def plan_autoload(clean_slate=False, priorities=None):
                     for m in dl_sorted:
                         cost = int(m["file_size"] * _VRAM_OVERHEAD)
                         if cost > remaining:
-                            continue
-                        if not _passes_min_context(m["file_size"], remaining, m.get("name", m["id"])):
                             continue
                         if m["id"] in loaded_set:
                             continue
@@ -726,12 +686,8 @@ def _pick_model_for_budget(downloaded, budget_bytes, exclude_ids=None):
         fsize = m.get("file_size", 0)
         if fsize <= 0 or mid in exclude:
             continue
-        if is_graylisted(mid):
-            continue
         cost = int(fsize * _VRAM_OVERHEAD)
         if cost <= budget_bytes:
-            if not _passes_min_context(fsize, budget_bytes, m.get("name", mid)):
-                continue
             candidates.append(m)
     if not candidates:
         return None
@@ -750,8 +706,6 @@ def _catalog_model_for_budget(budget_bytes, exclude_ids=None):
     exclude = exclude_ids or set()
     for m in catalog_mod.get_catalog():
         if m["id"] in exclude:
-            continue
-        if is_graylisted(m["id"]):
             continue
         cost = int(m.get("file_size", 0) * _VRAM_OVERHEAD)
         if 0 < cost <= budget_bytes:
@@ -915,7 +869,7 @@ def _benchmark_autoload_worker(target_tps):
                     _bench_log(f"Reached max iterations ({_BENCH_MAX_ITERATIONS})")
                     break
 
-                budget_mb = int(vram_mb * _effective_safety(vram_mb) * fraction)
+                budget_mb = int(vram_mb * _VRAM_SAFETY * fraction)
                 budget_bytes = budget_mb * 1024 * 1024
                 budget_label = f"{int(fraction*100)}% VRAM ({budget_mb}MB)"
 

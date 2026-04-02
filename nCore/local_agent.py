@@ -1,7 +1,6 @@
-"""Local agent manager — discover, start, stop co-located agents.
+"""Local agent manager — start and stop the co-located unified agent.
 
-When nCore and an agent run on the same machine, this module handles:
-  • Discovery: scan ../agents/ for available agent types
+When nCore and the agent run on the same machine, this module handles:
   • Lifecycle: start agent as subprocess with local-mode env vars
   • Registration: pre-register in registry with conn_mode="local"
   • Enforcement: only one local agent at a time (PID tracking)
@@ -25,79 +24,42 @@ from pathlib import Path
 from registry import register as reg_node, remove as rm_node, get_node
 from auth import generate as gen_token
 
-_AGENTS_DIR = Path(__file__).resolve().parent.parent / "agents"
+_AGENT_DIR = Path(__file__).resolve().parent.parent / "agent"
 
 _lock = threading.Lock()
 _proc = None          # subprocess.Popen
-_agent_type = None    # e.g. "agent_spark"
+_agent_type = None    # "agent"
 _local_token = None   # bearer token for the local agent
 _node_id = None       # node_id of the running local agent
 
 
 def available_agents():
-    """Return list of discovered agent types with metadata."""
-    agents = []
-    if not _AGENTS_DIR.is_dir():
-        return agents
-    for d in sorted(_AGENTS_DIR.iterdir()):
-        if not d.is_dir() or d.name.startswith((".", "_")):
-            continue
-        run_py = d / "run.py"
-        if not run_py.exists():
-            continue
-        # Try to read version
-        version = None
-        ver_py = d / "version.py"
-        if ver_py.exists():
-            try:
-                for line in ver_py.read_text().splitlines():
-                    if line.startswith("__version__"):
-                        version = line.split("=", 1)[1].strip().strip("\"'")
-                        break
-            except Exception:
-                pass
-        agents.append({
-            "agent_type": d.name,
-            "path": str(d),
-            "version": version,
-        })
-    return agents
+    """Return list with the unified agent if present."""
+    run_py = _AGENT_DIR / "run.py"
+    if not run_py.exists():
+        return []
+    version = None
+    ver_py = _AGENT_DIR / "version.py"
+    if ver_py.exists():
+        try:
+            for line in ver_py.read_text().splitlines():
+                if line.startswith("__version__"):
+                    version = line.split("=", 1)[1].strip().strip("\"'")
+                    break
+        except Exception:
+            pass
+    return [{
+        "agent_type": "agent",
+        "path": str(_AGENT_DIR),
+        "version": version,
+    }]
 
 
 def recommended_agent():
-    """Auto-detect the best agent flavour for this machine."""
-    import platform
-    system = platform.system()
-    machine = platform.machine().lower()
-    avail = {a["agent_type"] for a in available_agents()}
-
-    if system == "Darwin" and machine in ("arm64", "aarch64"):
-        for pick in ("agent_mac", "agent_lms"):
-            if pick in avail:
-                return pick
-    elif system == "Linux":
-        # Check for DGX Spark (GB10 Blackwell) first
-        if "agent_spark" in avail:
-            try:
-                with open("/sys/firmware/devicetree/base/model", "r") as f:
-                    if "DGX" in f.read():
-                        return "agent_spark"
-            except Exception:
-                pass
-            try:
-                import subprocess as _sp
-                out = _sp.check_output(["nvidia-smi", "-L"], timeout=5,
-                                       stderr=_sp.DEVNULL).decode()
-                if "GB10" in out or "GB20" in out:
-                    return "agent_spark"
-            except Exception:
-                pass
-        if "agent_linux" in avail:
-            return "agent_linux"
-        if "agent_lms" in avail:
-            return "agent_lms"
-    # Fallback: first available
-    return next(iter(avail), None)
+    """Return 'agent' if it exists, else None."""
+    if (_AGENT_DIR / "run.py").exists():
+        return "agent"
+    return None
 
 
 def status():
@@ -114,24 +76,26 @@ def status():
         }
 
 
-def start_agent(agent_type, ncore_port=1903):
-    """Start a local agent subprocess. Returns (ok, error_msg)."""
+def start_agent(agent_type=None, ncore_port=1903):
+    """Start the local agent subprocess. Returns (ok, error_msg).
+
+    agent_type is accepted for API compatibility but ignored — there is
+    only one unified agent now.
+    """
     global _proc, _agent_type, _local_token, _node_id
 
     with _lock:
-        # Enforce single agent
         if _proc is not None and _proc.poll() is None:
-            return False, f"agent already running: {_agent_type} (pid {_proc.pid})"
+            return False, f"agent already running (pid {_proc.pid})"
 
-    # Validate agent_type
-    agent_dir = _AGENTS_DIR / agent_type
+    agent_dir = _AGENT_DIR
     run_py = agent_dir / "run.py"
     if not run_py.exists():
-        return False, f"agent not found: {agent_type}"
+        return False, f"agent not found at {agent_dir}"
 
     hostname = socket.gethostname()
     nid = f"local-{hostname}"
-    token = gen_token(nid, label=f"local-{agent_type}")
+    token = gen_token(nid, label="local-agent")
     local_secret = secrets.token_urlsafe(32)
 
     # Pre-register in the registry
@@ -155,7 +119,7 @@ def start_agent(agent_type, ncore_port=1903):
 
     with _lock:
         _proc = proc
-        _agent_type = agent_type
+        _agent_type = "agent"
         _local_token = token
         _node_id = nid
 

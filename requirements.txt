@@ -2,5 +2,5 @@
 #
 # nCore (orchestrator) has ZERO third-party dependencies — Python 3.10+ stdlib only.
 #
-# Agents (agent_spark, agent_linux, agent_mac) need:
-huggingface_hub>=0.20.0
+# Agent ideally needs:
+huggingface_hub>=0.20.0 (but is able to fall back to curl)

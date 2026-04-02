@@ -1,7 +1,12 @@
-"""Command dispatcher for Linux agent.
+"""Command dispatcher — unified for all platforms.
 
-Manages multiple llama-server instances — one per device (GPU or CPU).
+Manages llama-server instances across devices (GPUs, CPU/RAM).
 Handles load/unload/prompt/configure commands from nCore orchestrator.
+
+Multi-device model (from agent_linux architecture):
+  Each GPU gets its own server. On macOS (unified memory), a single
+  "gpu0" device covers the entire SoC. CPU/RAM is an optional extra
+  device on Linux for system-RAM-only inference.
 
 IMPORTANT: No model splitting. Ever. Each model runs entirely on one device.
 """
@@ -13,7 +18,8 @@ import time
 from pathlib import Path
 
 from server import (start_server, stop_server, server_running, complete,
-                    benchmark, loaded_models, active_devices, _port_for_device)
+                    benchmark, loaded_models, active_devices, _port_for_device,
+                    get_server_context)
 from models_hf import (local_models, download_model,
                         get_bench, save_bench, MODELS_DIR,
                         auto_select_quant, _resolve_gguf_repo,
@@ -27,6 +33,9 @@ _devices = {}
 
 # Activity state for heartbeat reporting
 _activity = {"state": "idle", "model": None, "detail": None, "started_at": None}
+
+# CPU/RAM inference — controlled from nCore UI, persisted in cluster.json
+_cpu_ram_enabled = False
 
 
 def get_activity():
@@ -46,14 +55,6 @@ def _set_activity(state, model=None):
     _activity["started_at"] = time.time() if state != "idle" else None
 
 
-# ── LINUX-ONLY: CPU/RAM inference setting ──────────────────────────────
-# When enabled, the agent advertises system RAM as an additional device
-# capable of running models entirely in CPU + RAM (no GPU).
-# This is controlled remotely from the nCore UI toggle and persisted
-# in cluster.json. Only available on Linux.
-_cpu_ram_enabled = False
-
-
 def _read_config():
     try:
         return json.loads(_CONFIG.read_text())
@@ -69,7 +70,7 @@ def _save_config(updates):
 
 
 def cpu_ram_enabled():
-    """Whether CPU/RAM device is enabled (Linux-only feature)."""
+    """Whether CPU/RAM device is enabled."""
     return _cpu_ram_enabled
 
 
@@ -77,6 +78,9 @@ def current_model(device=None):
     """Return model ID for a device, or first loaded model."""
     if device:
         return _devices.get(device, {}).get("model_id")
+    # Fallback: detect externally-started server
+    if not _devices:
+        _detect_running_model()
     for info in _devices.values():
         if info.get("model_id"):
             return info["model_id"]
@@ -89,6 +93,8 @@ def all_loaded_models():
             for d, info in _devices.items()
             if info.get("model_id")]
 
+
+# ── Command dispatch ─────────────────────────────────────────────────────
 
 def execute(cmd):
     """Dispatch a command dict. Returns result dict or None."""
@@ -110,7 +116,8 @@ def execute(cmd):
         device = _resolve_device(cmd)
         _set_activity("loading", mid)
         try:
-            _load_model(mid, device=device, context_length=cmd.get("context_length"))
+            _load_model(mid, device=device,
+                        context_length=cmd.get("context_length"))
         finally:
             _set_activity("idle")
         _auto_bench(mid, device)
@@ -177,53 +184,12 @@ def execute(cmd):
             raise ValueError("model_id required")
         return _delete_model(mid)
 
-    # ── LINUX-ONLY: remote configuration from nCore ──
     elif action == "configure":
         _handle_configure(cmd)
 
     else:
         raise ValueError(f"unknown action: {action}")
     return None
-
-
-def _delete_model(model_id):
-    """Delete a downloaded model from disk."""
-    # Unload if currently loaded
-    for dev, info in list(_devices.items()):
-        if info.get("model_id") and model_id in info["model_id"]:
-            _unload(info["model_id"])
-            break
-    # Find model files
-    candidates = []
-    for f in MODELS_DIR.rglob("*.gguf"):
-        rel = str(f.relative_to(MODELS_DIR)).replace(os.sep, "/")
-        if model_id == rel or model_id in rel or any(
-            part in rel.lower() for part in model_id.lower().split("/") if len(part) > 3
-        ):
-            candidates.append(f)
-    if not candidates:
-        raise FileNotFoundError(f"Model not found: {model_id}")
-    freed = 0
-    deleted = []
-    for f in candidates:
-        sz = f.stat().st_size
-        f.unlink()
-        freed += sz
-        deleted.append(str(f.relative_to(MODELS_DIR)))
-        print(f"[delete] Removed {f.relative_to(MODELS_DIR)} ({sz/(1024**3):.1f} GB)")
-    # Clean up empty parent dirs
-    for f in candidates:
-        d = f.parent
-        while d != MODELS_DIR:
-            try:
-                if not any(d.iterdir()):
-                    d.rmdir()
-                    d = d.parent
-                else:
-                    break
-            except Exception:
-                break
-    return {"ok": True, "deleted": deleted, "freed_gb": round(freed / (1024**3), 2)}
 
 
 # ── Device resolution ────────────────────────────────────────────────────
@@ -233,7 +199,7 @@ def _resolve_device(cmd):
 
     - device="cpu" or gpu_idx="cpu" → "cpu"
     - gpu_idx=N → "gpuN"
-    - No hint → first available GPU slot, or "cpu" if all GPUs occupied
+    - No hint → first available GPU slot, or "gpu0" if all occupied
     """
     if cmd.get("device") == "cpu":
         return "cpu"
@@ -245,11 +211,10 @@ def _resolve_device(cmd):
     # Default: first GPU not currently loaded
     from hardware import gpu
     gpus = gpu()
-    for i in range(len(gpus)):
+    for i in range(max(len(gpus), 1)):
         dev = f"gpu{i}"
         if dev not in _devices:
             return dev
-    # All GPUs occupied; use gpu0 (will unload existing)
     return "gpu0"
 
 
@@ -263,7 +228,6 @@ def _find_model_device(model_hint=None):
             mid = info.get("model_id", "")
             if mid and (model_hint == mid or model_hint in mid):
                 return dev, info["port"]
-    # No hint or no match — first loaded device
     for dev, info in _devices.items():
         if info.get("model_id"):
             return dev, info["port"]
@@ -274,17 +238,19 @@ def _find_model_device(model_hint=None):
 
 def _load_model(model_id, *, device="gpu0", context_length=None,
                 model_path=None):
-    """Load a model onto a specific device. No model splitting — ever."""
+    """Load a model onto a specific device."""
     if not model_path:
         model_path = _resolve_model_path(model_id)
     if not model_path:
         raise FileNotFoundError(f"Model not found: {model_id}. Download it first.")
 
-    ctx = context_length or 131072
     tag = "CPU/RAM" if device == "cpu" else device.upper()
-    print(f"[load] Loading {model_id} on {tag} (ctx={ctx})...")
+    kwargs = {"device": device}
+    if context_length:
+        kwargs["ctx_size"] = context_length
+    print(f"[load] Loading {model_id} on {tag}...")
 
-    start_server(model_path, device=device, ctx_size=ctx)
+    start_server(model_path, **kwargs)
 
     port = _port_for_device(device)
     _devices[device] = {
@@ -340,8 +306,12 @@ def _download_and_load(model_id, *, device="gpu0", context_length=None):
             gpus = hw.get("gpu", [])
             idx = int(device.replace("gpu", ""))
             vram_free = gpus[idx].get("vram_free_mb", 0) if idx < len(gpus) else 0
+            if not vram_free:
+                vram_free = hw.get("system", {}).get("ram_total_mb", 0)
         gguf_repo = _resolve_gguf_repo(hf_repo)
         quant = auto_select_quant(gguf_repo, vram_free)
+        print(f"[dl+load] Auto-selected quant: {quant} "
+              f"(VRAM free: {vram_free/1024:.1f} GB)")
 
     path = download_model(hf_repo, quant=quant)
     _set_activity("loading", model_id)
@@ -349,15 +319,74 @@ def _download_and_load(model_id, *, device="gpu0", context_length=None):
                 model_path=path)
 
 
-# ── LINUX-ONLY: Remote configuration ────────────────────────────────────
+def _delete_model(model_id):
+    """Delete a downloaded model from disk."""
+    # Unload if currently loaded on any device
+    for dev, info in list(_devices.items()):
+        if info.get("model_id") and model_id in info["model_id"]:
+            stop_server(dev)
+            del _devices[dev]
+            break
+
+    # Find model files
+    candidates = []
+    for f in MODELS_DIR.rglob("*.gguf"):
+        rel = str(f.relative_to(MODELS_DIR)).replace(os.sep, "/")
+        if model_id == rel or model_id in rel or any(
+            part in rel.lower() for part in model_id.lower().split("/") if len(part) > 3
+        ):
+            candidates.append(f)
+    if not candidates:
+        raise FileNotFoundError(f"Model not found: {model_id}")
+
+    freed = 0
+    deleted = []
+    for f in candidates:
+        sz = f.stat().st_size
+        f.unlink()
+        freed += sz
+        deleted.append(str(f.relative_to(MODELS_DIR)))
+        print(f"[delete] Removed {f.relative_to(MODELS_DIR)} ({sz/(1024**3):.1f} GB)")
+
+    # Clean up empty parent dirs
+    for f in candidates:
+        d = f.parent
+        while d != MODELS_DIR:
+            try:
+                if not any(d.iterdir()):
+                    d.rmdir()
+                    d = d.parent
+                else:
+                    break
+            except Exception:
+                break
+
+    return {"ok": True, "deleted": deleted, "freed_gb": round(freed / (1024**3), 2)}
+
+
+def _detect_running_model():
+    """Detect a model already loaded in an externally-started llama-server."""
+    if _devices:
+        return
+    if not server_running(device="gpu0"):
+        return
+    models = loaded_models(device="gpu0")
+    if models:
+        mid = models[0].get("id", "")
+        if mid:
+            port = _port_for_device("gpu0")
+            _devices["gpu0"] = {
+                "model_id": mid, "model_path": "", "port": port,
+            }
+            print(f"[detect] Found running model: {mid}")
+
+
+# ── Remote configuration ────────────────────────────────────────────────
 
 def _handle_configure(cmd):
     """Handle configuration commands from nCore.
 
-    Supported settings:
-      cpu_ram_enabled (bool) — enable/disable CPU/RAM as inference device.
-                               Linux-only feature. When enabled, system RAM
-                               appears as a schedulable device in nCore.
+    Supported: cpu_ram_enabled (bool) — enable CPU/RAM as inference device.
     """
     global _cpu_ram_enabled
 
@@ -385,7 +414,7 @@ def init_settings():
     cfg = _read_config()
     _cpu_ram_enabled = cfg.get("cpu_ram_enabled", False)
     if _cpu_ram_enabled:
-        print(f"[config] CPU/RAM device enabled (from saved config)")
+        print("[config] CPU/RAM device enabled (from saved config)")
 
 
 # ── Auto-benchmark ───────────────────────────────────────────────────────
@@ -428,6 +457,3 @@ def _resolve_model_path(model_id):
     if matches:
         return str(matches[0])
     return None
-
-
-
