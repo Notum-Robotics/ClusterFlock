@@ -159,8 +159,10 @@ def _generation_limits(node_id, model, role="worker", overrides=None):
     overrides = overrides or {}
 
     if role == "showrunner" or overrides.get("no_gen_limit"):
-        max_tokens = ctx
-        gen_timeout = 600  # 10 minutes hard cap
+        gen_timeout = 900  # 15 minutes hard cap
+        # max_tokens from benchmark speed × timeout with 10% safety margin
+        max_tokens = min(ctx, int(tps * gen_timeout * 0.9))
+        max_tokens = max(max_tokens, 8192)  # floor: always allow at least 8K
 
     elif role == "utility":
         max_tokens = max(2048, ctx // 8)
@@ -187,7 +189,7 @@ def _generation_limits(node_id, model, role="worker", overrides=None):
     if "generation_timeout" in overrides:
         v = int(overrides["generation_timeout"])
         if v > 0:
-            gen_timeout = min(v, 600)  # hard cap 10 min per request
+            gen_timeout = min(v, 900)  # hard cap 15 min per request
 
     wait_timeout = int(gen_timeout * 1.3) + 30
 
@@ -221,9 +223,10 @@ def _is_context_overflow(result):
     err = result.get("error", "")
     if "exceed_context_size_error" in err or "exceeds the available context size" in err:
         try:
-            m = re.search(r'"n_prompt_tokens"\s*:\s*(\d+)', err)
+            # Handle both normal and escaped JSON quotes in nested error messages
+            m = re.search(r'\\?"n_prompt_tokens\\?"\s*:\s*(\d+)', err)
             n_prompt = int(m.group(1)) if m else 0
-            m = re.search(r'"n_ctx"\s*:\s*(\d+)', err)
+            m = re.search(r'\\?"n_ctx\\?"\s*:\s*(\d+)', err)
             n_ctx = int(m.group(1)) if m else 0
             return True, n_prompt, n_ctx
         except Exception:

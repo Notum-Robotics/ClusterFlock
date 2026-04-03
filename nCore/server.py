@@ -33,14 +33,14 @@ import urllib.parse
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
-_WEB_ROOT = Path(__file__).parent / "web" / "public"
+_WEB_ROOT = Path(__file__).parent / "public"
 
 _IDENT_RE = re.compile(r'^[\w.@:\-]{1,255}$')
 
 from registry import (
     all_nodes, get_node, register as reg_node,
     heartbeat as hb_node, remove as rm_node, node_count,
-    push_configs, restore_push, start_reaper,
+    push_configs, restore_push, start_reaper, has_local_agent,
 )
 from auth import generate as gen_token, verify as verify_token, revoke_for_node, list_tokens
 from access import (
@@ -94,7 +94,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"locked": orch_mod.is_locked()})
         elif self.path == "/api/v1/config":
             self._json(200, {"locked": orch_mod.is_locked(), "tight_pack": orch_mod.is_tight_pack(),
-                             "heartbeat_interval": push_mod.get_interval()})
+                             "heartbeat_interval": push_mod.get_interval(),
+                             "starred_nodes": list(orch_mod.starred_nodes())})
         elif self.path == "/api/v1/sessions":
             self._list_sessions()
         elif self.path.startswith("/api/v1/sessions/"):
@@ -156,6 +157,8 @@ class Handler(BaseHTTPRequestHandler):
             self._node_unload()
         elif self.path.startswith("/api/v1/nodes/") and self.path.endswith("/configure"):
             self._node_configure()
+        elif self.path.startswith("/api/v1/nodes/") and self.path.endswith("/star"):
+            self._node_star()
         elif self.path.startswith("/api/v1/nodes/") and self.path.endswith("/restart"):
             self._node_restart()
         elif self.path == "/api/v1/lock":
@@ -244,6 +247,12 @@ class Handler(BaseHTTPRequestHandler):
         if not permitted:
             return self._json(403, {"error": "node not permitted (access policy)"})
 
+        # Reject if a local agent is already running for this hostname
+        local_nid = has_local_agent(hostname)
+        if local_nid and local_nid != node_id:
+            _log(f"rejected    {node_id} ({hostname}) — local agent {local_nid} already active")
+            return self._json(409, {"error": f"local agent already active for {hostname}"})
+
         token = gen_token(node_id, label=hostname or node_id)
         node = reg_node(node_id, hostname, hardware=body.get("hardware"), token=token)
         _persist()
@@ -280,6 +289,10 @@ class Handler(BaseHTTPRequestHandler):
         if not ok:
             # Token valid but node unknown (e.g. nCore restarted) — re-register
             hostname = body.get("hostname", "")
+            # Block re-admission if a local agent owns this hostname
+            local_nid = has_local_agent(hostname)
+            if local_nid and local_nid != node_id:
+                return self._json(409, {"error": f"local agent already active for {hostname}"})
             reg_node(node_id, hostname, hardware=body.get("hardware"))
             hb_node(node_id, hostname=hostname,
                     metrics=body.get("metrics"),
@@ -341,6 +354,12 @@ class Handler(BaseHTTPRequestHandler):
         if not is_permitted(node_id, hostname):
             return self._json(403, {"error": "node not permitted (access policy)"})
 
+        # Reject if a local agent is already running for this hostname
+        local_nid = has_local_agent(hostname)
+        if local_nid and local_nid != node_id:
+            _log(f"rejected push {node_id} ({hostname}) — local agent {local_nid} already active")
+            return self._json(409, {"error": f"local agent already active for {hostname}"})
+
         reg_node(node_id, hostname, hardware=data.get("hardware"),
                  conn_mode="push", address=address, orchestrator_token=orch_token)
         _persist()
@@ -371,12 +390,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def _list_nodes(self):
         nodes = all_nodes()
+        stars = orch_mod.starred_nodes()
         for n in nodes:
             n.pop("token", None)
             n.pop("orchestrator_token", None)
             av = n.get("agent_version")
             n["version_ok"] = (av == _EXPECTED_AGENT_VER) if av else None
             n["pending_ops"] = orch_mod.get_pending_ops(n["node_id"])
+            n["starred"] = n["node_id"] in stars
         self._json(200, {"nodes": nodes, "expected_agent_version": _EXPECTED_AGENT_VER})
 
     def _get_node(self):
@@ -685,6 +706,21 @@ class Handler(BaseHTTPRequestHandler):
         nid = parts[4] if len(parts) >= 6 else ""
         if not nid or not _IDENT_RE.match(nid):
             return self._json(400, {"error": "invalid node_id"})
+
+    def _node_star(self):
+        """POST /api/v1/nodes/:id/star — toggle star on a node."""
+        parts = self.path.split("/")
+        nid = parts[4] if len(parts) >= 6 else ""
+        if not nid or not _IDENT_RE.match(nid):
+            return self._json(400, {"error": "invalid node_id"})
+        node = get_node(nid)
+        if not node:
+            return self._json(404, {"error": "node not found"})
+        starred, all_starred = orch_mod.toggle_star(nid)
+        _persist()
+        _log(f"{'starred' if starred else 'unstarred'}    {nid}")
+        self._json(200, {"ok": True, "node_id": nid, "starred": starred,
+                         "starred_nodes": list(all_starred)})
         node = get_node(nid)
         if not node:
             return self._json(404, {"error": "node not found"})
@@ -847,7 +883,8 @@ class Handler(BaseHTTPRequestHandler):
             registry.DEAD_AFTER = hb * 12
         _persist()
         self._json(200, {"locked": orch_mod.is_locked(), "tight_pack": orch_mod.is_tight_pack(),
-                         "heartbeat_interval": push_mod.get_interval()})
+                         "heartbeat_interval": push_mod.get_interval(),
+                         "starred_nodes": list(orch_mod.starred_nodes())})
 
     def _autoload_plan(self):
         """GET /api/v1/autoload/plan — preview autoload steps (clean_slate matches execution)."""
@@ -1356,7 +1393,8 @@ def _persist():
     state.save(auth_mod.dump(), access_mod.dump(), push_configs(),
                locked=orch_mod.is_locked(), tight_pack=orch_mod.is_tight_pack(),
                session_data=session_mod.dump(), local_agent=local_agent_data,
-               oapi_config=oapi_cfg, heartbeat_interval=push_mod.get_interval())
+               oapi_config=oapi_cfg, heartbeat_interval=push_mod.get_interval(),
+               starred_nodes=orch_mod.starred_nodes())
 
 
 # ── Module-level ─────────────────────────────────────────────────────────
@@ -1376,7 +1414,7 @@ def serve(host="0.0.0.0", port=8080):
     _ncore_port = port
 
     # Restore persisted state
-    auth_data, access_data, push_data, locked, tight_pack, session_data, local_agent_type, oapi_config, hb_interval = state.load()
+    auth_data, access_data, push_data, locked, tight_pack, session_data, local_agent_type, oapi_config, hb_interval, starred = state.load()
     if auth_data:
         auth_mod.load(auth_data)
     if access_data:
@@ -1387,6 +1425,7 @@ def serve(host="0.0.0.0", port=8080):
         session_mod.load(session_data)
     orch_mod.set_locked(locked)
     orch_mod.set_tight_pack(tight_pack)
+    orch_mod.set_starred_nodes(starred)
 
     # Fetch model catalog from HuggingFace + builtins (non-blocking thread)
     import threading

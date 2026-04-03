@@ -8,7 +8,7 @@ STATE_FILE = Path(__file__).parent / "state.json"
 
 def save(auth_data, access_data, push_data=None, locked=None, tight_pack=None,
          session_data=None, local_agent=None, oapi_config=None,
-         heartbeat_interval=None):
+         heartbeat_interval=None, starred_nodes=None):
     """Persist current state to disk."""
     state = {
         "auth": auth_data,
@@ -27,21 +27,24 @@ def save(auth_data, access_data, push_data=None, locked=None, tight_pack=None,
         state["oapi_config"] = oapi_config
     if heartbeat_interval is not None:
         state["heartbeat_interval"] = heartbeat_interval
+    if starred_nodes is not None:
+        state["starred_nodes"] = list(starred_nodes)
     tmp = STATE_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(state, indent=2))
     tmp.replace(STATE_FILE)
 
 
 def load():
-    """Load persisted state. Returns (auth_data, access_data, push_data, locked, tight_pack, session_data, local_agent, oapi_config, heartbeat_interval)."""
+    """Load persisted state. Returns (auth_data, access_data, push_data, locked, tight_pack, session_data, local_agent, oapi_config, heartbeat_interval, starred_nodes)."""
     if not STATE_FILE.exists():
-        return None, None, None, False, False, None, None, None, None
+        return None, None, None, False, False, None, None, None, None, None
     try:
         state = json.loads(STATE_FILE.read_text())
         return (state.get("auth"), state.get("access"),
                 state.get("push_nodes"), state.get("locked", False),
                 state.get("tight_pack", False), state.get("sessions"),
                 state.get("local_agent"), state.get("oapi_config"),
-                state.get("heartbeat_interval"))
+                state.get("heartbeat_interval"),
+                state.get("starred_nodes"))
     except Exception:
-        return None, None, None, False, False, None, None, None, None
+        return None, None, None, False, False, None, None, None, None, None

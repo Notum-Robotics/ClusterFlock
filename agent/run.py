@@ -9,13 +9,52 @@ Uses llama.cpp directly — no LM Studio or Ollama dependency.
 """
 
 import argparse
+import atexit
 import json
 import os
+import signal
 import sys
 import time
 from pathlib import Path
 
 CONFIG = Path(__file__).parent / "cluster.json"
+_PIDFILE = Path("/tmp/clusterflock_agent.pid")
+
+
+def _acquire_pidlock():
+    """Ensure only one agent runs per machine.  Exit if another is alive."""
+    if _PIDFILE.exists():
+        try:
+            old_pid = int(_PIDFILE.read_text().strip())
+            # Check if that process is still alive
+            os.kill(old_pid, 0)
+            # Still alive — bail out
+            print(f"ERROR: Another agent is already running (pid {old_pid}).  "
+                  f"Kill it first or remove {_PIDFILE}")
+            sys.exit(1)
+        except (ValueError, ProcessLookupError, PermissionError):
+            # Stale pidfile — previous process died without cleanup
+            pass
+    _PIDFILE.write_text(str(os.getpid()))
+    atexit.register(_release_pidlock)
+
+
+def _release_pidlock():
+    """Remove PID file on normal exit."""
+    try:
+        if _PIDFILE.exists() and _PIDFILE.read_text().strip() == str(os.getpid()):
+            _PIDFILE.unlink()
+    except OSError:
+        pass
+
+
+def _sigterm_handler(signum, _frame):
+    """Clean up pidfile on SIGTERM then exit."""
+    _release_pidlock()
+    sys.exit(0)
+
+
+signal.signal(signal.SIGTERM, _sigterm_handler)
 
 
 def _find_link_dir():
@@ -36,12 +75,13 @@ def _find_link_dir():
 
 def run_agent(config, port=1903):
     """Run the agent loop with platform-aware payload."""
+    _acquire_pidlock()
     from hardware import profile, live_metrics, detect_platform, _mem_info
     from server import (active_devices, loaded_models as _loaded_models,
                         benchmark as _benchmark, _port_for_device,
                         get_server_context)
     from commands import (execute, all_loaded_models, cpu_ram_enabled,
-                          init_settings, get_activity)
+                          init_settings, get_activity, check_crashed_servers)
     from models_hf import get_bench, save_bench, local_models
     from version import __version__ as agent_version
 
@@ -77,6 +117,9 @@ def run_agent(config, port=1903):
         print(f"[agent] CPU/RAM device enabled")
 
     def payload():
+        # Auto-restart any crashed llama-server instances
+        check_crashed_servers()
+
         endpoints = []
         devices = active_devices()
 

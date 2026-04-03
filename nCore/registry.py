@@ -5,8 +5,8 @@ import time
 
 # Nodes not heard from within this window are marked stale, then dead.
 # Thresholds scale with heartbeat interval (default 5s).
-STALE_AFTER = 20    # seconds (4 missed 5s heartbeats)
-DEAD_AFTER = 60     # seconds
+STALE_AFTER = 30    # seconds (6 missed 5s heartbeats)
+DEAD_AFTER = 90     # seconds
 REMOVE_AFTER = 600  # seconds — dead nodes reaped after 10 min
 
 _lock = threading.Lock()
@@ -138,6 +138,36 @@ def _enrich(node, now):
 
 
 # ── Push-mode helpers ────────────────────────────────────────────────────
+
+def correct_endpoint_ctx(node_id, model, actual_ctx):
+    """Correct an endpoint's context_length when overflow reveals actual n_ctx.
+    Only downgrades — never increases beyond what the agent reported."""
+    with _lock:
+        node = _nodes.get(node_id)
+        if not node:
+            return False
+        for ep in node.get("endpoints", []):
+            if ep.get("model") == model:
+                old = ep.get("context_length", 0)
+                if actual_ctx and actual_ctx < old:
+                    ep["context_length"] = actual_ctx
+                    return True
+        return False
+
+
+def has_local_agent(hostname):
+    """Check if a local-mode agent already exists for the given hostname.
+
+    Returns the local node_id if found, else None.
+    """
+    if not hostname:
+        return None
+    with _lock:
+        for n in _nodes.values():
+            if n.get("conn_mode") == "local" and n.get("hostname") == hostname:
+                return n["node_id"]
+    return None
+
 
 def push_nodes():
     """Return [(node_id, address, orch_token)] for active push-mode nodes."""

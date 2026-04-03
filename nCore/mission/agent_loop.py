@@ -20,6 +20,7 @@ from .scoring import (
     _get_endpoint_ctx,
     _is_context_overflow,
 )
+from registry import correct_endpoint_ctx
 from .container import (
     _container_exec,
     _container_write_file,
@@ -147,6 +148,21 @@ def _agent_autonomous_loop(mission, task, agent):
             messages.pop(1)
             est_tokens = sum(len(m.get("content", "")) // _CHARS_PER_TOKEN + 4 for m in messages)
 
+        # Last resort: if remaining messages still exceed budget, truncate the longest ones
+        if est_tokens > ctx_budget:
+            char_budget = ctx_budget * _CHARS_PER_TOKEN
+            for m in sorted(messages, key=lambda x: len(x.get("content", "")), reverse=True):
+                if m.get("role") == "system":
+                    continue  # don't truncate system prompt
+                content = m.get("content", "")
+                excess_chars = (est_tokens - ctx_budget) * _CHARS_PER_TOKEN
+                if excess_chars <= 0:
+                    break
+                if len(content) > 2000:
+                    cut = min(int(excess_chars), len(content) - 1000)
+                    m["content"] = content[:500] + f"\n... [{cut} chars truncated for context fit] ...\n" + content[-500:]
+                    est_tokens = sum(len(x.get("content", "")) // _CHARS_PER_TOKEN + 4 for x in messages)
+
         orch_task_id, wait_timeout = _send_prompt_to_endpoint(
             agent.node_id, agent.model, messages, mission.mission_id, task.task_id,
             role="worker", overrides=gen_overrides or None,
@@ -172,6 +188,8 @@ def _agent_autonomous_loop(mission, task, agent):
                         task_id=task.task_id, agent=agent.name)
                     agent.context_length = n_ctx_real
                     agent_ctx = n_ctx_real
+                    # Also correct the registry so future dispatches use the real ctx
+                    correct_endpoint_ctx(agent.node_id, agent.model, n_ctx_real)
 
                 # Aggressively trim: keep only the initial task prompt + last assistant+user pair
                 keep_first = 1  # the task prompt message
@@ -181,10 +199,26 @@ def _agent_autonomous_loop(mission, task, agent):
                 # Recalculate window with corrected ctx
                 agent_window = max(6, min(int((agent_ctx or 4096) / 2048), 40))
 
+                # Force-truncate remaining messages if they're still too large
+                effective_ctx = n_ctx_real or agent_ctx or 4096
+                char_budget = int(effective_ctx * _PREFLIGHT_HEADROOM * _CHARS_PER_TOKEN)
+                total_chars = sum(len(m.get("content", "")) for m in agent_messages)
+                if total_chars > char_budget:
+                    # Truncate the longest message (usually tool output or task prompt)
+                    for m in sorted(agent_messages, key=lambda x: len(x.get("content", "")), reverse=True):
+                        excess = total_chars - char_budget
+                        if excess <= 0:
+                            break
+                        content = m.get("content", "")
+                        if len(content) > 2000:
+                            cut = min(excess, len(content) - 1000)
+                            m["content"] = content[:500] + f"\n... [{cut} chars truncated due to context limits] ...\n" + content[-500:]
+                            total_chars -= cut
+
                 mission.log_event("CONTEXT",
                     f"agent={agent.name} overflow recovery: "
                     f"prompt={n_prompt} n_ctx={n_ctx_real or agent_ctx} — "
-                    f"trimmed to {len(agent_messages)} msgs, window={agent_window}",
+                    f"trimmed to {len(agent_messages)} msgs, {total_chars} chars",
                     task_id=task.task_id, agent=agent.name)
                 consecutive_failures += 1
                 last_action_summary = "context overflow (trimmed)"
@@ -245,7 +279,10 @@ def _agent_autonomous_loop(mission, task, agent):
         done = False
         done_summary = ""
         # Scale autonomous agent output limits to agent's context
-        agent_read_limit = max(6000, int((agent_ctx or 8192) * 0.3))
+        agent_read_limit = max(2000, int((agent_ctx or 8192) * 0.25))
+        # Small-context agents get aggressively capped output
+        if (agent_ctx or 8192) < 8192:
+            agent_read_limit = min(agent_read_limit, 2000)
 
         for act in parsed.get("actions", []):
             atype = act.get("type", "")
@@ -294,7 +331,10 @@ def _agent_autonomous_loop(mission, task, agent):
                 shell_count += 1
                 result_str = f"shell: rc={rc}"
                 if out:
-                    result_str += f" stdout={_smart_truncate(out, agent_read_limit, is_own_content=True)}"
+                    truncated_out = _smart_truncate(out, agent_read_limit, is_own_content=True)
+                    result_str += f" stdout={truncated_out}"
+                    if len(out) > agent_read_limit:
+                        result_str += " [OUTPUT TRUNCATED — pipe through head/tail/grep to narrow results]"
                 if err:
                     result_str += f" stderr={err[:agent_read_limit // 3]}"
                 action_results.append(result_str)
@@ -425,6 +465,26 @@ def _agent_autonomous_loop(mission, task, agent):
                 last_action_summary = f"patch_file: {path}"
 
         if done:
+            # Quality gate: reject placeholder/trivial task results (unless last iteration)
+            _PLACEHOLDER_MARKERS = ("placeholder", "todo", "lorem ipsum", "sample output",
+                                    "will be", "to be completed", "tbd", "example")
+            is_placeholder = (
+                len(done_summary.strip()) < 50
+                or any(m in done_summary.lower() for m in _PLACEHOLDER_MARKERS)
+            )
+            if is_placeholder and iteration < max_iterations:
+                mission.log_event("QUALITY_REJECT",
+                    f"task={task.task_id} agent={agent.name} — rejected placeholder result "
+                    f"({len(done_summary)} chars) at iter {iteration}",
+                    task_id=task.task_id, agent=agent.name)
+                agent_messages.append({"role": "user", "content":
+                    "❌ REJECTED: Your 'done' summary is too short or appears to be a placeholder. "
+                    "A task result must contain substantive completed work (>50 chars, no placeholders). "
+                    "Continue working and deliver real results."})
+                done = False
+                consecutive_failures += 1
+                continue
+
             task.status = "done"
             task.result = done_summary
             task.completed_at = time.time()

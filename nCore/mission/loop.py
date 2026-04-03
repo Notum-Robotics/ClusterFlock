@@ -147,6 +147,16 @@ def _mission_loop(mission):
                 time.sleep(2)
                 continue
 
+            # Auto-complete: result exists but showrunner is stuck in overflow loop
+            if mission._has_result and mission._sr_overflow_streak >= 3:
+                mission.log_event("INFO",
+                    f"Auto-completing: result exists and showrunner context overflow "
+                    f"streak={mission._sr_overflow_streak}")
+                mission.status = "completed"
+                mission.status_message = "Mission completed (auto — result available)"
+                mission.status_progress = 100
+                break
+
             # ── Collect ALL updates into a single batched prompt ──
             prompt_parts = []
 
@@ -256,6 +266,20 @@ def _mission_loop(mission):
                 mission.log_event("ERROR",
                     f"Showrunner failed (streak={mission._sr_consecutive_fails}) "
                     f"— attempting re-election")
+
+                # Auto-complete if we already have a result and keeps failing
+                if mission._has_result and (
+                    mission._sr_consecutive_fails >= 3
+                    or mission._sr_overflow_streak >= 3
+                ):
+                    mission.log_event("INFO",
+                        f"Auto-completing: result exists and showrunner stuck "
+                        f"(fails={mission._sr_consecutive_fails}, "
+                        f"overflows={mission._sr_overflow_streak})")
+                    mission.status = "completed"
+                    mission.status_message = "Mission completed (auto — result available)"
+                    mission.status_progress = 100
+                    break
 
                 sr = _elect_showrunner(exclude_node_id=mission.showrunner_node_id)
                 if sr:

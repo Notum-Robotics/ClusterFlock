@@ -236,6 +236,12 @@ def _install_service():
 
 
 def _systemd(py, agent_dir):
+    port = 1903
+    try:
+        cfg = json.loads((agent_dir / "cluster.json").read_text())
+        port = cfg.get("listen_port", 1903)
+    except Exception:
+        pass
     unit = f"""[Unit]
 Description=ClusterFlock Agent
 After=network.target
@@ -243,10 +249,11 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory={agent_dir}
-ExecStart={py} {agent_dir / "run.py"} run
+ExecStart={py} -u {agent_dir / "watchdog.py"} --port {port}
 Restart=always
 RestartSec=5
 LimitMEMLOCK=infinity
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 [Install]
 WantedBy=multi-user.target"""
@@ -272,8 +279,8 @@ def _launchd(py, agent_dir):
     <key>ProgramArguments</key>
     <array>
         <string>{py}</string>
-        <string>{agent_dir / "run.py"}</string>
-        <string>run</string>
+        <string>-u</string>
+        <string>{agent_dir / "watchdog.py"}</string>
     </array>
     <key>WorkingDirectory</key><string>{agent_dir}</string>
     <key>RunAtLoad</key><true/>

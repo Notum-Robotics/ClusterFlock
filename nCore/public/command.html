@@ -342,6 +342,11 @@
             html += '<div class="node-badges">';
             html += '<span class="node-badge ' + st + '">' + st.toUpperCase() + '</span>';
             html += '<span class="node-badge agent-type">' + at + '</span>';
+            if (n.conn_mode === 'local') {
+                html += '<span class="node-star" title="Local agent — always preferred" style="font-size:1.1em;margin-left:6px;color:var(--dim);opacity:.4"><i class="ph-fill ph-star"></i></span>';
+            } else {
+                html += '<span class="node-star" data-action="star" title="Prefer for showrunner" style="cursor:pointer;font-size:1.1em;margin-left:6px;color:' + (n.starred ? 'var(--amber)' : 'var(--dim)') + '"><i class="' + (n.starred ? 'ph-fill' : 'ph') + ' ph-star"></i></span>';
+            }
             html += '</div></div>';
 
             // Endpoints with action buttons
@@ -382,9 +387,10 @@
                 var vf = gm && gm.vram_free_mb != null ? gm.vram_free_mb : (gpu.vram_free_mb != null ? gpu.vram_free_mb : vt);
                 var vu = vt - vf;
                 var pct = vt > 0 ? Math.round((vu / vt) * 100) : 0;
+                var util = gm && gm.utilization_pct != null ? Math.round(gm.utilization_pct) : 0;
                 html += '<div class="metric-row">';
                 html += '<span class="metric-label">' + escHtml(gpu.name || gpu.device || 'GPU') + '</span>';
-                html += '<span class="metric-val">[ ' + fmtBytes(vu) + ' / ' + fmtBytes(vt) + ' — ' + pct + '% ]</span>';
+                html += '<span class="metric-val">[ ' + fmtBytes(vu) + ' / ' + fmtBytes(vt) + ' — ' + pct + '% VRAM · ' + util + '% UTIL ]</span>';
                 html += '</div>';
             });
 
@@ -428,6 +434,25 @@
                         if (val === 'yes') unloadModel(nodeId, model);
                     });
                 }
+            });
+        });
+
+        // Click handlers for star toggle
+        grid.querySelectorAll('[data-action="star"]').forEach(function(el) {
+            el.addEventListener('click', function(e) {
+                e.stopPropagation();
+                var card = el.closest('.node-card');
+                var nodeId = card ? card.dataset.nodeId : null;
+                if (!nodeId) return;
+                fetch('/api/v1/nodes/' + encodeURIComponent(nodeId) + '/star', { method: 'POST' })
+                    .then(function(r) { return r.json(); })
+                    .then(function(d) {
+                        if (d.ok) {
+                            toast(d.starred ? 'MODELS FROM THIS NODE ARE NOW PREFERRED SHOWRUNNERS' : 'NODE SHOWRUNNER PREFERENCE REMOVED', 'ok', 3000);
+                            refreshNodes();
+                        }
+                    })
+                    .catch(function() { toast('STAR TOGGLE FAILED', 'error'); });
             });
         });
 
@@ -1204,6 +1229,13 @@
     }
 
     // ── Poll ──
+    function refreshNodes() {
+        fetch(BASE + '/api/v1/nodes')
+            .then(function(r) { return r.json(); })
+            .then(function(d) { setConn(true); renderNodes(d.nodes || []); })
+            .catch(function() {});
+    }
+
     function poll() {
         fetch(BASE + '/api/v1/nodes')
             .then(function(r) { return r.json(); })

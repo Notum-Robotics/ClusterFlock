@@ -124,11 +124,22 @@ build_variant() {
             DEST="$BUILD_ROOT/cuda12"
             mkdir -p "$DEST"
             local CUDA_PATH=""
-            for p in /usr/local/cuda-12 /usr/local/cuda; do
+            for p in /usr/local/cuda-12 /usr/local/cuda "$HOME/cuda-toolkit" "$HOME/cuda-12"; do
                 if [ -d "$p" ] && "$p/bin/nvcc" --version 2>/dev/null | grep -q "release 12"; then
-                    CUDA_PATH="$p"; break
+                    # Verify headers exist (system packages may split them)
+                    if [ -f "$p/include/cuda_runtime.h" ] || [ -f "/usr/include/cuda_runtime.h" ]; then
+                        CUDA_PATH="$p"; break
+                    fi
                 fi
             done
+            # Fallback: system package without proper include dir
+            if [ -z "$CUDA_PATH" ]; then
+                for p in /usr/lib/nvidia-cuda-toolkit; do
+                    if [ -d "$p" ] && "$p/bin/nvcc" --version 2>/dev/null | grep -q "release 12"; then
+                        CUDA_PATH="$p"; break
+                    fi
+                done
+            fi
             if [ -z "$CUDA_PATH" ]; then
                 echo "  CUDA 12 toolkit not found — skipping"
                 return 1
@@ -141,6 +152,13 @@ build_variant() {
                 -DLLAMA_CURL=ON
                 -DCMAKE_CUDA_COMPILER="$CUDA_PATH/bin/nvcc"
             )
+            # System package installs headers in /usr/include, help CMake find them
+            if [ ! -f "$CUDA_PATH/include/cuda_runtime.h" ] && [ -f "/usr/include/cuda_runtime.h" ]; then
+                CMAKE_ARGS+=(
+                    -DCUDAToolkit_ROOT=/usr
+                    -DCMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES=/usr/include
+                )
+            fi
             ;;
         cuda11)
             DEST="$BUILD_ROOT/cuda11"

@@ -103,6 +103,28 @@ def _find_nvidia_smi():
     return None
 
 
+def _tegrastats_gpu_util():
+    """Read GPU utilization from tegrastats (Jetson / Tegra devices).
+
+    tegrastats outputs a continuous stream like:
+        RAM 3469/7620MB ... GR3D_FREQ 45% ...
+    We grab one line via a short timeout and parse GR3D_FREQ.
+    Returns an int (0-100) or None on failure.
+    """
+    try:
+        out = subprocess.check_output(
+            ["timeout", "1", "tegrastats", "--interval", "500"],
+            timeout=3, text=True, stderr=subprocess.DEVNULL,
+        )
+        for line in out.strip().splitlines()[:1]:
+            m = re.search(r'GR3D_FREQ\s+(\d+)%', line)
+            if m:
+                return int(m.group(1))
+    except Exception:
+        pass
+    return None
+
+
 def _gpu_probe_linux():
     """Detect NVIDIA GPUs via nvidia-smi."""
     _nvsmi = _find_nvidia_smi()
@@ -126,11 +148,16 @@ def _gpu_probe_linux():
                 # Unified memory GPUs (e.g. DGX Spark GB10) report [N/A]
                 if mem_total == "[N/A]" or mem_free == "[N/A]":
                     total, free = _mem_info()
+                    util_pct = int(util) if util != "[N/A]" else None
+                    # Tegra/Jetson: nvidia-smi reports [N/A] for utilization,
+                    # fall back to tegrastats GR3D_FREQ
+                    if util_pct is None:
+                        util_pct = _tegrastats_gpu_util() or 0
                     gpus.append({
                         "name": name, "unified": True,
                         "vram_total_mb": total,
                         "vram_free_mb": free,
-                        "utilization_pct": int(util) if util != "[N/A]" else 0,
+                        "utilization_pct": util_pct,
                     })
                 else:
                     gpus.append({

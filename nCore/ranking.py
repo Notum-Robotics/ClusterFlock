@@ -90,42 +90,53 @@ def collect_ready_endpoints():
 
 def elect_showrunner(exclude_node_id=None, min_tier=2):
     """Pick the best model as Showrunner (highest composite score, tier >= min_tier).
+    Prefers models from starred nodes; falls back to all nodes if none qualify.
     Returns dict {node_id, model, score, hostname, context_length, toks_per_sec} or None.
     """
+    import orchestrator as orch_mod
+    stars = orch_mod.starred_nodes()
+
+    def _best_from(nodes, only_starred=False):
+        best = None
+        best_score = -1
+        for node in nodes:
+            if node.get("status") == "dead":
+                continue
+            if exclude_node_id and node["node_id"] == exclude_node_id:
+                continue
+            if only_starred and node["node_id"] not in stars:
+                continue
+            for ep in node.get("endpoints", []):
+                if ep.get("status") != "ready" or not ep.get("model"):
+                    continue
+                if is_vl_model(ep["model"]):
+                    continue
+                if is_graylisted(ep["model"]):
+                    continue
+                tier = model_quality_tier(ep["model"])
+                if tier < min_tier:
+                    continue
+                tps = ep.get("tokens_per_sec") or ep.get("toks_per_sec") or 10
+                ctx = ep.get("context_length") or 0
+                score = composite_score(tps, ep["model"], ctx)
+                if score > best_score:
+                    best_score = score
+                    best = {
+                        "node_id": node["node_id"],
+                        "model": ep["model"],
+                        "score": score,
+                        "hostname": node.get("hostname", ""),
+                        "context_length": ctx,
+                        "toks_per_sec": tps,
+                    }
+        return best
+
     nodes = all_nodes()
-    best = None
-    best_score = -1
-
-    for node in nodes:
-        if node.get("status") == "dead":
-            continue
-        if exclude_node_id and node["node_id"] == exclude_node_id:
-            continue
-        for ep in node.get("endpoints", []):
-            if ep.get("status") != "ready" or not ep.get("model"):
-                continue
-            if is_vl_model(ep["model"]):
-                continue
-            if is_graylisted(ep["model"]):
-                continue
-            tier = model_quality_tier(ep["model"])
-            if tier < min_tier:
-                continue
-            tps = ep.get("tokens_per_sec") or ep.get("toks_per_sec") or 10
-            ctx = ep.get("context_length") or 0
-            score = composite_score(tps, ep["model"], ctx)
-            if score > best_score:
-                best_score = score
-                best = {
-                    "node_id": node["node_id"],
-                    "model": ep["model"],
-                    "score": score,
-                    "hostname": node.get("hostname", ""),
-                    "context_length": ctx,
-                    "toks_per_sec": tps,
-                }
-
-    return best
+    if stars:
+        result = _best_from(nodes, only_starred=True)
+        if result:
+            return result
+    return _best_from(nodes)
 
 
 # ── Speed selection ──────────────────────────────────────────────────────

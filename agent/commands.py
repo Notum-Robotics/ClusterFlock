@@ -417,6 +417,48 @@ def init_settings():
         print("[config] CPU/RAM device enabled (from saved config)")
 
 
+# ── Crashed-server auto-restart ──────────────────────────────────────────
+
+_restart_cooldown = {}  # device → last_attempt_time
+
+def check_crashed_servers():
+    """Detect and auto-restart servers that crashed while a model was loaded.
+
+    Called from the heartbeat loop. If _devices has an entry but the
+    corresponding server process is dead, attempt to reload once with a
+    30-second cooldown between retries.
+    """
+    alive = active_devices()
+    for dev, info in list(_devices.items()):
+        if dev in alive:
+            continue
+        # Server is dead but _devices still has the record
+        model_id = info.get("model_id")
+        model_path = info.get("model_path")
+        if not model_id:
+            # No model to reload — clean up stale entry
+            del _devices[dev]
+            continue
+        # Cooldown: don't retry more than once every 30 seconds
+        now = time.time()
+        last = _restart_cooldown.get(dev, 0)
+        if now - last < 30:
+            continue
+        _restart_cooldown[dev] = now
+        print(f"\n[recovery] Server {dev} crashed — reloading {model_id}...")
+        try:
+            _set_activity("loading", model_id)
+            _load_model(model_id, device=dev, model_path=model_path)
+            print(f"[recovery] ✓ {model_id} reloaded on {dev}")
+            _auto_bench(model_id, dev)
+        except Exception as e:
+            print(f"[recovery] ✗ Failed to reload {model_id}: {e}")
+            # Remove stale entry so we don't keep retrying forever
+            _devices.pop(dev, None)
+        finally:
+            _set_activity("idle")
+
+
 # ── Auto-benchmark ───────────────────────────────────────────────────────
 
 def _auto_bench(model_id, device):

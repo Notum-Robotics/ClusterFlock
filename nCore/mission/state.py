@@ -44,13 +44,13 @@ _COMPACTION_TIMEOUT = 180      # seconds to wait for summary generation
 
 # Context budget — use as much of the loaded context as safely possible
 _CONTEXT_BUDGET_FRACTION = 0.80   # use 80% of loaded context for content
-_CHARS_PER_TOKEN = 4              # approximate chars-per-token for budget math
+_CHARS_PER_TOKEN = 3              # approximate chars-per-token for budget math (conservative for code/JSON)
 _MIN_CONTEXT_BUDGET = 12000       # floor even for small models (chars)
 
 # Pre-flight context overflow protection
 _PREFLIGHT_HEADROOM = 0.90        # target ≤ 90% of n_ctx for outgoing prompts
 _PREFLIGHT_MIN_HISTORY = 2        # always keep at least 2 conversation pairs
-_MAX_CONTEXT_RETRIES = 1          # retries after context-overflow 400 (per call)
+_MAX_CONTEXT_RETRIES = 2          # retries after context-overflow 400 (per call)
 _WORKSPACE_TREE_MAX_ENTRIES = 400 # max files in recursive tree
 
 # Shell command timeout tiers
@@ -243,6 +243,7 @@ class MissionState:
         self._consecutive_empty = 0
         self._sr_consecutive_fails = 0   # consecutive showrunner timeout/failures
         self._idle_flock_rounds = 0      # consecutive rounds with idle agents and no tasks
+        self._sr_overflow_streak = 0     # consecutive showrunner context overflow rounds
 
     def log_event(self, level, message, **extra):
         """Append to event log."""

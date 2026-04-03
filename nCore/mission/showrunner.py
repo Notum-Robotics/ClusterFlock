@@ -5,7 +5,7 @@ import re
 import secrets
 import time
 
-from registry import all_nodes, get_node
+from registry import all_nodes, get_node, correct_endpoint_ctx
 import orchestrator as orch_mod
 
 from .state import (
@@ -41,33 +41,43 @@ from .prompts import _SHOWRUNNER_SYSTEM
 
 def _elect_showrunner(exclude_node_id=None):
     """Pick the best endpoint as Showrunner.
+    Prefers models from starred nodes; falls back to all nodes if none qualify.
     Returns (node_id, model, ep_dict, score, hostname) or None."""
+    import orchestrator as orch_mod
+    stars = orch_mod.starred_nodes()
     nodes = all_nodes()
-    best = None
-    best_score = -1
 
-    for node in nodes:
-        if node.get("status") == "dead":
-            continue
-        if exclude_node_id and node["node_id"] == exclude_node_id:
-            continue
-        for ep in node.get("endpoints", []):
-            if ep.get("status") != "ready" or not ep.get("model"):
+    def _best_from(only_starred=False):
+        best = None
+        best_score = -1
+        for node in nodes:
+            if node.get("status") == "dead":
                 continue
-            tier = _model_quality_tier(ep["model"])
-            if tier < 2:
-                continue  # skip tiny models — unreliable as showrunner
-            tps = ep.get("tokens_per_sec") or ep.get("toks_per_sec") or 0
-            ctx = ep.get("context_length") or 0
-            # If no benchmark, estimate from context
-            if tps == 0:
-                tps = 10  # conservative default
-            score = _composite_score(tps, ep["model"], ctx)
-            if score > best_score:
-                best_score = score
-                best = (node["node_id"], ep["model"], ep, score, node.get("hostname", ""))
+            if exclude_node_id and node["node_id"] == exclude_node_id:
+                continue
+            if only_starred and node["node_id"] not in stars:
+                continue
+            for ep in node.get("endpoints", []):
+                if ep.get("status") != "ready" or not ep.get("model"):
+                    continue
+                tier = _model_quality_tier(ep["model"])
+                if tier < 2:
+                    continue
+                tps = ep.get("tokens_per_sec") or ep.get("toks_per_sec") or 0
+                ctx = ep.get("context_length") or 0
+                if tps == 0:
+                    tps = 10
+                score = _composite_score(tps, ep["model"], ctx)
+                if score > best_score:
+                    best_score = score
+                    best = (node["node_id"], ep["model"], ep, score, node.get("hostname", ""))
+        return best
 
-    return best
+    if stars:
+        result = _best_from(only_starred=True)
+        if result:
+            return result
+    return _best_from()
 
 
 def _find_endpoint(node_id, model):
@@ -401,6 +411,17 @@ def _ask_showrunner(mission, user_content, multi_turn=False):
             else:
                 overshoot_tokens = sr_ctx // 4  # conservative 25% cut
 
+            # Correct registry if actual n_ctx is lower than what was reported
+            if n_ctx_reported and n_ctx_reported < sr_ctx:
+                correct_endpoint_ctx(mission.showrunner_node_id,
+                                     mission.showrunner_model, n_ctx_reported)
+                sr_ctx = n_ctx_reported
+                token_ceiling = int(sr_ctx * _PREFLIGHT_HEADROOM)
+                mission.log_event("CONTEXT",
+                    f"Registry corrected: {mission.showrunner_model} on "
+                    f"{mission.showrunner_node_id} ctx {sr_ctx} → {n_ctx_reported}",
+                    agent="Showrunner")
+
             mission.log_event("CONTEXT",
                               f"Context overflow (attempt {attempt+1}): "
                               f"prompt={n_prompt}, n_ctx={n_ctx_reported or sr_ctx}, "
@@ -449,6 +470,7 @@ def _ask_showrunner(mission, user_content, multi_turn=False):
                                   f"Showrunner responded ({len(text)} chars, {comp_tokens} completion tokens)",
                                   agent="Showrunner", tokens=tokens)
                 mission.round_trips += 1
+                mission._sr_overflow_streak = 0  # reset on success
                 return text
 
         mission.log_event("ERROR", f"Showrunner bad response: {json.dumps(result)[:300]}",
@@ -456,8 +478,10 @@ def _ask_showrunner(mission, user_content, multi_turn=False):
         return None
 
     # All retries exhausted (context overflow persisted)
+    mission._sr_overflow_streak += 1
     mission.log_event("ERROR",
-                      f"Showrunner context overflow persisted after {_MAX_CONTEXT_RETRIES + 1} attempts",
+                      f"Showrunner context overflow persisted after {_MAX_CONTEXT_RETRIES + 1} attempts "
+                      f"(streak={mission._sr_overflow_streak})",
                       agent="Showrunner")
     return None
 

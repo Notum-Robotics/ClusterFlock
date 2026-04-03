@@ -269,6 +269,36 @@ def _extract_native_tool_calls(text, thinking=""):
         if actions:
             return {"thinking": thinking, "actions": actions}
 
+    # Gemma format: <|tool_call>call:namespace:action_type{json_params}<tool_call|>
+    # Also handles: <|tool_call>{json}<|tool_call|>
+    gemma_calls = re.findall(
+        r'<\|tool_call\|?>(.*?)(?:<\|?tool_call\|>|$)', text, flags=re.DOTALL)
+    if gemma_calls:
+        actions = []
+        for call_text in gemma_calls:
+            call_text = call_text.strip()
+            # Pattern: call:namespace:action_type{...}
+            fn_match = re.match(r'(?:call:\w+:)?(\w+)\s*(\{.*)', call_text, flags=re.DOTALL)
+            if fn_match:
+                action_type = fn_match.group(1)
+                json_part = fn_match.group(2)
+                try:
+                    params = json.loads(json_part)
+                except (json.JSONDecodeError, ValueError):
+                    params = _extract_json_object(json_part)
+                    if params is None:
+                        params = {}
+                if isinstance(params, dict):
+                    params["type"] = action_type
+                    actions.append(params)
+            else:
+                # Bare JSON inside the tag
+                parsed = _parse_native_actions(call_text)
+                if parsed:
+                    actions.extend(parsed)
+        if actions:
+            return {"thinking": thinking, "actions": actions}
+
     return None
 
 

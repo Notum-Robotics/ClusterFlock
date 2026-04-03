@@ -186,27 +186,99 @@ def build(jobs=None):
     print(f"[build] ✓ llama-server: {server_binary()}")
 
 
-# ── Context auto-detection (macOS unified memory) ────────────────────────
+# ── Context auto-detection ────────────────────────────────────────────────
 
-def _auto_context_size(model_path):
-    """Pick a context size based on available memory and model size.
+def _gguf_context_length(model_path):
+    """Read the native context length from GGUF metadata. Returns int or None."""
+    import struct
+    try:
+        with open(model_path, 'rb') as f:
+            magic = f.read(4)
+            if magic != b'GGUF':
+                return None
+            version = struct.unpack('<I', f.read(4))[0]
+            _tensor_count = struct.unpack('<Q', f.read(8))[0]
+            kv_count = struct.unpack('<Q', f.read(8))[0]
 
-    Primarily useful on macOS unified memory where GPU/CPU share RAM.
+            def read_str():
+                n = struct.unpack('<Q', f.read(8))[0]
+                return f.read(n).decode('utf-8', errors='replace')
+
+            def read_val(vtype):
+                if vtype == 0: return struct.unpack('<B', f.read(1))[0]
+                elif vtype == 1: return struct.unpack('<b', f.read(1))[0]
+                elif vtype == 2: return struct.unpack('<H', f.read(2))[0]
+                elif vtype == 3: return struct.unpack('<h', f.read(2))[0]
+                elif vtype == 4: return struct.unpack('<I', f.read(4))[0]
+                elif vtype == 5: return struct.unpack('<i', f.read(4))[0]
+                elif vtype == 6: return struct.unpack('<f', f.read(4))[0]
+                elif vtype == 7: return struct.unpack('<?', f.read(1))[0]
+                elif vtype == 8: return read_str()
+                elif vtype == 9:
+                    atype = struct.unpack('<I', f.read(4))[0]
+                    n = struct.unpack('<Q', f.read(8))[0]
+                    return [read_val(atype) for _ in range(n)]
+                elif vtype == 10: return struct.unpack('<Q', f.read(8))[0]
+                elif vtype == 11: return struct.unpack('<q', f.read(8))[0]
+                elif vtype == 12: return struct.unpack('<d', f.read(8))[0]
+                return None
+
+            for _ in range(kv_count):
+                key = read_str()
+                vtype = struct.unpack('<I', f.read(4))[0]
+                val = read_val(vtype)
+                if key.endswith('.context_length'):
+                    return int(val)
+    except Exception:
+        pass
+    return None
+
+
+def _auto_context_size(model_path, device="gpu0"):
+    """Pick the best context size based on VRAM, model size, and model support.
+
+    Strategy: compute how much VRAM is available for KV cache after loading
+    the model, pick the largest power-of-2 context that fits, then cap at
+    the model's native max context length.
     """
-    from hardware import _mem_info
-    _, free_mb = _mem_info()
+    from hardware import gpu as hw_gpu
+
     model_size_mb = os.path.getsize(model_path) / (1024 * 1024)
-    available_for_ctx = (free_mb - model_size_mb * 1.2) * 0.7
-    if available_for_ctx > 20000:
-        return 131072
-    elif available_for_ctx > 8000:
-        return 65536
-    elif available_for_ctx > 4000:
-        return 32768
-    elif available_for_ctx > 2000:
-        return 16384
+
+    # Get VRAM for the target device
+    gpus = hw_gpu()
+    idx = int(device.replace("gpu", "")) if device != "cpu" else -1
+    if 0 <= idx < len(gpus):
+        free_mb = gpus[idx].get("vram_free_mb", 0)
     else:
-        return 8192
+        from hardware import _mem_info
+        _, free_mb = _mem_info()
+
+    # Reserve: model weights × 1.2 overhead + 15% safety margin
+    available_mb = (free_mb - model_size_mb * 1.2) * 0.85
+
+    # Pick largest context from tier list that fits
+    # Rough VRAM cost for KV cache with q4_0: ~0.15 MB per 1K tokens (varies by model)
+    # Conservative estimate — the retry mechanism will reduce if we overshoot
+    tiers = [262144, 131072, 65536, 32768, 16384, 8192]
+    ctx = 8192  # minimum
+    for t in tiers:
+        # Estimate: ~0.15 MB per 1K ctx tokens is very rough;
+        # use ~200 MB per 8K tokens as a safer heuristic
+        estimated_kv_mb = (t / 8192) * 200
+        if available_mb >= estimated_kv_mb:
+            ctx = t
+            break
+
+    # Cap at model's native context length
+    native_ctx = _gguf_context_length(model_path)
+    if native_ctx and ctx > native_ctx:
+        ctx = native_ctx
+
+    print(f"[server] Auto context: {ctx} tokens "
+          f"(VRAM free: {free_mb:.0f} MB, model: {model_size_mb:.0f} MB, "
+          f"native max: {native_ctx or 'unknown'})")
+    return ctx
 
 
 # ── Server lifecycle ─────────────────────────────────────────────────────
@@ -255,7 +327,7 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
         if cache_type_v is None:
             cache_type_v = "f16"
         if ctx_size is None:
-            ctx_size = _auto_context_size(model_path)
+            ctx_size = _auto_context_size(model_path, device)
     else:
         # Linux GPU
         if threads is None:
@@ -265,7 +337,7 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
         if cache_type_v is None:
             cache_type_v = "q4_0"
         if ctx_size is None:
-            ctx_size = 131072
+            ctx_size = _auto_context_size(model_path, device)
 
     cmd = [
         binary,

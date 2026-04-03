@@ -27,6 +27,8 @@ _tasks = {}
 _locked = False
 # Tight packing — when True, bin-pack multiple models per GPU
 _tight_pack = False
+# Starred nodes — preferred for showrunner election
+_starred_nodes = set()
 
 
 # ── Lock / config state ──────────────────────────────────────────────────
@@ -51,6 +53,29 @@ def set_tight_pack(val):
     global _tight_pack
     with _lock:
         _tight_pack = bool(val)
+
+
+def starred_nodes():
+    with _lock:
+        return set(_starred_nodes)
+
+
+def set_starred_nodes(nodes):
+    global _starred_nodes
+    with _lock:
+        _starred_nodes = set(nodes or [])
+
+
+def toggle_star(node_id):
+    """Toggle star on a node. Returns (new_starred_state, full_set)."""
+    global _starred_nodes
+    with _lock:
+        if node_id in _starred_nodes:
+            _starred_nodes.discard(node_id)
+            return False, set(_starred_nodes)
+        else:
+            _starred_nodes.add(node_id)
+            return True, set(_starred_nodes)
 
 
 # ── Command queue ────────────────────────────────────────────────────────
