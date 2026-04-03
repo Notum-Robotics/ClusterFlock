@@ -32,7 +32,7 @@
             <button class="cf-btn" id="btn-toggle-lock" data-flash>
                 <i class="ph ph-lock-simple"></i> <span id="lock-label">LOCK</span>
             </button>
-            <button class="cf-btn" id="btn-toggle-tight" data-flash style="display:none">
+            <button class="cf-btn" id="btn-toggle-tight" data-flash>
                 <i class="ph ph-rows"></i> <span id="tight-label">TIGHT PACK</span>
             </button>
             <button class="cf-btn" id="btn-gc" data-flash data-lockout="2000">
@@ -358,6 +358,22 @@
                 html += '</div>';
             }
 
+            // Pending load/unload operations (server-side tracking)
+            var nodeOps = n.pending_ops || [];
+            if (nodeOps.length > 0) {
+                html += '<div class="endpoint-tags">';
+                nodeOps.forEach(function(op) {
+                    var verb = (op.action === 'unload' || op.action === 'unload_all') ? 'UNLOADING' : 'LOADING';
+                    var label = op.action === 'unload_all' ? 'ALL MODELS' : (op.model_id || '?');
+                    var ageStr = '';
+                    if (op.age >= 2) ageStr = ' ' + (op.age >= 60 ? Math.round(op.age / 60) + 'm' : Math.round(op.age) + 's');
+                    html += '<span class="endpoint-tag loading"><i class="ph ph-circle-notch" style="animation:spin .8s linear infinite"></i> ';
+                    html += verb + ' ' + escHtml(label) + ageStr;
+                    html += '</span>';
+                });
+                html += '</div>';
+            }
+
             // GPU info (compact)
             var gpuMetricsCompact = (n.metrics && n.metrics.gpu) || [];
             gpus.forEach(function(gpu, i) {
@@ -453,6 +469,18 @@
                 var tps = ep.tokens_per_sec ? ' · ' + Math.round(ep.tokens_per_sec) + ' t/s' : '';
                 var ctx = ep.context_length ? ' · ctx ' + ep.context_length : '';
                 html += '<div class="status-row"><span class="status-label">' + escHtml(ep.model || '?') + '</span><span class="status-val accent">' + escHtml((ep.status || '?').toUpperCase()) + tps + ctx + '</span></div>';
+            });
+        }
+
+        // Pending operations
+        var nodeOps = node.pending_ops || [];
+        if (nodeOps.length) {
+            html += '<div class="cf-section-label" style="font-size:.55rem;margin-top:8px;">PENDING OPERATIONS</div>';
+            nodeOps.forEach(function(op) {
+                var verb = (op.action === 'unload' || op.action === 'unload_all') ? 'UNLOADING' : 'LOADING';
+                var label = op.action === 'unload_all' ? 'ALL MODELS' : (op.model_id || '?');
+                var ageStr = op.age >= 2 ? (op.age >= 60 ? Math.round(op.age / 60) + 'm' : Math.round(op.age) + 's') : '';
+                html += '<div class="status-row"><span class="status-label" style="color:var(--amber)"><i class="ph ph-circle-notch" style="animation:spin .8s linear infinite;display:inline-block"></i> ' + escHtml(label) + '</span><span class="status-val amber">' + verb + (ageStr ? ' · ' + ageStr : '') + '</span></div>';
             });
         }
 

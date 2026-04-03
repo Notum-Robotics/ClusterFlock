@@ -25,6 +25,7 @@ from registry import register as reg_node, remove as rm_node, get_node
 from auth import generate as gen_token
 
 _AGENT_DIR = Path(__file__).resolve().parent.parent / "agent"
+_RUN_PY = str(_AGENT_DIR / "run.py")
 
 _lock = threading.Lock()
 _proc = None          # subprocess.Popen
@@ -76,6 +77,67 @@ def status():
         }
 
 
+def _kill_orphaned_agents():
+    """Kill agent run.py processes left over from a previous nCore session.
+
+    When nCore restarts, the old agent subprocess may still be alive
+    (it was daemonized or reparented to init).  Multiple agents
+    heartbeating the same node_id causes the model list to flicker.
+    Also kills any llama-server children they left behind.
+    """
+    my_pid = os.getpid()
+    killed_any = False
+    try:
+        out = subprocess.check_output(
+            ["pgrep", "-f", _RUN_PY], text=True, stderr=subprocess.DEVNULL
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return  # no matches or pgrep not available
+
+    for line in out.splitlines():
+        pid = int(line.strip())
+        if pid == my_pid:
+            continue
+        # Only kill if it's actually our agent run.py (verify via /proc)
+        try:
+            cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().decode(
+                errors="replace"
+            )
+            if _RUN_PY not in cmdline and "run.py" not in cmdline:
+                continue
+        except OSError:
+            continue
+
+        print(f"[local_agent] killing orphaned agent pid {pid}")
+        try:
+            os.kill(pid, signal.SIGTERM)
+            killed_any = True
+        except OSError:
+            pass
+
+    # Also kill orphaned llama-server processes (agent doesn't propagate
+    # SIGTERM to its child servers).
+    try:
+        out = subprocess.check_output(
+            ["pgrep", "-f", "llama-server"], text=True,
+            stderr=subprocess.DEVNULL
+        ).strip()
+        for line in out.splitlines():
+            pid = int(line.strip())
+            print(f"[local_agent] killing orphaned llama-server pid {pid}")
+            try:
+                os.kill(pid, signal.SIGTERM)
+                killed_any = True
+            except OSError:
+                pass
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    if killed_any:
+        # Give orphans time to exit and release ports
+        time.sleep(2)
+
+
 def start_agent(agent_type=None, ncore_port=1903):
     """Start the local agent subprocess. Returns (ok, error_msg).
 
@@ -92,6 +154,11 @@ def start_agent(agent_type=None, ncore_port=1903):
     run_py = agent_dir / "run.py"
     if not run_py.exists():
         return False, f"agent not found at {agent_dir}"
+
+    # Kill orphaned agent processes from prior nCore sessions.
+    # Without this, old agents keep heartbeating with stale data, causing
+    # models to flicker in/out of the registry.
+    _kill_orphaned_agents()
 
     hostname = socket.gethostname()
     nid = f"local-{hostname}"

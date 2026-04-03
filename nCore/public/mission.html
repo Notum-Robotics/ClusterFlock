@@ -891,6 +891,10 @@
         .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
         .then(function(res) {
             if (res.ok) {
+                // Update cache with returned data so selectMission doesn't revert the text
+                var idx = missionsCache.findIndex(function(x) { return x.mission_id === mid; });
+                if (idx !== -1) missionsCache[idx] = res.data;
+                else missionsCache.push(res.data);
                 toast('MISSION STARTED', 'ok');
                 if (typeof nbeep === 'function') nbeep('mission_start');
                 selectMission(mid);

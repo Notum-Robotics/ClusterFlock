@@ -102,7 +102,7 @@ def server_binary(device_id="gpu0"):
             return str(exact)
 
     # Try available CUDA builds, newest first
-    for v in (12, 11):
+    for v in (13, 12, 11):
         candidate = PREBUILT_DIR / f"cuda{v}" / "llama-server"
         if candidate.exists():
             return str(candidate)

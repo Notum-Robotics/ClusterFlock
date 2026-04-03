@@ -438,22 +438,34 @@ def _auto_bench(model_id, device):
 # ── Model path resolution ───────────────────────────────────────────────
 
 def _resolve_model_path(model_id):
-    """Find the GGUF file for a model ID."""
+    """Find the GGUF file for a model ID.
+
+    model_id for "load" commands is always the exact relative path from
+    local_models() (e.g. "Org/Repo/file.gguf").  We match exactly first,
+    then fall back to progressively looser strategies.
+    """
+    # Absolute path already on disk
     if model_id.endswith(".gguf") and Path(model_id).exists():
         return model_id
 
-    for m in local_models():
-        if model_id in m["id"] or model_id.replace("/", "_") in m["id"]:
+    models = local_models()
+
+    # 1. Exact match — the normal case (UI sends the id it got from us)
+    for m in models:
+        if model_id == m["id"]:
             return m["path"]
 
-    matches = sorted(
-        (f for f in MODELS_DIR.rglob("*.gguf")
-         if any(part in str(f).lower() for part in model_id.lower().split("/"))),
-        key=lambda f: f.name
-    )
-    for f in matches:
-        if "00001-of-" in f.name:
-            return str(f)
-    if matches:
-        return str(matches[0])
+    # 2. model_id is a substring of the local id (e.g. shorter catalog key)
+    for m in models:
+        if model_id in m["id"]:
+            return m["path"]
+
+    # 3. Filename-only match — model_id's last component matches a local filename
+    target_file = model_id.rsplit("/", 1)[-1].lower()
+    if target_file:
+        for m in models:
+            local_file = m["id"].rsplit("/", 1)[-1].lower()
+            if target_file == local_file:
+                return m["path"]
+
     return None

@@ -98,6 +98,28 @@ build_variant() {
                 -DCMAKE_OSX_ARCHITECTURES=arm64
             )
             ;;
+        cuda13)
+            DEST="$BUILD_ROOT/cuda13"
+            mkdir -p "$DEST"
+            local CUDA_PATH=""
+            for p in /usr/local/cuda-13.0 /usr/local/cuda-13 /usr/local/cuda; do
+                if [ -d "$p" ] && "$p/bin/nvcc" --version 2>/dev/null | grep -q "release 13\|V13"; then
+                    CUDA_PATH="$p"; break
+                fi
+            done
+            if [ -z "$CUDA_PATH" ]; then
+                echo "  CUDA 13 toolkit not found — skipping"
+                return 1
+            fi
+            echo "  CUDA toolkit: $CUDA_PATH"
+            CMAKE_ARGS+=(
+                -DGGML_CUDA=ON
+                -DGGML_CUDA_FA=ON
+                -DGGML_CUDA_FA_ALL_QUANTS=ON
+                -DLLAMA_CURL=ON
+                -DCMAKE_CUDA_COMPILER="$CUDA_PATH/bin/nvcc"
+            )
+            ;;
         cuda12)
             DEST="$BUILD_ROOT/cuda12"
             mkdir -p "$DEST"
@@ -199,12 +221,14 @@ if [ "$TARGETS" = "auto" ]; then
     if [[ "$(uname -s)" == "Darwin" ]]; then
         build_variant metal
     else
+        build_variant cuda13 || echo "  (cuda13 skipped)"
         build_variant cuda12 || echo "  (cuda12 skipped)"
         build_variant cuda11 || echo "  (cuda11 skipped)"
         build_variant cpu
     fi
 elif [ "$TARGETS" = "all" ]; then
     # Force all Linux variants
+    build_variant cuda13 || echo "  (cuda13 skipped)"
     build_variant cuda12 || echo "  (cuda12 skipped)"
     build_variant cuda11 || echo "  (cuda11 skipped)"
     build_variant cpu

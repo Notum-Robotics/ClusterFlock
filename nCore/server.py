@@ -275,6 +275,8 @@ class Handler(BaseHTTPRequestHandler):
         )
         # Track autoload progress from endpoints
         orch_mod.autoload_check_heartbeat(node_id, body.get("endpoints"))
+        # Reconcile pending load/unload ops
+        orch_mod.check_pending_ops(node_id, body.get("endpoints"))
         if not ok:
             # Token valid but node unknown (e.g. nCore restarted) — re-register
             hostname = body.get("hostname", "")
@@ -374,6 +376,7 @@ class Handler(BaseHTTPRequestHandler):
             n.pop("orchestrator_token", None)
             av = n.get("agent_version")
             n["version_ok"] = (av == _EXPECTED_AGENT_VER) if av else None
+            n["pending_ops"] = orch_mod.get_pending_ops(n["node_id"])
         self._json(200, {"nodes": nodes, "expected_agent_version": _EXPECTED_AGENT_VER})
 
     def _get_node(self):
@@ -584,6 +587,7 @@ class Handler(BaseHTTPRequestHandler):
             with urllib.request.urlopen(req, timeout=30) as resp:
                 resp.read()
             _log(f"load        {nid} ← {model_id}")
+            orch_mod.add_pending_op_direct(nid, cmd)
             self._json(200, {"ok": True, "node_id": nid, "model_id": model_id})
         except Exception as e:
             _log(f"load        {nid} ← {model_id} FAIL {e}")
@@ -624,11 +628,11 @@ class Handler(BaseHTTPRequestHandler):
             with urllib.request.urlopen(req, timeout=30) as resp:
                 resp.read()
             _log(f"unload      {nid} ← {model_id}")
+            orch_mod.add_pending_op_direct(nid, cmd)
             self._json(200, {"ok": True, "node_id": nid, "model_id": model_id})
         except Exception as e:
             _log(f"unload      {nid} ← {model_id} FAIL {e}")
             self._json(502, {"error": str(e)})
-        self._json(200, {"ok": True, "node_id": nid, "model_id": model_id})
 
     def _node_configure(self):
         """POST /api/v1/nodes/:id/configure — send configuration to agent.
@@ -750,6 +754,7 @@ class Handler(BaseHTTPRequestHandler):
             with urllib.request.urlopen(req, timeout=30) as resp:
                 result = json.loads(resp.read())
             _log(f"dl+load     {nid} ← {model_id} job={result.get('job_id','')}")
+            orch_mod.add_pending_op_direct(nid, cmd)
             self._json(200, result)
         except Exception as e:
             _log(f"dl+load     {nid} ← {model_id} FAIL {e}")

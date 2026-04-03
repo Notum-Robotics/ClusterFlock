@@ -102,6 +102,7 @@
     0%, 100% { border-color: rgba(255,179,0, 0.10); }
     50% { border-color: rgba(255,179,0, 0.40); }
 }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---------- Navigation ---------- */
 .nav-tabs {

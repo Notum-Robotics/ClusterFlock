@@ -935,7 +935,7 @@
         <div class="act-btn" id="btn-expand-all" data-flash><i class="ph ph-arrows-out-simple"></i> EXPAND ALL</div>
         <div class="act-btn" id="btn-collapse-all" data-flash><i class="ph ph-arrows-in-simple"></i> COLLAPSE</div>
         <div class="act-btn green" id="btn-autoload" data-flash><i class="ph ph-rocket-launch"></i> AUTOLOAD</div>
-        <div class="cfg-btn" id="btn-tight-pack" data-flash title="Tight pack: load multiple models per GPU" style="display:none"><i class="ph ph-stack"></i> <span>1 PER GPU</span></div>
+        <div class="cfg-btn" id="btn-tight-pack" data-flash title="Tight pack: load multiple models per GPU"><i class="ph ph-stack"></i> <span>1 PER GPU</span></div>
         <div class="lock-btn" id="btn-lock" data-flash title="Lock model selection"><i class="ph ph-lock-simple-open"></i> <span>UNLOCKED</span></div>
     </div>
 
@@ -1220,10 +1220,30 @@
                 var currentModel = currentModelForGpu(endpoints, g);
                 var loadKey = node.node_id + ':' + g;
                 var pending = pendingLoadOps[loadKey];
-                // Auto-clear pending if target model is now loaded
+                // Auto-clear client-side pending if target model is now loaded
                 if (pending && pending.model && currentModel === pending.model) {
                     delete pendingLoadOps[loadKey];
                     pending = null;
+                }
+                // Merge with server-side pending_ops (authoritative, survives refresh)
+                var serverPending = null;
+                var nodeOps = node.pending_ops || [];
+                for (var opi = 0; opi < nodeOps.length; opi++) {
+                    var sop = nodeOps[opi];
+                    if (sop.action === 'unload_all') { serverPending = sop; break; }
+                }
+                if (!serverPending) {
+                    for (var opi = 0; opi < nodeOps.length; opi++) {
+                        var sop = nodeOps[opi];
+                        if (sop.action === 'load' || sop.action === 'download_and_load' || sop.action === 'unload') {
+                            serverPending = sop; break;
+                        }
+                    }
+                }
+                // Server data overrides client-side when present
+                if (serverPending && !pending) {
+                    var isUnload = serverPending.action === 'unload' || serverPending.action === 'unload_all';
+                    pending = { model: serverPending.model_id, name: serverPending.model_id, error: null, unload: isUnload, age: serverPending.age };
                 }
                 // Build set of downloaded model IDs on this node
                 var dlSet = {};
@@ -1234,7 +1254,11 @@
                 html += '<div class="gpu-model-row">';
                 if (pending) {
                     var pendingName = pending.name || pending.model || '';
-                    html += '<span class="model-loading-indicator"><i class="ph ph-circle-notch"></i> LOADING ' + esc(pendingName) + '\u2026</span>';
+                    var pendingVerb = pending.unload ? 'UNLOADING' : 'LOADING';
+                    var ageStr = '';
+                    var ageVal = pending.age || 0;
+                    if (ageVal >= 2) ageStr = ' (' + (ageVal >= 60 ? Math.round(ageVal / 60) + 'm' : Math.round(ageVal) + 's') + ')';
+                    html += '<span class="model-loading-indicator"><i class="ph ph-circle-notch"></i> ' + pendingVerb + ' ' + esc(pendingName) + ageStr + '\u2026</span>';
                     if (pending.error) {
                         html += '<div class="model-load-error"><i class="ph ph-warning"></i> ' + esc(pending.error) + '</div>';
                     }
@@ -1523,9 +1547,11 @@
 
         function doLoad() {
             if (!newModelId) {
-                // Just unloading — clear pending once unload command is sent
-                delete pendingLoadOps[loadKey];
+                // Just unloading — server tracks the op; clear client pending
+                pendingLoadOps[loadKey] = { model: '', name: currentModel, error: null, unload: true };
                 render();
+                // Auto-clear after 10s fallback (server should clear via heartbeat)
+                setTimeout(function () { delete pendingLoadOps[loadKey]; render(); }, 10000);
                 return;
             }
             // Use download_and_load for catalog models not yet downloaded

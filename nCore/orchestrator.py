@@ -48,7 +48,9 @@ def is_tight_pack():
 
 
 def set_tight_pack(val):
-    pass  # Tight packing disabled — always off
+    global _tight_pack
+    with _lock:
+        _tight_pack = bool(val)
 
 
 # ── Command queue ────────────────────────────────────────────────────────
@@ -57,13 +59,135 @@ def enqueue(node_id, cmd):
     """Push a command for a node. It will be included in the next heartbeat response."""
     with _lock:
         _commands.setdefault(node_id, []).append(cmd)
+    # Track load/unload/download_and_load as pending ops for UI feedback
+    action = cmd.get("action", "")
+    if action in ("load", "unload", "unload_all", "download_and_load"):
+        _add_pending_op(node_id, cmd)
 
 
 def drain(node_id):
     """Pop all pending commands for a node (called in heartbeat handler)."""
     with _lock:
         cmds = _commands.pop(node_id, [])
-        return cmds
+    # Mark queued → sent
+    for cmd in cmds:
+        action = cmd.get("action", "")
+        if action in ("load", "unload", "unload_all", "download_and_load"):
+            _mark_pending_sent(node_id, action, cmd.get("model_id", ""))
+    return cmds
+
+
+# ── Pending operations (server-side UI feedback) ────────────────────────
+
+_PENDING_HARD_CAP = 600  # 10 minutes — auto-expire regardless of state
+
+# node_id → [{action, model_id, state, ts}]
+_pending_ops = {}
+
+
+def _add_pending_op(node_id, cmd):
+    action = cmd.get("action", "")
+    model_id = cmd.get("model_id", "")
+    with _lock:
+        ops = _pending_ops.setdefault(node_id, [])
+        # Avoid duplicates for same action+model
+        for op in ops:
+            if op["action"] == action and op["model_id"] == model_id:
+                op["ts"] = time.time()
+                op["state"] = "queued"
+                return
+        ops.append({"action": action, "model_id": model_id,
+                     "state": "queued", "ts": time.time()})
+
+
+def _mark_pending_sent(node_id, action, model_id):
+    with _lock:
+        for op in _pending_ops.get(node_id, []):
+            if op["action"] == action and op["model_id"] == model_id and op["state"] == "queued":
+                op["state"] = "sent"
+                break
+
+
+def add_pending_op_direct(node_id, cmd):
+    """Record a pending op for push-mode commands (sent directly, never queued)."""
+    action = cmd.get("action", "")
+    model_id = cmd.get("model_id", "")
+    with _lock:
+        ops = _pending_ops.setdefault(node_id, [])
+        for op in ops:
+            if op["action"] == action and op["model_id"] == model_id:
+                op["ts"] = time.time()
+                op["state"] = "sent"
+                return
+        ops.append({"action": action, "model_id": model_id,
+                     "state": "sent", "ts": time.time()})
+
+
+def check_pending_ops(node_id, endpoints):
+    """Reconcile pending ops against actual endpoints from heartbeat.
+
+    Clears load ops when the model appears, unload ops when it disappears.
+    Expires any op older than _PENDING_HARD_CAP seconds.
+    """
+    loaded = set()
+    loaded_raw = []
+    if endpoints:
+        for ep in endpoints:
+            mid = ep.get("model") or ep.get("id") or ""
+            if mid:
+                loaded.add(mid)
+                loaded_raw.append(mid)
+    now = time.time()
+    with _lock:
+        ops = _pending_ops.get(node_id)
+        if not ops:
+            return
+        surviving = []
+        for op in ops:
+            age = now - op["ts"]
+            if age > _PENDING_HARD_CAP:
+                continue  # expired
+            action = op["action"]
+            model_id = op["model_id"]
+            if action in ("load", "download_and_load"):
+                # Check exact match or fuzzy match
+                if model_id in loaded:
+                    continue  # confirmed loaded — clear
+                matched = False
+                for ep_mid in loaded_raw:
+                    if _model_matches(model_id, ep_mid):
+                        matched = True
+                        break
+                if matched:
+                    continue
+            elif action == "unload":
+                if model_id not in loaded:
+                    # Also check fuzzy — if no fuzzy match found, it's gone
+                    matched = False
+                    for ep_mid in loaded_raw:
+                        if _model_matches(model_id, ep_mid):
+                            matched = True
+                            break
+                    if not matched:
+                        continue  # confirmed gone — clear
+            elif action == "unload_all":
+                if not loaded:
+                    continue  # all gone — clear
+            surviving.append(op)
+        if surviving:
+            _pending_ops[node_id] = surviving
+        else:
+            _pending_ops.pop(node_id, None)
+
+
+def get_pending_ops(node_id):
+    """Return list of pending ops for a node (for API responses)."""
+    now = time.time()
+    with _lock:
+        ops = _pending_ops.get(node_id, [])
+        return [{"action": op["action"], "model_id": op["model_id"],
+                 "state": op["state"], "age": round(now - op["ts"], 1)}
+                for op in ops if (now - op["ts"]) <= _PENDING_HARD_CAP]
 
 
 # ── Prompt broadcast ─────────────────────────────────────────────────────
