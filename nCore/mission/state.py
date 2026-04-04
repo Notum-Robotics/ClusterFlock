@@ -86,8 +86,42 @@ _SIMPLE_TASK_KEYWORDS = frozenset({
     "count", "check", "verify", "read", "fetch", "download", "install",
 })
 
+# ── Mission phases ────────────────────────────────────────────────────────
+# Missions progress through phases; the Showrunner advances them.
+_MISSION_PHASES = (
+    "planning",       # Produce structured plan in state.json
+    "scaffolding",    # Create project skeleton, install deps
+    "implementing",   # Build features, write code
+    "testing",        # Run tests, fix bugs
+    "verifying",      # Final quality checks
+    "completing",     # Wrap-up and deliver
+)
+
 # ── Maximum consecutive failures before agent bail-out ────────────────────
 _MAX_CONSECUTIVE_FAILURES = 5
+
+# ── Agent read-only first iteration ──────────────────────────────────────
+# Force agents to inspect before mutating on their first iteration
+_AGENT_READONLY_FIRST_ITER = True
+_READONLY_ACTIONS = frozenset({
+    "read_file", "batch_read", "workspace_tree", "search",
+    "find_files", "file_info", "reflect", "save_note",
+})
+# Shell commands that are read-only (prefixes)
+_READONLY_SHELL_PREFIXES = (
+    "ls", "cat", "head", "tail", "find", "grep", "wc", "file", "stat",
+    "which", "echo", "pwd", "env", "printenv", "whoami", "hostname",
+    "tree", "du", "df", "uname", "date", "id", "test",
+)
+
+# ── Syntax-checkable extensions ──────────────────────────────────────────
+_SYNTAX_CHECK_EXTENSIONS = frozenset({"py", "js", "mjs", "ts", "json", "sh", "bash"})
+
+# Hard safety caps — prevent single results from consuming entire context.
+# Base64/binary content tokenizes at ~1:1 char:token (vs assumed 3:1),
+# so a 15K char base64 blob becomes ~15K tokens, not the estimated ~5K.
+_SHELL_STDOUT_HARD_CAP = 8000      # max chars for any single shell stdout
+_ACTION_RESULT_HARD_CAP = 12000    # max chars per action result fed back to Showrunner
 
 
 # ── Data structures ──────────────────────────────────────────────────────
@@ -97,7 +131,7 @@ class FlockAgent:
     __slots__ = ("endpoint_id", "node_id", "hostname", "model", "name",
                  "role", "experience", "toks_per_sec", "context_length",
                  "gpu_name", "status", "failures", "last_used", "assigned_task",
-                 "system_prompt", "conversation_history")
+                 "system_prompt", "conversation_history", "scratchpad")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -108,10 +142,11 @@ class FlockAgent:
         self.status = self.status or "available"
         self.system_prompt = self.system_prompt or ""
         self.conversation_history = self.conversation_history or []
+        self.scratchpad = self.scratchpad or {}  # key → value persistent notes
 
     def to_dict(self):
         d = {k: getattr(self, k) for k in self.__slots__
-             if k != "conversation_history"}
+             if k not in ("conversation_history", "scratchpad")}
         # Include truncated conversation history for UI display
         hist = self.conversation_history or []
         truncated = []
@@ -123,6 +158,7 @@ class FlockAgent:
             entry["content"] = content
             truncated.append(entry)
         d["conversation_history"] = truncated
+        d["scratchpad"] = dict(self.scratchpad) if self.scratchpad else {}
         return d
 
 
@@ -230,6 +266,13 @@ class MissionState:
         # Persistent scratchpad — always visible in system prompt
         self.notes: list[dict] = []  # [{"key": ..., "value": ...}]
 
+        # Mission phase tracking
+        self.mission_phase = "planning"  # current phase from _MISSION_PHASES
+        self.phase_history: list[dict] = []  # [{"phase": ..., "entered_at": ..., "exited_at": ...}]
+
+        # Shared knowledge base — visible to all agents
+        self.knowledge_base: dict[str, str] = {}  # key → value, capped at 50 entries
+
         # Thread control
         self._thread = None
         self._stop_event = threading.Event()
@@ -286,6 +329,8 @@ class MissionState:
             "status_progress": self.status_progress,
             "tools": self.tools,
             "notes": self.notes,
+            "mission_phase": self.mission_phase,
+            "knowledge_base": dict(self.knowledge_base) if self.knowledge_base else {},
             "event_log_count": len(self.event_log),
             "has_result": self._has_result,
         }

@@ -35,6 +35,7 @@ from .container import (
     _build_workspace_tree,
 )
 from .prompts import _SHOWRUNNER_SYSTEM
+from .prompts.builder import build_phase_section, build_knowledge_section
 
 
 # ── Showrunner election ──────────────────────────────────────────────────
@@ -164,10 +165,14 @@ def _build_showrunner_context(mission, include_history=True):
 
     parts = [_SHOWRUNNER_SYSTEM]
 
+    # Phase-specific workflow guidance
+    mission_phase = getattr(mission, "mission_phase", "planning")
+    parts.append(f"\n{build_phase_section(mission_phase)}")
+
     # Timestamp and mission text (always included)
     ts = time.strftime('%Y-%m-%d %H:%M:%S %Z')
     elapsed_min = (time.time() - mission.created_at) / 60
-    parts.append(f"\n=== CURRENT TIME: {ts} | Mission elapsed: {elapsed_min:.0f}min ===")
+    parts.append(f"\n=== CURRENT TIME: {ts} | Mission elapsed: {elapsed_min:.0f}min | Phase: {mission_phase} ===")
     parts.append(f"\n=== MISSION (v{mission.mission_version}) ===\n{mission.mission_text}\n")
 
     # Available agents with rich detail
@@ -216,6 +221,15 @@ def _build_showrunner_context(mission, include_history=True):
             parts.append(tree)
             parts.append("")
 
+    # Container environment reference
+    if mission.container_id:
+        parts.append(
+            "=== CONTAINER ENVIRONMENT ===\n"
+            "Ubuntu 24.04 \u2022 Python 3.12 \u2022 Node.js 18+ \u2022 git \u2022 npm \u2022 curl \u2022 wget \u2022 jq \u2022 ctags\n"
+            "Install: python3 -m pip install <pkg> | apt-get install -y <pkg>\n"
+            "Pre-installed tools: outline, lint, test, search_def, verify, diff_since\n"
+        )
+
     # Tool manifest
     if mission.tools:
         parts.append("\n=== AVAILABLE TOOLS ===\n")
@@ -240,6 +254,11 @@ def _build_showrunner_context(mission, include_history=True):
             if len(state_content) > len(state_preview):
                 parts.append(f"[truncated — {len(state_content)} total chars]")
             parts.append("")
+
+    # Shared knowledge base — visible to all agents
+    kb = getattr(mission, "knowledge_base", None)
+    if kb:
+        parts.append(build_knowledge_section(kb))
 
     # Active tasks with FULL real-time checkpoint detail
     if mission.tasks:

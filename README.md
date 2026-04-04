@@ -1,3 +1,18 @@
+<p align="center">
+  <img src="nCore/public/img/logo.png" alt="ClusterFlock Logo" width="200" />
+</p>
+
+<p align="center">
+  <em>ClusterFlock auto-deploys best models for your hardware and connects them together.</em>
+</p>
+
+<p align="center">
+  <img src="nCore/public/img/screenshot.png" alt="ClusterFlock Screenshot" width="800" />
+</p>
+
+<hr>
+
+
 # ClusterFlock
 
 A distributed AI orchestrator that manages heterogeneous hardware - NVIDIA GPUs, Apple Silicon, DGX systems - loading optimal models on each device and coordinating them to complete autonomous "missions".

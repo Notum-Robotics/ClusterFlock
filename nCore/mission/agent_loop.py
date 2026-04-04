@@ -15,6 +15,10 @@ from .state import (
     _CHARS_PER_TOKEN,
     _SHELL_TIMEOUT_DEFAULT,
     _SHELL_TIMEOUT_INSTALL,
+    _AGENT_READONLY_FIRST_ITER,
+    _READONLY_ACTIONS,
+    _READONLY_SHELL_PREFIXES,
+    _MAX_CONSECUTIVE_FAILURES,
 )
 from .scoring import (
     _get_endpoint_ctx,
@@ -27,6 +31,11 @@ from .container import (
     _container_read_file,
     _build_workspace_tree,
     _smart_truncate,
+    _syntax_check,
+    _replace_lines,
+    _apply_diff,
+    _find_files,
+    _file_info,
 )
 from .parsing import (
     _parse_showrunner_response,
@@ -46,7 +55,11 @@ def _agent_autonomous_loop(mission, task, agent):
     max_shell = constraints.get("max_shell_commands", _AUTO_MAX_SHELL)
     timeout = constraints.get("timeout", _AUTO_TIMEOUT)
     working_dir = constraints.get("working_dir", "/home/mission/")
-    allowed_caps = set(task.capabilities or ["shell", "write_file", "read_file", "batch_read", "workspace_tree"])
+    allowed_caps = set(task.capabilities or [
+        "shell", "write_file", "read_file", "batch_read", "workspace_tree",
+        "search", "patch_file", "replace_lines", "apply_diff",
+        "find_files", "file_info", "save_note", "run_tool",
+    ])
 
     # Per-request generation overrides from showrunner dispatch constraints
     gen_overrides = {}
@@ -133,8 +146,46 @@ def _agent_autonomous_loop(mission, task, agent):
                               f"status={'stuck' if consecutive_failures >= 2 else 'working'}",
                               task_id=task.task_id, agent=agent.name)
 
+        # ── Bail-out on repeated failures ──
+        if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+            mission.log_event("AUTO_BAIL",
+                f"task={task.task_id} agent={agent.name} — "
+                f"{consecutive_failures} consecutive failures, bailing out",
+                task_id=task.task_id, agent=agent.name)
+            task.status = "failed"
+            task.error = (
+                f"Bailed out after {consecutive_failures} consecutive failures "
+                f"at iteration {iteration}. Last: {last_action_summary}")
+            task.completed_at = time.time()
+            break
+
         # ── Prompt the agent ──
-        system_prompt = _build_agent_system_prompt(agent)
+        system_prompt = _build_agent_system_prompt(agent, mission=mission)
+
+        # Inject agent scratchpad into system prompt if it has notes
+        if agent.scratchpad:
+            pad_lines = [f"- {k}: {v}" for k, v in agent.scratchpad.items()]
+            system_prompt += "\n\nYOUR SCRATCHPAD (persistent notes):\n" + "\n".join(pad_lines)
+
+        # Inject available tools from mission manifest
+        if mission.tools:
+            tool_lines = [f"- /home/mission/tools/{t['name']}: {t.get('description', '')}"
+                          for t in mission.tools]
+            system_prompt += ("\n\nAVAILABLE TOOLS (use run_tool or shell to invoke):\n"
+                              + "\n".join(tool_lines))
+
+        # Inject shared mission knowledge + notes for cross-agent context
+        _kb_lines = []
+        if getattr(mission, 'knowledge_base', None):
+            _kb_lines.extend(f"- {k}: {v}" for k, v in mission.knowledge_base.items())
+        if getattr(mission, 'notes', None):
+            _kb_set = set(mission.knowledge_base or {})
+            for note in mission.notes:
+                if note.get("key") not in _kb_set:
+                    _kb_lines.append(f"- {note['key']}: {note['value']}")
+        if _kb_lines:
+            system_prompt += "\n\nMISSION KNOWLEDGE (shared across all agents):\n" + "\n".join(_kb_lines)
+
         # Scale rolling window to agent's context — larger context sees more history
         agent_ctx = agent.context_length or _get_endpoint_ctx(agent.node_id, agent.model)
         agent_window = max(6, min(int((agent_ctx or 4096) / 2048), 40))
@@ -284,6 +335,10 @@ def _agent_autonomous_loop(mission, task, agent):
         if (agent_ctx or 8192) < 8192:
             agent_read_limit = min(agent_read_limit, 2000)
 
+        # ── Read-only first iteration enforcement ──
+        is_readonly_iter = (_AGENT_READONLY_FIRST_ITER and iteration == 1
+                           and max_iterations > 2)
+
         for act in parsed.get("actions", []):
             atype = act.get("type", "")
 
@@ -292,8 +347,41 @@ def _agent_autonomous_loop(mission, task, agent):
                 done_summary = act.get("summary", "Task completed.")
                 break
 
-            if atype not in allowed_caps:
+            if atype not in allowed_caps and atype != "save_note":
                 action_results.append(f"{atype}: NOT ALLOWED (capabilities: {', '.join(allowed_caps)})")
+                continue
+
+            # Read-only enforcement: reject mutating actions on first iteration
+            if is_readonly_iter and atype not in _READONLY_ACTIONS:
+                if atype == "shell":
+                    # Allow read-only shell commands
+                    cmd_word = act.get("command", "").strip().split()[0] if act.get("command") else ""
+                    if not any(cmd_word.startswith(p) for p in _READONLY_SHELL_PREFIXES):
+                        action_results.append(
+                            f"shell: BLOCKED — first iteration is read-only. Inspect the workspace "
+                            f"first (read_file, workspace_tree, search, ls), then write in iteration 2.")
+                        continue
+                else:
+                    action_results.append(
+                        f"{atype}: BLOCKED — first iteration is read-only. "
+                        f"Inspect the workspace first, then write/modify in iteration 2.")
+                    continue
+
+            # ── save_note (agent scratchpad) ──
+            if atype == "save_note":
+                key = act.get("key", "").strip()[:100]
+                value = act.get("value", "").strip()[:2000]
+                if key and value:
+                    agent.scratchpad[key] = value
+                    # Cap scratchpad at 20 entries
+                    if len(agent.scratchpad) > 20:
+                        oldest = next(iter(agent.scratchpad))
+                        del agent.scratchpad[oldest]
+                    action_results.append(f"save_note: saved '{key}'")
+                else:
+                    action_results.append("save_note: key and value required")
+                consecutive_failures = 0
+                last_action_summary = f"save_note: {key}"
                 continue
 
             if atype == "search":
@@ -313,6 +401,71 @@ def _agent_autonomous_loop(mission, task, agent):
                     action_results.append(f"search: {out.count(chr(10))} matches\n{out[:agent_read_limit]}")
                 consecutive_failures = 0
                 last_action_summary = f"search: {pattern}"
+                continue
+
+            if atype == "find_files":
+                pattern = act.get("pattern", "")
+                fpath = act.get("path", working_dir)
+                if not pattern:
+                    action_results.append("find_files: pattern required (e.g. '*.py')")
+                    continue
+                found = _find_files(mission.container_id, pattern, fpath)
+                action_results.append(f"find_files: {len(found)} matches\n" + "\n".join(found[:100]))
+                consecutive_failures = 0
+                last_action_summary = f"find_files: {pattern}"
+                continue
+
+            if atype == "file_info":
+                fpath = act.get("path", "")
+                if not fpath:
+                    action_results.append("file_info: path required")
+                    continue
+                info = _file_info(mission.container_id, fpath)
+                if info:
+                    action_results.append(
+                        f"file_info: {fpath} — {info.get('lines', '?')} lines, "
+                        f"{info.get('size', 0)}B, type={info.get('type', '?')}")
+                else:
+                    action_results.append(f"file_info: {fpath} NOT FOUND")
+                consecutive_failures = 0
+                last_action_summary = f"file_info: {fpath}"
+                continue
+
+            if atype == "run_tool":
+                tool_name = act.get("name", "")
+                tool_args = act.get("args", [])
+                if not tool_name:
+                    action_results.append("run_tool: name required")
+                    continue
+                # Look up tool
+                tool_entry = None
+                for t in mission.tools:
+                    if t["name"] == tool_name:
+                        tool_entry = t
+                        break
+                if not tool_entry:
+                    available = [t["name"] for t in mission.tools]
+                    action_results.append(f"run_tool: '{tool_name}' not found. Available: {', '.join(available) or 'none'}")
+                    continue
+                tool_path = f"/home/mission/tools/{tool_name}"
+                if isinstance(tool_args, list):
+                    arg_str = " ".join(shlex.quote(str(a)) for a in tool_args)
+                else:
+                    arg_str = str(tool_args)
+                tool_cmd = f"cd {shlex.quote(working_dir)} && {shlex.quote(tool_path)} {arg_str}"
+                tool_timeout = min(int(act.get("timeout", 120)), _SHELL_TIMEOUT_DEFAULT)
+                out, err, rc = _container_exec(mission.container_id, tool_cmd, timeout=tool_timeout)
+                result_str = f"run_tool({tool_name}): rc={rc}"
+                if out:
+                    result_str += f" stdout={_smart_truncate(out, agent_read_limit, is_own_content=True)}"
+                if err:
+                    result_str += f" stderr={err[:500]}"
+                action_results.append(result_str)
+                if rc == 0:
+                    consecutive_failures = 0
+                else:
+                    consecutive_failures += 1
+                last_action_summary = f"run_tool: {tool_name} → rc={rc}"
                 continue
 
             if atype == "shell":
@@ -349,14 +502,33 @@ def _agent_autonomous_loop(mission, task, agent):
             elif atype == "write_file":
                 path = act.get("path", "")
                 content = act.get("content", "")
+                append = act.get("append", False)
                 if not path:
                     action_results.append("write_file: no path")
                     continue
                 # Enforce working_dir prefix
                 if not path.startswith(working_dir) and not path.startswith("/home/mission/"):
                     path = working_dir.rstrip("/") + "/" + path.lstrip("/")
-                ok = _container_write_file(mission.container_id, path, content)
-                action_results.append(f"write_file: {path} ok={ok} ({len(content)}B)")
+                # Ensure parent directory exists
+                parent = "/".join(path.split("/")[:-1])
+                if parent:
+                    _container_exec(mission.container_id, f"mkdir -p {shlex.quote(parent)}", timeout=10)
+                if append:
+                    existing = _container_read_file(mission.container_id, path) or ""
+                    full_content = existing + content
+                    ok = _container_write_file(mission.container_id, path, full_content)
+                    action_results.append(f"write_file(append): {path} ok={ok} (+{len(content)}B total={len(full_content)}B)")
+                else:
+                    ok = _container_write_file(mission.container_id, path, content)
+                    result_str = f"write_file: {path} ok={ok} ({len(content)}B)"
+                    # Auto syntax check
+                    if ok:
+                        ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+                        if ext in ("py", "js", "mjs", "ts", "json", "sh", "bash"):
+                            check_ok, errors = _syntax_check(mission.container_id, path)
+                            if not check_ok:
+                                result_str += f" ⚠ SYNTAX ERROR: {errors}"
+                    action_results.append(result_str)
                 if ok:
                     mission.log_event("WRITE_FILE", f"{path} ({len(content)}B)",
                                       task_id=task.task_id, agent=agent.name)
@@ -364,6 +536,15 @@ def _agent_autonomous_loop(mission, task, agent):
                 if ok:
                     files_written.append(path)
                     consecutive_failures = 0
+                    # Auto-test: if test tool exists and this is a source file, run lint
+                    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+                    if ext in ("py", "js", "mjs", "ts") and len(files_written) % 3 == 0:
+                        lint_out, _, lint_rc = _container_exec(
+                            mission.container_id,
+                            f"test -x /home/mission/tools/lint && /home/mission/tools/lint {shlex.quote(path)} 2>&1 || true",
+                            timeout=15)
+                        if lint_rc != 0 and lint_out:
+                            action_results.append(f"auto-lint: ⚠ {lint_out[:500]}")
                 else:
                     consecutive_failures += 1
 
@@ -392,11 +573,21 @@ def _agent_autonomous_loop(mission, task, agent):
                     fcontent = _container_read_file(mission.container_id, path)
                     if fcontent is not None:
                         total_lines = fcontent.count('\n') + (1 if fcontent and not fcontent.endswith('\n') else 0)
-                        display = _smart_truncate(fcontent, agent_read_limit, is_own_content=True)
                         truncated = len(fcontent) > agent_read_limit
-                        hint = " [TRUNCATED — use start_line/end_line]" if truncated else ""
+                        if truncated:
+                            # For large files: show structured preview instead of raw truncation
+                            lines_list = fcontent.split("\n")
+                            head = "\n".join(lines_list[:20])
+                            tail = "\n".join(lines_list[-10:]) if len(lines_list) > 30 else ""
+                            display = head
+                            if tail:
+                                display += f"\n\n... [{total_lines - 30} lines omitted] ...\n\n{tail}"
+                            display += (f"\n\n[FILE: {total_lines} lines, {len(fcontent)}B — "
+                                        f"use read_file with start_line/end_line for specific sections]")
+                        else:
+                            display = fcontent
                         action_results.append(
-                            f"read_file: {path} ({len(fcontent)}B, {total_lines} lines){hint}\n{display}")
+                            f"read_file: {path} ({len(fcontent)}B, {total_lines} lines)\n{display}")
                         consecutive_failures = 0
                     else:
                         action_results.append(f"read_file: {path} NOT FOUND")
@@ -446,15 +637,23 @@ def _agent_autonomous_loop(mission, task, agent):
                     continue
                 cnt = fcontent.count(old_text)
                 if cnt == 0:
-                    action_results.append("patch_file: old text not found — read_file first")
+                    action_results.append("patch_file: old text not found — read_file first to see exact content")
                     consecutive_failures += 1
                 elif cnt > 1:
-                    action_results.append(f"patch_file: old text matches {cnt} locations — be more specific")
+                    action_results.append(f"patch_file: old text matches {cnt} locations — include more context lines to be specific")
                     consecutive_failures += 1
                 else:
                     new_content = fcontent.replace(old_text, new_text, 1)
                     ok = _container_write_file(mission.container_id, path, new_content)
-                    action_results.append(f"patch_file: {path} ok={ok} (-{len(old_text)}B +{len(new_text)}B)")
+                    result_str = f"patch_file: {path} ok={ok} (-{len(old_text)}B +{len(new_text)}B)"
+                    # Auto syntax check
+                    if ok:
+                        ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+                        if ext in ("py", "js", "mjs", "ts", "json", "sh", "bash"):
+                            check_ok, errors = _syntax_check(mission.container_id, path)
+                            if not check_ok:
+                                result_str += f" ⚠ SYNTAX ERROR: {errors}"
+                    action_results.append(result_str)
                     if ok:
                         mission.log_event("PATCH_FILE", f"{path} (-{len(old_text)}B +{len(new_text)}B)",
                                           task_id=task.task_id, agent=agent.name)
@@ -463,6 +662,57 @@ def _agent_autonomous_loop(mission, task, agent):
                     else:
                         consecutive_failures += 1
                 last_action_summary = f"patch_file: {path}"
+
+            elif atype == "replace_lines":
+                path = act.get("path", "")
+                sl = act.get("start_line")
+                el = act.get("end_line")
+                new_text = act.get("content", "")
+                if not path or sl is None or el is None:
+                    action_results.append("replace_lines: path, start_line, end_line, and content required")
+                    continue
+                sl = max(1, int(sl))
+                el = max(sl, int(el))
+                ok, total = _replace_lines(mission.container_id, path, sl, el, new_text)
+                if not ok:
+                    action_results.append(f"replace_lines: {path} FAILED (file not found or write error)")
+                    consecutive_failures += 1
+                else:
+                    new_line_count = len(new_text.split("\n")) if new_text else 0
+                    result_str = f"replace_lines: {path} lines {sl}-{el} replaced with {new_line_count} lines (total: {total})"
+                    # Auto syntax check
+                    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+                    if ext in ("py", "js", "mjs", "ts", "json", "sh", "bash"):
+                        check_ok, errors = _syntax_check(mission.container_id, path)
+                        if not check_ok:
+                            result_str += f" ⚠ SYNTAX ERROR: {errors}"
+                    action_results.append(result_str)
+                    mission.log_event("REPLACE_LINES", f"{path} lines {sl}-{el}",
+                                      task_id=task.task_id, agent=agent.name)
+                    files_written.append(path)
+                    consecutive_failures = 0
+                last_action_summary = f"replace_lines: {path} {sl}-{el}"
+
+            elif atype == "apply_diff":
+                diff_text = act.get("diff", "")
+                diff_path = act.get("path", "")
+                if not diff_text:
+                    action_results.append("apply_diff: diff content required")
+                    continue
+                ok, output = _apply_diff(mission.container_id, diff_path, diff_text)
+                result_str = f"apply_diff: ok={ok} {output}"
+                if ok and diff_path:
+                    ext = diff_path.rsplit(".", 1)[-1].lower() if "." in diff_path else ""
+                    if ext in ("py", "js", "mjs", "ts", "json", "sh", "bash"):
+                        check_ok, errors = _syntax_check(mission.container_id, diff_path)
+                        if not check_ok:
+                            result_str += f" ⚠ SYNTAX ERROR: {errors}"
+                action_results.append(result_str)
+                if ok:
+                    consecutive_failures = 0
+                else:
+                    consecutive_failures += 1
+                last_action_summary = f"apply_diff: {diff_path or 'multi'}"
 
         if done:
             # Quality gate: reject placeholder/trivial task results (unless last iteration)
@@ -495,7 +745,14 @@ def _agent_autonomous_loop(mission, task, agent):
                               task_id=task.task_id, agent=agent.name)
             break
 
-        # Feed action results back to agent
+        # Feed action results back to agent — with compressed summaries for prior results
+        # Planning enforcement: after first read-only iteration, nudge for plan if missing
+        plan_nudge = ""
+        if is_readonly_iter and not agent.scratchpad.get("plan"):
+            plan_nudge = (
+                "\n💡 TIP: Use save_note with key='plan' to record your approach before writing. "
+                "Planning first prevents wasted iterations."
+            )
         elapsed_agent = time.time() - start_time
         remaining_agent = max(0, timeout - elapsed_agent)
         time_note = f"\n⏱ Time: {elapsed_agent:.0f}s elapsed, ~{remaining_agent:.0f}s remaining."
@@ -503,6 +760,36 @@ def _agent_autonomous_loop(mission, task, agent):
             time_note += " ⚠ TIME CRITICAL — wrap up now, emit 'done' with what you have."
         elif remaining_agent < timeout * 0.4:
             time_note += " Finish up — make sure your output is complete, then emit 'done'."
+
+        # Compress old tool results in conversation to save context
+        # Keep only outcome summaries for messages older than the last 4
+        if len(agent_messages) > 8:
+            for i, msg in enumerate(agent_messages):
+                if i >= len(agent_messages) - 4:
+                    break  # keep recent messages intact
+                if msg.get("role") != "user":
+                    continue
+                content = msg.get("content", "")
+                if not content.startswith("Action results:"):
+                    continue
+                # Compress: extract just the action type and outcome
+                lines = content.split("\n")
+                compressed = []
+                for line in lines:
+                    if line.startswith("Action results:"):
+                        continue
+                    # Keep action summary lines, drop content bodies
+                    for prefix in ("shell:", "write_file:", "read_file:", "patch_file:",
+                                   "search:", "batch_read:", "workspace_tree:", "replace_lines:",
+                                   "find_files:", "file_info:", "run_tool:", "apply_diff:", "save_note:"):
+                        if line.strip().startswith(prefix):
+                            # Keep only the first line of each result
+                            compressed.append(line.strip()[:200])
+                            break
+                    if line.startswith("📋") or line.startswith("⏱"):
+                        compressed.append(line)
+                if compressed:
+                    msg["content"] = "[Prior results summary]\n" + "\n".join(compressed)
 
         # Iteration budget awareness for next round
         next_iter = iteration + 1
@@ -522,7 +809,7 @@ def _agent_autonomous_loop(mission, task, agent):
         else:
             iter_note = f"\n📋 Iteration {next_iter}/{max_iterations}."
 
-        feedback = "Action results:\n" + "\n".join(action_results) + time_note + iter_note + "\nContinue working towards the goal."
+        feedback = "Action results:\n" + "\n".join(action_results) + plan_nudge + time_note + iter_note + "\nContinue working towards the goal."
         agent_messages.append({"role": "user", "content": feedback})
 
     else:
@@ -536,6 +823,17 @@ def _agent_autonomous_loop(mission, task, agent):
         mission.log_event("AUTO_EXHAUSTED",
                           f"task={task.task_id} agent={agent.name} iterations={max_iterations}",
                           task_id=task.task_id, agent=agent.name)
+
+    # ── Auto-commit agent work to git ──
+    if mission.container_id and files_written:
+        summary_line = (done_summary or last_action_summary or "work")[:80]
+        _container_exec(
+            mission.container_id,
+            f"cd /home/mission && git add -A && "
+            f"git diff --cached --quiet || "
+            f"git commit -q -m 'task-{task.task_id}: {summary_line}' --allow-empty 2>/dev/null",
+            timeout=15,
+        )
 
     # ── Finalize ──
     with _lock:

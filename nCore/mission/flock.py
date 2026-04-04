@@ -16,6 +16,7 @@ from .scoring import (
     _get_endpoint_ctx,
 )
 from .showrunner import _ask_showrunner
+from .prompts.builder import build_knowledge_section
 
 
 # ── Flock naming prompts ─────────────────────────────────────────────────
@@ -412,7 +413,7 @@ def _generate_agent_system_prompt(name, role, experience, job_description, model
     return base
 
 
-def _build_agent_system_prompt(agent):
+def _build_agent_system_prompt(agent, mission=None):
     """Build the full system prompt for a flock agent — tier-adapted for model size."""
     base = agent.system_prompt or (
         f"You are {agent.name}, a {agent.experience}-level {agent.role}. "
@@ -431,51 +432,93 @@ def _build_agent_system_prompt(agent):
             "Action types:\n"
             '- {"type":"shell","command":"ls -la /home/mission/"}\n'
             '- {"type":"write_file","path":"/home/mission/file.py","content":"..."}\n'
+            '- {"type":"write_file","path":"/home/mission/file.py","content":"more...","append":true}\n'
             '- {"type":"read_file","path":"/home/mission/file.py"}\n'
+            '- {"type":"read_file","path":"/home/mission/big.py","start_line":50,"end_line":120}\n'
+            '- {"type":"replace_lines","path":"/home/mission/file.py","start_line":10,"end_line":15,"content":"new code here"}\n'
+            '- {"type":"find_files","pattern":"*.py","path":"/home/mission/"}\n'
+            '- {"type":"save_note","key":"plan","value":"what I need to do next"}\n'
             '- {"type":"done","summary":"what was accomplished"}\n\n'
             "RULES: Raw JSON only. No markdown. No text outside the JSON.\n"
             "Double quotes only. Escape newlines as \\n in strings.\n"
             "All files go under /home/mission/.\n"
+            "Iteration 1 is READ-ONLY — inspect first (read_file, find_files, shell 'ls'), "
+            "then write in iteration 2.\n"
+            "Use save_note to remember key findings across iterations.\n"
             "When done, use the done action.\n"
         )
 
     return (
         base + "\n\n"
+        "<tools>\n"
         "Respond with EXACTLY this JSON structure — nothing else, no markdown, no text before or after:\n"
         "{\n"
-        '  "thinking": "one sentence about what you will do next",\n'
+        '  "thinking": "your reasoning about what to do next",\n'
         '  "actions": [\n'
         '    {"type": "shell", "command": "ls -la /home/mission/"},\n'
         '    {"type": "write_file", "path": "/home/mission/script.js", "content": "..."},\n'
+        '    {"type": "write_file", "path": "/home/mission/big.js", "content": "more lines...", "append": true},\n'
         '    {"type": "read_file", "path": "/home/mission/output.txt"},\n'
         '    {"type": "read_file", "path": "/home/mission/big.py", "start_line": 50, "end_line": 120},\n'
         '    {"type": "batch_read", "paths": ["/home/mission/a.py", "/home/mission/b.py"]},\n'
         '    {"type": "workspace_tree", "path": "/home/mission/"},\n'
         '    {"type": "patch_file", "path": "/home/mission/app.py", '
         '"old": "return 404", "new": "return 200"},\n'
+        '    {"type": "replace_lines", "path": "/home/mission/app.py", '
+        '"start_line": 10, "end_line": 25, "content": "new code for lines 10-25"},\n'
+        '    {"type": "apply_diff", "path": "/home/mission/app.py", '
+        '"diff": "--- a/app.py\\n+++ b/app.py\\n@@ -10,3 +10,3 @@\\n-old line\\n+new line"},\n'
         '    {"type": "search", "pattern": "error", "path": "/home/mission/"},\n'
+        '    {"type": "find_files", "pattern": "*.py", "path": "/home/mission/"},\n'
+        '    {"type": "file_info", "path": "/home/mission/app.py"},\n'
+        '    {"type": "run_tool", "name": "tool_name", "args": ["arg1", "arg2"]},\n'
+        '    {"type": "save_note", "key": "plan", "value": "current approach and findings"},\n'
         '    {"type": "done", "summary": "what was accomplished"}\n'
         "  ]\n"
-        "}\n\n"
+        "}\n"
+        "</tools>\n\n"
+        "<rules>\n"
         "CRITICAL — respond with valid JSON only. Common mistakes to avoid:\n"
         "- Do NOT wrap in ```json ... ```. Just raw { } \n"
         "- Do NOT add text before or after the JSON\n"
         "- Do NOT use single quotes — JSON requires double quotes\n"
-        "- Escape special chars in strings: newlines as \\n, quotes as \\\"\n\n"
-        "WORKFLOW — follow this loop:\n"
-        "1. INSPECT first: read_file, workspace_tree, shell 'ls', search for patterns\n"
-        "2. ACT: write code or run commands based on what you found\n"
-        "3. VERIFY: check output, read result files, look at exit codes\n"
-        "4. Repeat until done, then use {\"type\": \"done\", \"summary\": \"...\"}\n\n"
+        "- Escape special chars in strings: newlines as \\n, quotes as \\\"\n"
+        "</rules>\n\n"
+        "<workflow>\n"
+        "Iteration 1 is READ-ONLY — you MUST inspect before modifying:\n"
+        "1. INSPECT: read_file, workspace_tree, find_files, shell 'ls' — understand what exists\n"
+        "2. PLAN: Use save_note to record your approach and key findings\n"
+        "3. ACT (iteration 2+): write code or run commands based on what you found\n"
+        "4. VERIFY: check output, read result files, look at exit codes\n"
+        "5. Repeat until done, then use {\"type\": \"done\", \"summary\": \"...\"}\n\n"
+        "FILE EDITING STRATEGY (for large files):\n"
+        "- Use replace_lines for targeted edits: read the section first, then replace specific lines\n"
+        "- Use patch_file for small text substitutions (needs exact match of old text)\n"
+        "- Use write_file with append:true to build files incrementally across iterations\n"
+        "- Use apply_diff for complex multi-hunk changes (unified diff format)\n"
+        "- AVOID rewriting entire large files — edit surgically\n"
+        "- After writing/patching code files, syntax errors are auto-checked and reported\n"
+        "</workflow>\n\n"
+        "<memory>\n"
+        "Use save_note to store key findings, decisions, and progress across iterations.\n"
+        "Your scratchpad persists across all iterations — notes are always visible in your context.\n"
+        "Good note keys: 'plan', 'findings', 'blockers', 'progress', 'architecture'\n"
+        "</memory>\n\n"
         "RULES:\n"
         "- All files go under /home/mission/\n"
         "- NEVER guess at file contents or structure — always read/inspect first\n"
-        "- Use patch_file for small edits instead of rewriting entire files\n"
-        "- Use read_file with start_line/end_line for large files instead of reading everything\n"
-        "- Use batch_read to read multiple files at once, workspace_tree for project overview\n"
         "- If a command fails, read the error and try a DIFFERENT approach\n"
         "- Shell timeout: {\"type\":\"shell\",\"command\":\"...\",\"timeout\":300} (up to 600s)\n\n"
         "CONTAINER: Ubuntu 24.04 with curl, wget, python3, pip3, nodejs, npm, jq, git.\n"
-        "- Playwright (Node.js) may be pre-installed — use Node.js, NOT Python.\n"
-        "- ALWAYS use headless:true — no display available.\n"
     )
+
+    # Inject knowledge base if mission is provided
+    if mission:
+        kb = getattr(mission, "knowledge_base", None)
+        if kb:
+            prompt += "\n" + build_knowledge_section(kb)
+        phase = getattr(mission, "mission_phase", "")
+        if phase:
+            prompt += f"\n[Mission phase: {phase}]\n"
+
+    return prompt

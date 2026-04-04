@@ -12,6 +12,8 @@ from .state import (
     _missions,
     _flock_status_line,
     _COMPACTION_INTERVAL,
+    _MISSION_PHASES,
+    _ACTION_RESULT_HARD_CAP,
 )
 from .scoring import (
     _get_endpoint_ctx,
@@ -61,6 +63,15 @@ def _mission_loop(mission):
                 return
             mission.container_id = cid
             mission.log_event("INFO", f"Container ready: {cid[:12]}")
+
+            # Load bootstrapped tools manifest into mission state
+            _manifest_raw = _container_read_file(cid, "/home/mission/tools/manifest.json")
+            if _manifest_raw:
+                try:
+                    mission.tools = json.loads(_manifest_raw)
+                    mission.log_event("INFO", f"Loaded {len(mission.tools)} bootstrapped tools")
+                except (ValueError, TypeError):
+                    pass
 
         # Elect or apply Showrunner override
         mission.status_message = "Electing Showrunner..."
@@ -232,6 +243,11 @@ def _mission_loop(mission):
                 mission.log_event("MISSION_CHANGED",
                     f"v{mission.mission_version}: {mission.mission_text[:200]}")
                 _reassign_flock_roles(mission)
+                # Reset completion state — old result/verification no longer applies
+                mission._has_result = False
+                mission._completion_verified = False
+                mission._sr_consecutive_fails = 0
+                mission._sr_overflow_streak = 0
                 prompt_parts.append(
                     f"⚠ MISSION TEXT HAS CHANGED (v{mission.mission_version}).\n"
                     f"Old: {old_text[:500]}\n"
@@ -249,6 +265,15 @@ def _mission_loop(mission):
                 )
             elif initial_prompt == "Continue the mission. What's next?" and not mission.tasks:
                 time.sleep(3)
+
+            # Poison-pill recovery: after 2+ consecutive showrunner failures with
+            # no new updates, the previous initial_prompt likely contains oversized
+            # content that caused the failure.  Replace with a clean probe.
+            if not prompt_parts and mission._sr_consecutive_fails >= 2:
+                initial_prompt = (
+                    "Continue the mission. What is the current status and what are the next steps?\n"
+                    f"{_flock_status_line(mission)}"
+                )
 
             # Update flock periodically
             _update_flock(mission)
@@ -339,7 +364,9 @@ def _mission_loop(mission):
                         "should complete",
                     )
                     thinking_lower = thinking.lower() if thinking else ""
-                    if any(phrase in thinking_lower for phrase in completion_phrases):
+                    # Skip detection if thinking looks like JSON (nested response parsing)
+                    _is_json_thinking = thinking and thinking.strip()[:1] in ('{', '[')
+                    if not _is_json_thinking and any(phrase in thinking_lower for phrase in completion_phrases):
                         mission.log_event("INFO",
                             "Auto-completing: Showrunner expressed completion in thinking")
                         actions = [{"type": "complete", "summary": thinking[:500]}]
@@ -407,7 +434,7 @@ def _mission_loop(mission):
                         result = _execute_action(mission, action)
                         if atype in ("read_file", "shell", "batch_read",
                                      "workspace_tree", "search"):
-                            limit = limits["action_result_max"]
+                            limit = min(limits["action_result_max"], _ACTION_RESULT_HARD_CAP)
                         else:
                             limit = min(limits["action_result_max"] // 4, 2000)
                         remaining = max_total - total_result_chars
@@ -475,6 +502,42 @@ def _mission_loop(mission):
                         "to save round-trips."
                     )
 
+                # Phase-awareness: always show current phase, nudge when actions suggest advancement
+                phase_nudge = ""
+                mission_phase = getattr(mission, "mission_phase", "planning")
+                if mission_phase == "planning":
+                    if mission.round_trips >= 2:
+                        sj = _container_read_file(mission.container_id, "/home/mission/state.json") or ""
+                        has_plan = '"requirements"' in sj and ('"phases"' in sj or '"plan"' in sj)
+                        if not has_plan:
+                            phase_nudge = (
+                                "\n\n📋 PHASE: planning — state.json needs 'requirements' and 'phases' before advancing. "
+                                'Then: {"type": "advance_phase", "phase": "scaffolding"}'
+                            )
+                        elif "advance_phase" not in str(actions):
+                            phase_nudge = (
+                                '\n\n📋 PHASE: planning — plan ready. Advance: {"type": "advance_phase", "phase": "scaffolding"}'
+                            )
+                else:
+                    _act_types = {a.get("type") for a in actions}
+                    _wrote_code = bool(_act_types & {"write_file", "batch_write", "patch_file", "replace_lines"})
+                    _ran_tests = any(
+                        a.get("type") in ("shell", "run_tool") and
+                        any(kw in (a.get("command", "") + a.get("name", "")).lower()
+                            for kw in ("pytest", "test", "jest", "mocha", "verify"))
+                        for a in actions
+                    )
+                    if mission_phase == "scaffolding" and _wrote_code:
+                        phase_nudge = '\n\n📋 PHASE: scaffolding → you\'re writing code, advance_phase to "implementing"'
+                    elif mission_phase == "implementing" and _ran_tests:
+                        phase_nudge = '\n\n📋 PHASE: implementing → running tests, advance_phase to "testing"'
+                    elif mission_phase == "testing" and _ran_tests:
+                        phase_nudge = '\n\n📋 PHASE: testing → if tests pass, advance_phase to "verifying"'
+                    elif mission_phase == "verifying":
+                        phase_nudge = '\n\n📋 PHASE: verifying → when verified, advance_phase to "completing"'
+                    else:
+                        phase_nudge = f"\n\n📋 PHASE: {mission_phase}"
+
                 if results_summary:
                     initial_prompt = (
                         "Action results:\n" +
@@ -482,11 +545,13 @@ def _mission_loop(mission):
                         f"\n\n{flock_line}" +
                         idle_nudge +
                         single_action_nudge +
+                        phase_nudge +
                         "\nContinue the mission. What's next?"
                     )
                 else:
                     initial_prompt = (
                         f"{flock_line}" + idle_nudge + single_action_nudge +
+                        phase_nudge +
                         "\nContinue the mission. What's next?"
                     )
 

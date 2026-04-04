@@ -14,6 +14,8 @@ from .state import (
     _AUTO_MAX_ITERATIONS,
     _SHELL_TIMEOUT_DEFAULT,
     _SHELL_TIMEOUT_INSTALL,
+    _MISSION_PHASES,
+    _SHELL_STDOUT_HARD_CAP,
 )
 from .scoring import (
     _model_quality_tier,
@@ -28,6 +30,17 @@ from .container import (
     _container_read_file,
     _build_workspace_tree,
     _smart_truncate,
+    _syntax_check,
+    _replace_lines,
+    _apply_diff,
+    _find_files,
+    _file_info,
+    _scaffold_project,
+    _SCAFFOLD_TEMPLATES,
+    _git_checkpoint,
+    _git_restore,
+    _git_list_checkpoints,
+    _git_diff_since,
 )
 from .showrunner import _compress_agent_history
 from .flock import _generate_agent_system_prompt
@@ -198,6 +211,11 @@ def _action_shell(mission, action):
     out, err, rc = _container_exec(mission.container_id, command, timeout=timeout)
 
     stdout_out = _smart_truncate(out, limits["smart_truncate_max"], is_own_content=True)
+    # Hard safety cap — base64/binary tokenizes at ~1:1, not the assumed 3:1
+    if len(stdout_out) > _SHELL_STDOUT_HARD_CAP:
+        stdout_out = stdout_out[:_SHELL_STDOUT_HARD_CAP] + (
+            f"\n[TRUNCATED — {len(out)} bytes total. "
+            f"Pipe through head/tail/grep or redirect to file.]")
     stderr_limit = max(limits["smart_truncate_max"] // 3, 1500)
     result = {"ok": rc == 0, "exit_code": rc, "stdout": stdout_out, "stderr": err[:stderr_limit]}
 
@@ -207,15 +225,42 @@ def _action_shell(mission, action):
 
 
 def _action_write_file(mission, action):
-    """Write a file inside the container."""
+    """Write a file inside the container. Supports append mode."""
     path = action.get("path", "")
     content = action.get("content", "")
+    append = action.get("append", False)
     if not path:
         return {"ok": False, "error": "no path"}
 
-    ok = _container_write_file(mission.container_id, path, content)
-    mission.log_event("WRITE_FILE", f"path={path} size={len(content)}B ok={ok}")
-    return {"ok": ok}
+    # Ensure parent directory exists
+    parent = "/".join(path.split("/")[:-1])
+    if parent:
+        _container_exec(mission.container_id, f"mkdir -p {shlex.quote(parent)}", timeout=10)
+
+    if append:
+        # Read existing content and append
+        existing = _container_read_file(mission.container_id, path) or ""
+        content = existing + content
+        ok = _container_write_file(mission.container_id, path, content)
+        mission.log_event("WRITE_FILE", f"path={path} append=true +{len(content) - len(existing)}B total={len(content)}B ok={ok}")
+    else:
+        ok = _container_write_file(mission.container_id, path, content)
+        mission.log_event("WRITE_FILE", f"path={path} size={len(content)}B ok={ok}")
+
+    result = {"ok": ok, "path": path, "size": len(content)}
+
+    # Auto syntax check for supported file types
+    if ok:
+        ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+        if ext in ("py", "js", "mjs", "ts", "json", "sh", "bash"):
+            check_ok, errors = _syntax_check(mission.container_id, path)
+            if not check_ok:
+                result["syntax_errors"] = errors
+                result["syntax_ok"] = False
+            else:
+                result["syntax_ok"] = True
+
+    return result
 
 
 def _action_read_file(mission, action):
@@ -356,7 +401,18 @@ def _action_patch_file(mission, action):
     new_content = content.replace(old_text, new_text, 1)
     ok = _container_write_file(mission.container_id, path, new_content)
     mission.log_event("PATCH_FILE", f"path={path} ok={ok} (-{len(old_text)}B +{len(new_text)}B)")
-    return {"ok": ok, "path": path}
+    result = {"ok": ok, "path": path}
+    # Auto syntax check
+    if ok:
+        ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+        if ext in ("py", "js", "mjs", "ts", "json", "sh", "bash"):
+            check_ok, errors = _syntax_check(mission.container_id, path)
+            if not check_ok:
+                result["syntax_errors"] = errors
+                result["syntax_ok"] = False
+            else:
+                result["syntax_ok"] = True
+    return result
 
 
 def _action_reflect(mission, action):
@@ -400,6 +456,12 @@ def _action_batch_write(mission, action):
         results[path] = {"ok": ok, "size": len(content)}
         if ok:
             ok_count += 1
+            # Auto syntax check for supported file types
+            ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+            if ext in ("py", "js", "mjs", "ts", "json", "sh", "bash"):
+                check_ok, errors = _syntax_check(mission.container_id, path)
+                if not check_ok:
+                    results[path]["syntax_errors"] = errors
 
     mission.log_event("BATCH_WRITE", f"{ok_count}/{len(files)} files written")
     return {"ok": ok_count > 0, "written": ok_count, "total": len(files), "files": results}
@@ -456,11 +518,13 @@ def _action_save_note(mission, action):
     for note in mission.notes:
         if note["key"] == key:
             note["value"] = value
+            mission.knowledge_base[key] = value  # agents see notes via knowledge_base
             mission.log_event("NOTE", f"Updated note: {key}")
             return {"ok": True, "action": "updated", "key": key}
     mission.notes.append({"key": key, "value": value})
     if len(mission.notes) > 50:
         mission.notes = mission.notes[-50:]
+    mission.knowledge_base[key] = value  # agents see notes via knowledge_base
     mission.log_event("NOTE", f"Saved note: {key}")
     return {"ok": True, "action": "created", "key": key}
 
@@ -487,10 +551,14 @@ def _action_create_tool(mission, action):
     _container_exec(mission.container_id,
                     f"{shlex.quote(tool_path)} --help 2>/dev/null || true")
 
+    # Include input_schema if provided — for structured tool usage
+    input_schema = action.get("input_schema", [])
+
     tool_entry = {
         "name": name,
         "description": description,
-        "created_by": "Showrunner",
+        "input_schema": input_schema,
+        "created_by": action.get("_creator", "Showrunner"),
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     mission.tools.append(tool_entry)
@@ -599,6 +667,240 @@ def _action_complete(mission, action):
     return {"ok": True, "summary": summary}
 
 
+# ── New action handlers — line editing, diff, search, scaffold, tools ────
+
+def _action_replace_lines(mission, action):
+    """Replace a range of lines in a file — avoids full file rewrites for large files."""
+    path = action.get("path", "")
+    start_line = action.get("start_line")
+    end_line = action.get("end_line")
+    new_content = action.get("content", "")
+
+    if not path or start_line is None or end_line is None:
+        return {"ok": False, "error": "path, start_line, end_line, and content required"}
+
+    start_line = max(1, int(start_line))
+    end_line = max(start_line, int(end_line))
+
+    ok, total_lines = _replace_lines(mission.container_id, path, start_line, end_line, new_content)
+    if not ok:
+        return {"ok": False, "error": f"file not found or write failed: {path}"}
+
+    new_line_count = len(new_content.split("\n")) if new_content else 0
+    replaced_count = end_line - start_line + 1
+    mission.log_event("REPLACE_LINES",
+                      f"path={path} lines {start_line}-{end_line} "
+                      f"(-{replaced_count} +{new_line_count} = {total_lines} total)")
+    result = {"ok": True, "path": path, "replaced_lines": f"{start_line}-{end_line}",
+              "new_line_count": new_line_count, "total_lines": total_lines}
+
+    # Auto syntax check
+    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    if ext in ("py", "js", "mjs", "ts", "json", "sh", "bash"):
+        check_ok, errors = _syntax_check(mission.container_id, path)
+        if not check_ok:
+            result["syntax_errors"] = errors
+            result["syntax_ok"] = False
+        else:
+            result["syntax_ok"] = True
+    return result
+
+
+def _action_apply_diff(mission, action):
+    """Apply a unified diff to a file."""
+    path = action.get("path", "")
+    diff = action.get("diff", "")
+    if not diff:
+        return {"ok": False, "error": "diff content required"}
+
+    ok, output = _apply_diff(mission.container_id, path, diff)
+    mission.log_event("APPLY_DIFF", f"path={path or 'multi'} ok={ok}")
+    result = {"ok": ok, "output": output}
+
+    # Auto syntax check if single file
+    if ok and path:
+        ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+        if ext in ("py", "js", "mjs", "ts", "json", "sh", "bash"):
+            check_ok, errors = _syntax_check(mission.container_id, path)
+            if not check_ok:
+                result["syntax_errors"] = errors
+    return result
+
+
+def _action_find_files(mission, action):
+    """Find files matching a glob pattern."""
+    pattern = action.get("pattern", "")
+    path = action.get("path", "/home/mission/")
+    if not pattern:
+        return {"ok": False, "error": "pattern required (e.g. '*.py', 'test_*.js')"}
+
+    files = _find_files(mission.container_id, pattern, path)
+    mission.log_event("FIND_FILES", f"pattern={pattern} path={path} found={len(files)}")
+    return {"ok": True, "files": files, "count": len(files)}
+
+
+def _action_file_info(mission, action):
+    """Get file metadata without reading content."""
+    path = action.get("path", "")
+    if not path:
+        return {"ok": False, "error": "path required"}
+
+    info = _file_info(mission.container_id, path)
+    if not info:
+        return {"ok": False, "error": f"file not found: {path}"}
+    return {"ok": True, **info}
+
+
+def _action_run_tool(mission, action):
+    """Run a previously created tool from the manifest."""
+    name = action.get("name", "")
+    args = action.get("args", [])
+    if not name:
+        return {"ok": False, "error": "tool name required"}
+
+    # Look up tool in manifest
+    tool = None
+    for t in mission.tools:
+        if t["name"] == name:
+            tool = t
+            break
+    if not tool:
+        available = [t["name"] for t in mission.tools]
+        return {"ok": False, "error": f"tool '{name}' not found. Available: {', '.join(available) or 'none'}"}
+
+    tool_path = f"/home/mission/tools/{name}"
+    # Build command with args
+    if isinstance(args, list):
+        arg_str = " ".join(shlex.quote(str(a)) for a in args)
+    elif isinstance(args, str):
+        arg_str = args
+    else:
+        arg_str = ""
+
+    cmd = f"{shlex.quote(tool_path)} {arg_str}"
+    timeout = min(int(action.get("timeout", 120)), _SHELL_TIMEOUT_DEFAULT)
+    out, err, rc = _container_exec(mission.container_id, cmd, timeout=timeout)
+
+    mission.log_event("RUN_TOOL", f"tool={name} args={arg_str[:100]} rc={rc}")
+
+    sr_ctx = _get_endpoint_ctx(mission.showrunner_node_id, mission.showrunner_model)
+    limits = _scaled_limits(sr_ctx)
+    return {
+        "ok": rc == 0,
+        "exit_code": rc,
+        "stdout": _smart_truncate(out, limits["smart_truncate_max"], is_own_content=True),
+        "stderr": err[:1000] if err else "",
+    }
+
+
+def _action_scaffold(mission, action):
+    """Create a project skeleton from a template."""
+    template = action.get("template", "")
+    base_path = action.get("path", "/home/mission/")
+    if not template:
+        available = ", ".join(sorted(_SCAFFOLD_TEMPLATES.keys()))
+        return {"ok": False, "error": f"template required. Available: {available}"}
+
+    ok, created, description = _scaffold_project(mission.container_id, template, base_path)
+    if not ok:
+        return {"ok": False, "error": description}  # description contains error message
+
+    mission.log_event("SCAFFOLD", f"template={template} files={len(created)} path={base_path}")
+    return {"ok": True, "template": template, "description": description,
+            "files_created": created, "count": len(created)}
+
+
+# ── Git checkpoint / restore / knowledge actions ─────────────────────────
+
+def _action_checkpoint(mission, action):
+    """Create a named git checkpoint (snapshot of all files)."""
+    name = action.get("name", "checkpoint")
+    description = action.get("description", "")
+    ok, result = _git_checkpoint(mission.container_id, name, description)
+    if not ok:
+        return {"ok": False, "error": f"checkpoint failed: {result}"}
+    mission.log_event("CHECKPOINT", f"name={name} hash={result} desc={description[:100]}")
+    return {"ok": True, "name": name, "hash": result}
+
+
+def _action_restore(mission, action):
+    """Restore workspace to a previous checkpoint."""
+    ref = action.get("ref", "") or action.get("hash", "")
+    if not ref:
+        return {"ok": False, "error": "ref (commit hash or reference) required"}
+    ok, output = _git_restore(mission.container_id, ref)
+    if not ok:
+        return {"ok": False, "error": f"restore failed: {output}"}
+    mission.log_event("RESTORE", f"ref={ref}")
+    # Invalidate workspace tree cache
+    mission._workspace_tree_at = 0
+    return {"ok": True, "ref": ref, "output": output}
+
+
+def _action_list_checkpoints(mission, action):
+    """List recent checkpoints."""
+    entries = _git_list_checkpoints(mission.container_id)
+    return {"ok": True, "checkpoints": entries, "count": len(entries)}
+
+
+def _action_diff_since(mission, action):
+    """Show changes since a checkpoint."""
+    ref = action.get("ref", "HEAD~1")
+    diff = _git_diff_since(mission.container_id, ref)
+    sr_ctx = _get_endpoint_ctx(mission.showrunner_node_id, mission.showrunner_model)
+    limits = _scaled_limits(sr_ctx)
+    truncated = _smart_truncate(diff, limits["read_file_max"], is_own_content=True) if diff else ""
+    return {"ok": True, "diff": truncated, "ref": ref}
+
+
+def _action_save_knowledge(mission, action):
+    """Save a key-value entry to the mission-wide knowledge base (visible to all agents)."""
+    key = action.get("key", "").strip()
+    value = action.get("value", "").strip()
+    if not key or not value:
+        return {"ok": False, "error": "key and value required"}
+    key = key[:100]
+    value = value[:3000]
+    if not hasattr(mission, "knowledge_base"):
+        mission.knowledge_base = {}
+    existing = key in mission.knowledge_base
+    mission.knowledge_base[key] = value
+    # Cap at 50 entries
+    if len(mission.knowledge_base) > 50:
+        oldest_key = next(iter(mission.knowledge_base))
+        del mission.knowledge_base[oldest_key]
+    mission.log_event("KNOWLEDGE", f"{'Updated' if existing else 'Added'}: {key}")
+    return {"ok": True, "action": "updated" if existing else "created", "key": key}
+
+
+def _action_advance_phase(mission, action):
+    """Advance the mission to the next phase (or a specific phase)."""
+    target = action.get("phase", "").strip()
+    current = getattr(mission, "mission_phase", "planning")
+    if target:
+        if target not in _MISSION_PHASES:
+            return {"ok": False, "error": f"Unknown phase '{target}'. Valid: {', '.join(_MISSION_PHASES)}"}
+        cur_idx = _MISSION_PHASES.index(current) if current in _MISSION_PHASES else 0
+        tgt_idx = _MISSION_PHASES.index(target)
+        if tgt_idx < cur_idx:
+            return {"ok": False, "error": f"Cannot go backward from '{current}' to '{target}'"}
+        new_phase = target
+    else:
+        cur_idx = _MISSION_PHASES.index(current) if current in _MISSION_PHASES else 0
+        if cur_idx >= len(_MISSION_PHASES) - 1:
+            return {"ok": False, "error": f"Already at final phase '{current}'"}
+        new_phase = _MISSION_PHASES[cur_idx + 1]
+    # Record phase transition
+    if not hasattr(mission, "phase_history"):
+        mission.phase_history = []
+    mission.phase_history.append({
+        "phase": current, "exited_at": time.time(),
+    })
+    mission.mission_phase = new_phase
+    mission.log_event("PHASE", f"Advanced: {current} → {new_phase}")
+    return {"ok": True, "previous": current, "current": new_phase}
+
+
 # ── Action registry — replaces 21-branch if/elif chain ──────────────────
 
 _ACTION_HANDLERS = {
@@ -611,6 +913,7 @@ _ACTION_HANDLERS = {
     "read_file":           _action_read_file,
     "search":              _action_search,
     "create_tool":         _action_create_tool,
+    "run_tool":            _action_run_tool,
     "status":              _action_status,
     "user_prompt":         _action_user_prompt,
     "user_message":        _action_user_message,
@@ -623,6 +926,17 @@ _ACTION_HANDLERS = {
     "batch_write":         _action_batch_write,
     "multi_patch":         _action_multi_patch,
     "save_note":           _action_save_note,
+    "replace_lines":       _action_replace_lines,
+    "apply_diff":          _action_apply_diff,
+    "find_files":          _action_find_files,
+    "file_info":           _action_file_info,
+    "scaffold":            _action_scaffold,
+    "checkpoint":          _action_checkpoint,
+    "restore":             _action_restore,
+    "list_checkpoints":    _action_list_checkpoints,
+    "diff_since":          _action_diff_since,
+    "save_knowledge":      _action_save_knowledge,
+    "advance_phase":       _action_advance_phase,
 }
 
 
@@ -638,23 +952,32 @@ def _execute_action(mission, action):
             state_json = _container_read_file(mission.container_id, "/home/mission/state.json") or "not found"
             ls_out, _, _ = _container_exec(mission.container_id, "ls -la /home/mission/", timeout=5)
             elapsed_min = (time.time() - mission.created_at) / 60
+
+            # Auto-run verify tool if it exists
+            verify_out, _, verify_rc = _container_exec(
+                mission.container_id,
+                "test -x /home/mission/tools/verify && /home/mission/tools/verify /home/mission 2>&1 || echo 'verify tool not available'",
+                timeout=60)
+            # Auto-run diff since init
+            diff_out = _git_diff_since(mission.container_id, "HEAD~5") if mission.container_id else ""
+
             return {
                 "ok": False,
                 "verification_required": True,
                 "message": (
                     f"⚠ VERIFICATION REQUIRED before completion (elapsed: {elapsed_min:.0f}min)\n\n"
-                    f"state.json:\n{state_json[:4000]}\n\n"
-                    f"Workspace:\n{ls_out}\n\n"
-                    "Before completing, you MUST verify:\n"
-                    "1. Re-read the original mission text — what was asked?\n"
+                    f"=== Automated Verification ===\n{verify_out[:3000]}\n\n"
+                    f"=== state.json ===\n{state_json[:3000]}\n\n"
+                    f"=== Workspace ===\n{ls_out}\n\n"
+                    f"=== Recent Changes ===\n{diff_out[:2000]}\n\n"
+                    "Before completing, verify:\n"
+                    "1. Check the automated verification results above — fix any FAIL items\n"
                     "2. Check EACH requirement in state.json — is it truly met?\n"
                     "3. Read your deliverable files — are they complete and thorough?\n"
-                    "4. For documents: 'wc -w' to verify word counts meet expectations\n"
-                    "5. For code: run it to verify it works\n"
-                    "6. Mark each requirement verified:true in state.json\n"
-                    "7. If anything is lacking, fix it NOW before completing\n\n"
-                    "If everything checks out, emit 'complete' again with an accurate summary "
-                    "including actual elapsed time."
+                    "4. For code: run it to verify it works\n"
+                    "5. Mark each requirement verified:true in state.json\n"
+                    "6. If anything is lacking, fix it NOW before completing\n\n"
+                    "If everything checks out, emit 'complete' again with an accurate summary."
                 ),
             }
         return _action_complete(mission, action)
