@@ -104,7 +104,7 @@ def drain(node_id):
 
 # ── Pending operations (server-side UI feedback) ────────────────────────
 
-_PENDING_HARD_CAP = 600  # 10 minutes — auto-expire regardless of state
+_PENDING_HARD_CAP = 300  # 5 minutes — auto-expire regardless of state
 
 # node_id → [{action, model_id, state, ts}]
 _pending_ops = {}
@@ -240,7 +240,7 @@ def broadcast_prompt(prompt_text):
         if n.get("status") == "dead":
             continue
         endpoints = [ep for ep in n.get("endpoints", [])
-                     if ep.get("status") == "ready" and ep.get("model")]
+                     if ep.get("status") in ("ready", "sleeping") and ep.get("model")]
         if endpoints:
             for ep in endpoints:
                 cmd = dict(base_cmd)
@@ -367,6 +367,7 @@ def plan_autoload(clean_slate=False, priorities=None):
     nodes = all_nodes()
     tight = is_tight_pack()
     steps = []
+    import catalog as catalog_mod
 
     for node in nodes:
         if node.get("status") == "dead":
@@ -376,7 +377,53 @@ def plan_autoload(clean_slate=False, priorities=None):
         gpu_metrics = (node.get("metrics") or {}).get("gpu", [])
         downloaded = node.get("downloaded") or []
 
-        if not gpus or not downloaded:
+        if not gpus:
+            continue
+
+        # If no models downloaded, pick best from catalog per GPU
+        if not downloaded:
+            has_unified = any(g.get("unified") for g in gpus)
+            agent_independent = node.get("agent_type") == "linux"
+            used_ids = set()
+            if has_unified or (len(gpus) > 1 and not agent_independent):
+                # Combined pool or unified: one download for the whole node
+                total_vram_mb = sum(g.get("vram_total_mb", 0) for g in gpus)
+                best = catalog_mod.best_model_for_vram(total_vram_mb, exclude_ids=used_ids)
+                if best:
+                    gpu_label = " + ".join(g.get("name", f"GPU {i}") for i, g in enumerate(gpus))
+                    steps.append({
+                        "node_id": node["node_id"],
+                        "hostname": node.get("hostname", ""),
+                        "gpu_idx": 0,
+                        "gpu_name": gpu_label,
+                        "vram_mb": total_vram_mb,
+                        "action": "download_and_load",
+                        "model_id": best["id"] + "/q4_k_m",
+                        "model_name": best.get("name", best["id"]),
+                        "file_size": best["file_size"],
+                    })
+            else:
+                # Independent GPUs: one download per GPU
+                for g_idx, gpu in enumerate(gpus):
+                    if gpu.get("device") == "cpu":
+                        continue
+                    vram_mb = gpu.get("vram_total_mb", 0)
+                    if vram_mb <= 0:
+                        continue
+                    best = catalog_mod.best_model_for_vram(vram_mb, exclude_ids=used_ids)
+                    if best:
+                        used_ids.add(best["id"])
+                        steps.append({
+                            "node_id": node["node_id"],
+                            "hostname": node.get("hostname", ""),
+                            "gpu_idx": g_idx,
+                            "gpu_name": gpu.get("name", "GPU " + str(g_idx)),
+                            "vram_mb": vram_mb,
+                            "action": "download_and_load",
+                            "model_id": best["id"] + "/q4_k_m",
+                            "model_name": best.get("name", best["id"]),
+                            "file_size": best["file_size"],
+                        })
             continue
 
         # Deduplicate downloaded list by model ID, keep largest variant
@@ -662,14 +709,16 @@ def execute_autoload(priorities=None):
     for host, host_steps in by_host.items():
         for s in host_steps:
             sz = s.get('file_size', 0) / 1e9
-            print(f"[{_ts()}] autoload    {host:20} ← {s['model_name']:30} ({sz:.1f}GB) on {s.get('gpu_name','?')}")
+            action_tag = '⬇+' if s.get('action') == 'download_and_load' else ''
+            print(f"[{_ts()}] autoload    {host:20} ← {action_tag}{s['model_name']:30} ({sz:.1f}GB) on {s.get('gpu_name','?')}")
 
     for step in plan:
+        action = step.get("action", "load")
         cmd = {
-            "action": "load",
+            "action": action,
             "model_id": step["model_id"],
             "gpu_idx": step.get("gpu_idx"),
-            "ttl": 600,
+            "ttl": 1800 if action == "download_and_load" else 600,
             "_autoload": True,  # marker for push.py to report back
         }
         # CPU device (Linux agent): send device="cpu" so agent routes correctly
@@ -677,7 +726,12 @@ def execute_autoload(priorities=None):
             cmd["device"] = "cpu"
         enqueue(step["node_id"], cmd)
 
-    print(f"[{_ts()}] autoload ── {len(plan)} load commands queued")
+    dl_count = sum(1 for s in plan if s.get("action") == "download_and_load")
+    load_count = len(plan) - dl_count
+    parts = []
+    if load_count: parts.append(f"{load_count} load")
+    if dl_count: parts.append(f"{dl_count} download+load")
+    print(f"[{_ts()}] autoload ── {' + '.join(parts)} commands queued")
     return plan, len(plan)
 
 

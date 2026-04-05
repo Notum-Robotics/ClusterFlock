@@ -316,7 +316,7 @@
             gpuCount += gpus.length;
             modelCount += eps.filter(function(e) { return e.status === 'ready'; }).length;
 
-            html += '<div class="node-card ' + st + '">';
+            html += '<div class="node-card ' + st + '" data-node-id="' + escHtml(n.node_id) + '">';
             html += '<span class="corner corner-tl">⌜</span>';
             html += '<span class="corner corner-tr">⌝</span>';
             html += '<span class="corner corner-bl">⌞</span>';
@@ -331,6 +331,12 @@
             html += '<span class="node-badge ' + st + '">' + st.toUpperCase() + '</span>';
             html += '<span class="node-badge agent-type">' + agentType + '</span>';
             if (n.conn_mode) html += '<span class="node-badge agent-type">' + n.conn_mode.toUpperCase() + '</span>';
+            if (n.auto_unload) html += '<span class="node-badge agent-type" style="color:#a078ff;border-color:rgba(160,120,255,.3)"><i class="ph ph-moon" style="margin-right:2px"></i>AUTO</span>';
+            if (n.conn_mode === 'local') {
+                html += '<span class="node-star" title="Local agent — always preferred" style="font-size:1.1em;margin-left:6px;color:var(--dim);opacity:.4"><i class="ph-fill ph-star"></i></span>';
+            } else {
+                html += '<span class="node-star" data-action="star" data-node-id="' + escHtml(n.node_id) + '" title="Prefer for showrunner" style="cursor:pointer;font-size:1.1em;margin-left:6px;color:' + (n.starred ? 'var(--amber)' : 'var(--dim)') + '"><i class="' + (n.starred ? 'ph-fill' : 'ph') + ' ph-star"></i></span>';
+            }
             if (n.agent_version) {
                 var vCls = n.version_ok === false ? ' danger' : '';
                 html += '<span class="node-badge agent-type' + vCls + '">' + escHtml(n.agent_version) + '</span>';
@@ -413,14 +419,16 @@
                 html += '<div class="endpoint-tags">';
                 eps.forEach(function(ep) {
                     var est = ep.status || 'unknown';
-                    var cls = est === 'ready' ? 'ready' : est === 'loading' ? 'loading' : est === 'error' ? 'error' : '';
+                    var cls = est === 'ready' ? 'ready' : est === 'loading' ? 'loading' : est === 'sleeping' ? 'sleeping' : est === 'error' ? 'error' : '';
                     var tps = ep.tokens_per_sec ? ' ' + Math.round(ep.tokens_per_sec) + ' t/s' : '';
                     var gpuLabel = ep.gpu != null ? ' GPU ' + ep.gpu : '';
                     html += '<span class="endpoint-tag ' + cls + '">';
                     if (ep.graylisted) html += '⚠️ ';
+                    if (est === 'sleeping') html += '<i class="ph ph-moon" style="margin-right:3px;opacity:.7"></i>';
                     html += escHtml(ep.model || '?');
                     if (gpuLabel) html += '<span class="ep-tps">' + gpuLabel + '</span>';
-                    if (tps) html += '<span class="ep-tps">' + tps + '</span>';
+                    if (est === 'sleeping') html += '<span class="ep-tps">ZZZ</span>';
+                    else if (tps) html += '<span class="ep-tps">' + tps + '</span>';
                     html += '</span>';
                 });
                 html += '</div>';
@@ -463,6 +471,38 @@
 
         grid.innerHTML = html;
 
+        // Click handlers for star toggle
+        grid.querySelectorAll('[data-action="star"]').forEach(function(el) {
+            el.addEventListener('click', function(e) {
+                e.stopPropagation();
+                var nodeId = el.dataset.nodeId;
+                if (!nodeId) return;
+                fetch(BASE + '/api/v1/nodes/' + encodeURIComponent(nodeId) + '/star', { method: 'POST' })
+                    .then(function(r) { return r.json(); })
+                    .then(function(d) {
+                        if (d.ok) {
+                            toast(d.starred ? 'NODE STARRED — PREFERRED FOR SHOWRUNNER' : 'STAR REMOVED', 'ok', 3000);
+                            poll();
+                        }
+                    })
+                    .catch(function() { toast('STAR TOGGLE FAILED', 'error'); });
+            });
+        });
+
+        // Click handler for node settings modal
+        grid.querySelectorAll('.node-card').forEach(function(card) {
+            card.style.cursor = 'pointer';
+            card.addEventListener('click', function(e) {
+                if (e.target.closest('[data-action]')) return;
+                var nodeId = card.dataset.nodeId;
+                if (!nodeId) return;
+                var nodeData = null;
+                nodes.forEach(function(n) { if (n.node_id === nodeId) nodeData = n; });
+                if (!nodeData) return;
+                openNodeModal(nodeData);
+            });
+        });
+
         // Apply nComp status pips to node cards
         if (typeof nComp !== 'undefined') {
             grid.querySelectorAll('.node-card').forEach(function(card) {
@@ -480,6 +520,77 @@
         var d = document.createElement('div');
         d.textContent = s;
         return d.innerHTML;
+    }
+
+    // ── Node Settings Modal ──
+    function openNodeModal(node) {
+        var nid = node.node_id;
+        var isLocal = node.conn_mode === 'local';
+        var autoUnload = !!node.auto_unload;
+
+        var body = '<div style="text-align:left;font-size:.6rem;line-height:1.6;">';
+        body += '<div style="margin-bottom:8px;color:var(--text-dim);">' + escHtml(nid) + '</div>';
+
+        // Auto-unload toggle
+        if (!isLocal) {
+            body += '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-top:1px solid var(--border);">';
+            body += '<div>';
+            body += '<div style="color:var(--text);">AUTO UNLOAD</div>';
+            body += '<div style="font-size:.45rem;color:var(--text-dim);">Unload model after 15 min idle, reload on demand</div>';
+            body += '</div>';
+            body += '<label class="cf-toggle" style="margin-left:12px;">';
+            body += '<input type="checkbox" id="nm-auto-unload"' + (autoUnload ? ' checked' : '') + '>';
+            body += '<span class="cf-toggle-slider"></span>';
+            body += '</label>';
+            body += '</div>';
+        }
+
+        // Agent info
+        if (node.agent_version) {
+            body += '<div style="padding:4px 0;border-top:1px solid var(--border);color:var(--text-dim);">';
+            body += 'Agent: v' + escHtml(node.agent_version);
+            if (node.agent_type) body += ' · ' + escHtml(node.agent_type.toUpperCase());
+            if (node.conn_mode) body += ' · ' + escHtml(node.conn_mode.toUpperCase());
+            body += '</div>';
+        }
+
+        body += '</div>';
+
+        nDynamic.showDialog({
+            title: escHtml(node.hostname || nid),
+            body: body,
+            alarm: false,
+            buttons: [
+                { label: 'DONE', value: 'close' }
+            ]
+        });
+
+        // Bind toggle immediately after dialog renders
+        setTimeout(function() {
+            var cb = document.getElementById('nm-auto-unload');
+            if (!cb) return;
+            cb.addEventListener('change', function() {
+                var val = cb.checked;
+                fetch(BASE + '/api/v1/nodes/' + encodeURIComponent(nid) + '/configure', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ auto_unload: val })
+                })
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    if (d.ok) {
+                        toast(val ? 'AUTO UNLOAD ENABLED' : 'AUTO UNLOAD DISABLED', 'ok', 3000);
+                    } else {
+                        toast('CONFIGURE FAILED: ' + (d.error || 'unknown'), 'error');
+                        cb.checked = !val;
+                    }
+                })
+                .catch(function() {
+                    toast('CONFIGURE FAILED', 'error');
+                    cb.checked = !val;
+                });
+            });
+        }, 50);
     }
 
     // ── Poll ──

@@ -37,6 +37,12 @@ _activity = {"state": "idle", "model": None, "detail": None, "started_at": None}
 # CPU/RAM inference — controlled from nCore UI, persisted in cluster.json
 _cpu_ram_enabled = False
 
+# Auto-unload: unload models after idle timeout, keep primed
+_auto_unload_enabled = False
+_AUTO_UNLOAD_SEC = 15 * 60  # 15 minutes
+_last_command_time = 0.0     # updated on every execute()
+_primed = {}                 # device → {model_id, model_path}
+
 
 def get_activity():
     """Return current activity state for heartbeat reporting."""
@@ -98,9 +104,12 @@ def all_loaded_models():
 
 def execute(cmd):
     """Dispatch a command dict. Returns result dict or None."""
+    global _last_command_time
+    _last_command_time = time.time()
     action = cmd.get("action")
 
     if action == "unload_all":
+        _primed.clear()
         _unload_all()
 
     elif action == "unload":
@@ -140,6 +149,8 @@ def execute(cmd):
     elif action == "benchmark":
         device, port = _find_model_device(cmd.get("model"))
         if not device:
+            device, port = _wake_primed(cmd.get("model"))
+        if not device:
             raise ValueError("no model loaded to benchmark")
         mid = _devices.get(device, {}).get("model_id", "")
         _set_activity("benchmarking", mid)
@@ -156,6 +167,9 @@ def execute(cmd):
         if not messages:
             raise ValueError("prompt requires 'messages'")
         device, port = _find_model_device(cmd.get("model"))
+        if not device:
+            # Check if model is primed (sleeping) — wake it
+            device, port = _wake_primed(cmd.get("model"))
         if not device:
             raise ValueError("no model loaded for prompt")
         kwargs = {}
@@ -386,9 +400,11 @@ def _detect_running_model():
 def _handle_configure(cmd):
     """Handle configuration commands from nCore.
 
-    Supported: cpu_ram_enabled (bool) — enable CPU/RAM as inference device.
+    Supported:
+      cpu_ram_enabled (bool) — enable CPU/RAM as inference device.
+      auto_unload (bool) — auto-unload models after idle timeout.
     """
-    global _cpu_ram_enabled
+    global _cpu_ram_enabled, _auto_unload_enabled
 
     if "cpu_ram_enabled" in cmd:
         new_val = bool(cmd["cpu_ram_enabled"])
@@ -405,16 +421,46 @@ def _handle_configure(cmd):
                 del _devices["cpu"]
                 print("[configure]   Stopped CPU server")
 
-    print(f"[configure] cpu_ram_enabled={_cpu_ram_enabled}")
+    if "auto_unload" in cmd:
+        new_val = bool(cmd["auto_unload"])
+        old_val = _auto_unload_enabled
+        _auto_unload_enabled = new_val
+        _save_config({"auto_unload": new_val})
+
+        if new_val and not old_val:
+            print("[configure] ✓ Auto-unload ENABLED (15 min idle)")
+        elif not new_val and old_val:
+            print("[configure] Auto-unload DISABLED")
+            # Wake any primed models back
+            for dev, pinfo in list(_primed.items()):
+                try:
+                    _load_model(pinfo["model_id"], device=dev,
+                                model_path=pinfo["model_path"])
+                    print(f"[configure]   Woke {pinfo['model_id']} on {dev}")
+                except Exception as e:
+                    print(f"[configure]   Failed to wake {pinfo['model_id']}: {e}")
+            _primed.clear()
+
+    settings = []
+    if "cpu_ram_enabled" in cmd:
+        settings.append(f"cpu_ram_enabled={_cpu_ram_enabled}")
+    if "auto_unload" in cmd:
+        settings.append(f"auto_unload={_auto_unload_enabled}")
+    if settings:
+        print(f"[configure] {', '.join(settings)}")
 
 
 def init_settings():
     """Load saved settings from cluster.json on startup."""
-    global _cpu_ram_enabled
+    global _cpu_ram_enabled, _auto_unload_enabled, _last_command_time
     cfg = _read_config()
     _cpu_ram_enabled = cfg.get("cpu_ram_enabled", False)
+    _auto_unload_enabled = cfg.get("auto_unload", False)
+    _last_command_time = time.time()  # reset on startup
     if _cpu_ram_enabled:
         print("[config] CPU/RAM device enabled (from saved config)")
+    if _auto_unload_enabled:
+        print("[config] Auto-unload enabled (15 min idle)")
 
 
 # ── Crashed-server auto-restart ──────────────────────────────────────────
@@ -511,3 +557,81 @@ def _resolve_model_path(model_id):
                 return m["path"]
 
     return None
+
+
+# ── Auto-unload (sleeping models) ───────────────────────────────────────
+
+def auto_unload_enabled():
+    """Whether auto-unload is currently enabled."""
+    return _auto_unload_enabled
+
+
+def primed_models():
+    """Return dict of device → {model_id, model_path} for sleeping models."""
+    return dict(_primed)
+
+
+def check_auto_unload():
+    """If auto-unload enabled and idle too long, unload models but keep primed.
+
+    Called every heartbeat. If no commands received for _AUTO_UNLOAD_SEC
+    and there are loaded models, unload them and store in _primed so they
+    can be transparently reloaded on next command.
+    """
+    if not _auto_unload_enabled:
+        return
+    if not _devices:
+        return
+    if time.time() - _last_command_time < _AUTO_UNLOAD_SEC:
+        return
+
+    for dev, info in list(_devices.items()):
+        model_id = info.get("model_id")
+        model_path = info.get("model_path")
+        if not model_id:
+            continue
+        # Store primed state before unloading
+        _primed[dev] = {"model_id": model_id, "model_path": model_path}
+        tag = "CPU/RAM" if dev == "cpu" else dev.upper()
+        print(f"\n[auto-unload] {model_id} on {tag} → sleeping "
+              f"(idle {_AUTO_UNLOAD_SEC // 60}min)")
+        stop_server(dev)
+
+    _devices.clear()
+
+
+def _wake_primed(model_hint=None):
+    """Reload a primed (sleeping) model. Returns (device, port) or (None, None).
+
+    If model_hint is given, tries to match it. Otherwise wakes the first
+    available primed model.
+    """
+    if not _primed:
+        return None, None
+
+    target_dev = None
+    if model_hint:
+        for dev, pinfo in _primed.items():
+            mid = pinfo["model_id"]
+            if model_hint == mid or model_hint in mid:
+                target_dev = dev
+                break
+    if not target_dev:
+        target_dev = next(iter(_primed))
+
+    pinfo = _primed.pop(target_dev)
+    model_id = pinfo["model_id"]
+    model_path = pinfo["model_path"]
+    tag = "CPU/RAM" if target_dev == "cpu" else target_dev.upper()
+    print(f"\n[wake] Reloading {model_id} on {tag} (was sleeping)...")
+    _set_activity("loading", model_id)
+    try:
+        _load_model(model_id, device=target_dev, model_path=model_path)
+        print(f"[wake] ✓ {model_id} ready on {tag}")
+        port = _port_for_device(target_dev)
+        return target_dev, port
+    except Exception as e:
+        print(f"[wake] ✗ Failed to reload {model_id}: {e}")
+        return None, None
+    finally:
+        _set_activity("idle")

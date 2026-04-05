@@ -73,22 +73,128 @@ def _find_link_dir():
     return None
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  Systemd service management (Linux only)
+# ═══════════════════════════════════════════════════════════════════════════
+
+_SERVICE_NAME = "clusterflock-agent"
+
+
+def _find_python():
+    """Find the best python3: prefer venv, then sys.executable."""
+    venv = Path(__file__).resolve().parent.parent / "venv" / "bin" / "python3"
+    if venv.is_file():
+        return str(venv)
+    return sys.executable
+
+
+def _service_unit():
+    """Generate systemd user service unit content."""
+    agent_dir = Path(__file__).resolve().parent
+    watchdog_py = agent_dir / "watchdog.py"
+    python = _find_python()
+    return f"""\
+[Unit]
+Description=ClusterFlock Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={agent_dir}
+ExecStart={python} -u {watchdog_py}
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
+"""
+
+
+def _install_service():
+    """Install and start a systemd user service for the agent."""
+    import platform as _plat
+    if _plat.system() != "Linux":
+        print("ERROR: --install-service is Linux-only (systemd)")
+        sys.exit(1)
+
+    unit_dir = Path.home() / ".config" / "systemd" / "user"
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    unit_file = unit_dir / f"{_SERVICE_NAME}.service"
+
+    unit_file.write_text(_service_unit())
+    print(f"[service] Created {unit_file}")
+
+    import subprocess
+    cmds = [
+        ["systemctl", "--user", "daemon-reload"],
+        ["systemctl", "--user", "enable", f"{_SERVICE_NAME}.service"],
+        ["loginctl", "enable-linger", os.environ.get("USER", "")],
+        ["systemctl", "--user", "start", f"{_SERVICE_NAME}.service"],
+    ]
+    for cmd in cmds:
+        label = " ".join(cmd)
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode == 0:
+            print(f"[service] ✓ {label}")
+        else:
+            err = r.stderr.strip() or r.stdout.strip()
+            print(f"[service] ✗ {label}: {err}")
+
+    print(f"\n[service] ✓ Installed and started {_SERVICE_NAME}")
+    print(f"  Status:  systemctl --user status {_SERVICE_NAME}")
+    print(f"  Logs:    journalctl --user -u {_SERVICE_NAME} -f")
+    print(f"  Remove:  python3 {Path(__file__).name} --uninstall-service")
+
+
+def _uninstall_service():
+    """Stop, disable, and remove the systemd user service."""
+    import platform as _plat
+    if _plat.system() != "Linux":
+        print("ERROR: --uninstall-service is Linux-only (systemd)")
+        sys.exit(1)
+
+    import subprocess
+    unit_file = Path.home() / ".config" / "systemd" / "user" / f"{_SERVICE_NAME}.service"
+
+    cmds = [
+        ["systemctl", "--user", "stop", f"{_SERVICE_NAME}.service"],
+        ["systemctl", "--user", "disable", f"{_SERVICE_NAME}.service"],
+    ]
+    for cmd in cmds:
+        subprocess.run(cmd, capture_output=True, text=True)
+
+    if unit_file.exists():
+        unit_file.unlink()
+        print(f"[service] Removed {unit_file}")
+
+    subprocess.run(["systemctl", "--user", "daemon-reload"],
+                   capture_output=True, text=True)
+    print(f"[service] ✓ {_SERVICE_NAME} uninstalled")
+
+
 def run_agent(config, port=1903):
     """Run the agent loop with platform-aware payload."""
     _acquire_pidlock()
     from hardware import profile, live_metrics, detect_platform, _mem_info
     from server import (active_devices, loaded_models as _loaded_models,
                         benchmark as _benchmark, _port_for_device,
-                        get_server_context)
+                        get_server_context, cleanup_orphaned_servers)
     from commands import (execute, all_loaded_models, cpu_ram_enabled,
-                          init_settings, get_activity, check_crashed_servers)
+                          auto_unload_enabled,
+                          init_settings, get_activity, check_crashed_servers,
+                          check_auto_unload, primed_models)
     from models_hf import get_bench, save_bench, local_models
     from version import __version__ as agent_version
 
     _bench_failed = set()
 
-    # Load saved settings (cpu_ram_enabled, etc.)
+    # Load saved settings (cpu_ram_enabled, auto_unload, etc.)
     init_settings()
+
+    # Kill any orphaned llama-server from previous unclean exit
+    cleanup_orphaned_servers()
 
     # Import link (shared transport layer)
     _link_dir = _find_link_dir()
@@ -109,16 +215,21 @@ def run_agent(config, port=1903):
     if plat == "mac":
         print(f"[agent] ✓ Apple Silicon detected (Metal GPU)")
     elif plat == "spark":
-        print(f"[agent] ✓ DGX Spark detected (GB10 Blackwell)")
+        print(f"[agent] ✓ DGX Spark detected (GB10 unified memory)")
     else:
-        n_gpus = len(hw.get("gpu", []))
-        print(f"[agent] Linux — {n_gpus} GPU(s) detected")
+        gpus = hw.get("gpu", [])
+        gpu_names = [g.get("name", "GPU") for g in gpus]
+        n_gpus = len(gpus)
+        print(f"[agent] Linux — {n_gpus} GPU(s): {', '.join(gpu_names)}")
     if cpu_ram_enabled():
         print(f"[agent] CPU/RAM device enabled")
 
     def payload():
         # Auto-restart any crashed llama-server instances
         check_crashed_servers()
+
+        # Auto-unload idle models if enabled
+        check_auto_unload()
 
         endpoints = []
         devices = active_devices()
@@ -163,6 +274,20 @@ def run_agent(config, port=1903):
                     "tokens_per_sec": get_bench(model_id, device=dev_id),
                 })
 
+        # Add primed (sleeping) models — unloaded but ready to wake
+        for dev_id, pinfo in primed_models().items():
+            gpu_idx = ("cpu" if dev_id == "cpu"
+                       else int(dev_id.replace("gpu", "")))
+            endpoints.append({
+                "id": pinfo["model_id"],
+                "model": pinfo["model_id"],
+                "status": "sleeping",
+                "gpu": gpu_idx,
+                "device": dev_id,
+                "context_length": 0,
+                "tokens_per_sec": get_bench(pinfo["model_id"], device=dev_id),
+            })
+
         # Build hardware profile, including CPU device if enabled
         hw_live = profile()
         gpu_list = list(hw_live.get("gpu", []))
@@ -195,6 +320,7 @@ def run_agent(config, port=1903):
             "agent_version": agent_version,
             "agent_type": agent_type,
             "cpu_ram_enabled": cpu_ram_enabled(),
+            "auto_unload": auto_unload_enabled(),
             "downloaded": dl,
             "hardware": hw_payload,
             "metrics": live_metrics(),
@@ -216,7 +342,18 @@ def main():
                         help="Agent listen port")
     parser.add_argument("--jobs", type=int, default=None,
                         help="Parallel build jobs")
+    parser.add_argument("--install-service", action="store_true",
+                        help="Install as systemd user service (Linux)")
+    parser.add_argument("--uninstall-service", action="store_true",
+                        help="Remove systemd user service (Linux)")
     args = parser.parse_args()
+
+    if args.install_service:
+        _install_service()
+        return
+    if args.uninstall_service:
+        _uninstall_service()
+        return
 
     if args.command == "build":
         from server import build

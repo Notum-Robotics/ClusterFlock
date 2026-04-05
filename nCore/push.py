@@ -57,6 +57,8 @@ def _poll(node_id, address, token):
         )
         # Track autoload progress from endpoints
         orch_mod.autoload_check_heartbeat(node_id, data.get("endpoints"))
+        # Reconcile pending load/unload ops (same as pull-mode heartbeat)
+        orch_mod.check_pending_ops(node_id, data.get("endpoints"))
     except Exception:
         pass  # node goes stale → dead via heartbeat timeout
 

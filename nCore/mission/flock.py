@@ -13,6 +13,7 @@ from .state import (
 )
 from .scoring import (
     _model_quality_tier,
+    _model_size_label,
     _get_endpoint_ctx,
 )
 from .showrunner import _ask_showrunner
@@ -61,8 +62,19 @@ def _build_flock_naming_prompt(mission, endpoints, reassign=False):
 
     lines.append("Endpoints to assign:")
     for ep in endpoints:
-        lines.append(f"  - model={ep['model']}, gpu={ep.get('gpu_name', '?')}, "
+        tier = _model_quality_tier(ep['model'])
+        size = _model_size_label(ep['model'])
+        tier_label = f"tier-3 large ({size})" if tier >= 3 else f"tier-2 medium ({size})" if tier >= 2 else f"tier-1 small ({size})"
+        lines.append(f"  - model={ep['model']}, {tier_label}, gpu={ep.get('gpu_name', '?')}, "
                      f"toks/s={ep.get('toks_per_sec', '?')}, ctx={ep.get('context_length', '?')}")
+    lines.append("")
+    lines.append("IMPORTANT GUIDANCE ON EXPERIENCE LEVELS:")
+    lines.append("- tier-1 small models (< 7B): assign 'junior' experience. They can only handle simple,")
+    lines.append("  concrete tasks — file ops, formatting, copying, single-step work.")
+    lines.append("- tier-2 medium models (7B-26B): assign 'intermediate' experience. Good for focused")
+    lines.append("  coding tasks, testing, implementation of well-defined features.")
+    lines.append("- tier-3 large models (27B+): assign 'senior' or 'expert' experience. Capable of")
+    lines.append("  complex reasoning, architecture decisions, debugging, and multi-step work.")
 
     lines.append("")
     lines.append("IMPORTANT: Respond with ONLY a raw JSON array. No wrapping object, no thinking, no explanation.")
@@ -88,7 +100,7 @@ def _update_flock(mission):
         if node.get("status") == "dead":
             continue
         for ep in node.get("endpoints", []):
-            if ep.get("status") != "ready" or not ep.get("model"):
+            if ep.get("status") not in ("ready", "sleeping") or not ep.get("model"):
                 continue
             # Skip the Showrunner
             if (node["node_id"] == mission.showrunner_node_id and

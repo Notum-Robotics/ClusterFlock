@@ -281,6 +281,7 @@ class Handler(BaseHTTPRequestHandler):
             agent_type=body.get("agent_type"),
             cpu_ram_enabled=body.get("cpu_ram_enabled"),
             activity=body.get("activity"),
+            auto_unload=body.get("auto_unload"),
         )
         # Track autoload progress from endpoints
         orch_mod.autoload_check_heartbeat(node_id, body.get("endpoints"))
@@ -302,7 +303,8 @@ class Handler(BaseHTTPRequestHandler):
                     downloaded=body.get("downloaded"),
                     agent_type=body.get("agent_type"),
                     cpu_ram_enabled=body.get("cpu_ram_enabled"),
-                    activity=body.get("activity"))
+                    activity=body.get("activity"),
+                    auto_unload=body.get("auto_unload"))
             _log(f"auto-readmit {node_id} ({hostname})")
 
         # Drain any pending orchestrator commands for this node
@@ -675,6 +677,8 @@ class Handler(BaseHTTPRequestHandler):
         cmd = {"action": "configure"}
         if "cpu_ram_enabled" in body:
             cmd["cpu_ram_enabled"] = bool(body["cpu_ram_enabled"])
+        if "auto_unload" in body:
+            cmd["auto_unload"] = bool(body["auto_unload"])
 
         address = node.get("address")
         token = node.get("orchestrator_token")

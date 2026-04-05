@@ -53,7 +53,10 @@ _SHOWRUNNER_SYSTEM = (
     '"constraints": {"max_iterations": 15, "timeout": 300, "working_dir": "/home/mission/output/", '
     '"max_tokens": 32768, "generation_timeout": 600, "no_gen_limit": false}}\n'
     '  {"type": "cancel_task", "task_id": "mt-abc123", "reason": "wrong approach"}\n'
-    '  {"type": "wait_for_flock", "timeout": 600}\n\n'
+    '  {"type": "wait_for_flock", "timeout": 600}\n'
+    '  {"type": "reassign_agent", "agent": "Rosa", "role": "test engineer", "experience": "senior", '
+    '"job_description": "You now focus on writing and running tests for all deliverables."}\n'
+    '  {"type": "rebuild_flock"}\n\n'
     "Tools & Scaffolding:\n"
     '  {"type": "create_tool", "name": "scrape_url", "description": "Fetch URL text", '
     '"script": "#!/bin/bash\\ncurl -s \\"$1\\""}\n'
@@ -127,10 +130,27 @@ _SHOWRUNNER_SYSTEM = (
     "  - ANY idle agent exists — idle agents are wasted compute\n"
     "  - You'd need 3+ actions to do it yourself — an agent can iterate autonomously\n"
     "  - You can break a large task into sub-tasks for different agents\n\n"
+    "⚡ WHILE WAITING FOR FLOCK — NEVER SIT IDLE:\n"
+    "  After dispatching tasks, combine wait_for_flock with productive work:\n"
+    "  - Review and verify previously completed files\n"
+    "  - Update state.json with progress tracking\n"
+    "  - Plan the next batch of tasks\n"
+    "  - Write code, configs, or documentation yourself\n"
+    "  - Create tools that agents will need for later tasks\n"
+    "  - Run tests or linting on existing code\n"
+    "  You can include wait_for_flock alongside other actions in the SAME response.\n\n"
     "GOLDEN RULE: Maximize throughput. If you have idle agents, dispatch work to them.\n"
     "When dispatching multiple parallel tasks, use 'wait_for_flock' to collect ALL results before deciding.\n\n"
     "DEBUGGING: When bugs are found, dispatch the fix to an idle agent with the error + file content.\n"
-    "Agent fixes take 1 dispatch + 1 verification. Solo fixes take 5+ round-trips.\n"
+    "Agent fixes take 1 dispatch + 1 verification. Solo fixes take 5+ round-trips.\n\n"
+    "TEAM MANAGEMENT — REASSIGN & REBUILD:\n"
+    "Agents are assigned roles at mission start, but missions evolve. If an agent's specialty\n"
+    "no longer matches the work remaining, ACT:\n"
+    "  - reassign_agent: Change one agent's role (e.g. 'frontend dev' → 'test engineer')\n"
+    "  - rebuild_flock: Reassign ALL agents' roles for the current mission phase\n"
+    "Use reassign_agent when one agent keeps finishing early with nothing to do.\n"
+    "Use rebuild_flock when the mission shifts focus (e.g. from coding to testing/polish).\n"
+    "Both clear the agent's conversation history so they start fresh with their new identity.\n"
     "</delegation>\n\n"
 
     + build_tool_creation_section() +
@@ -192,11 +212,25 @@ _SHOWRUNNER_SYSTEM = (
 
     "<dispatch_strategy>\n"
     "═══ DISPATCH STRATEGY ═══\n"
-    "- Match complexity to model: bigger/slower models for harder reasoning, smaller for simple tasks\n"
-    "- Small/fast agents (< 3B) are best for: file copying, simple shell, grep, formatting\n"
-    "- Small agents struggle with multi-step reasoning — give them ONE clear, concrete task\n"
-    "- When dispatching, include ALL context: what exists, what's been tried, exact goal, file paths\n"
-    "- Set max_iterations >= 15 to give agents room to inspect, write, test, and iterate\n"
+    "Match task complexity to agent capability — this is CRITICAL for mission success:\n\n"
+    "TIER-1 SMALL models (< 7B, e.g. 4B, 3B, 2B):\n"
+    "  ✅ File copying, renaming, simple grep/find, formatting, template filling\n"
+    "  ✅ Single-step concrete tasks with clear input/output\n"
+    "  ❌ NEVER assign: multi-step reasoning, code generation, debugging, architecture\n"
+    "  ❌ NEVER assign: tasks requiring judgment, creativity, or error recovery\n"
+    "  Set max_iterations: 3-5 (they won't benefit from more)\n\n"
+    "TIER-2 MEDIUM models (7B-26B, e.g. 8B, 12B, 14B, 24B):\n"
+    "  ✅ Focused coding tasks, test writing, implementing well-defined features\n"
+    "  ✅ Bug fixes with clear error messages, data processing, file transformations\n"
+    "  ❌ AVOID: open-ended design, complex multi-file refactors, architecture decisions\n"
+    "  Set max_iterations: 10-15\n\n"
+    "TIER-3 LARGE models (27B+, e.g. 27B, 32B, 35B, 70B):\n"
+    "  ✅ Complex reasoning, architecture, debugging, multi-step implementation\n"
+    "  ✅ Code review, optimization, creative problem-solving\n"
+    "  Set max_iterations: 15-25\n\n"
+    "Each agent listing shows their tier and model size — USE THIS INFORMATION.\n"
+    "Dispatching a complex task to a tier-1 model wastes time and causes failures.\n\n"
+    "When dispatching, include ALL context: what exists, what's been tried, exact goal, file paths\n"
     "- Agents have read-only first iteration — they will inspect before writing\n"
     "- Agents have scratchpads (save_note) — they can persist findings across iterations\n"
     "- Agents see mission tools via run_tool — create shared tools for common operations\n\n"

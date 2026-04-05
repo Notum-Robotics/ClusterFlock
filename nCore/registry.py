@@ -29,7 +29,8 @@ def get_node(node_id):
 
 
 def register(node_id, hostname, hardware=None, token=None,
-             conn_mode="pull", address=None, orchestrator_token=None):
+             conn_mode="pull", address=None, orchestrator_token=None,
+             agent_version=None):
     """Add or update a node in the registry. Returns the node dict."""
     with _lock:
         now = time.time()
@@ -48,13 +49,15 @@ def register(node_id, hostname, hardware=None, token=None,
         if conn_mode == "push":
             node["address"] = address
             node["orchestrator_token"] = orchestrator_token
+        if agent_version is not None:
+            node["agent_version"] = agent_version
         _nodes[node_id] = node
         return _enrich(dict(node), now)
 
 
 def heartbeat(node_id, hostname, metrics=None, endpoints=None, hardware=None,
               agent_version=None, downloaded=None, agent_type=None,
-              cpu_ram_enabled=None, activity=None):
+              cpu_ram_enabled=None, activity=None, auto_unload=None):
     """Process a heartbeat from a node. Returns False if node unknown."""
     with _lock:
         node = _nodes.get(node_id)
@@ -79,6 +82,8 @@ def heartbeat(node_id, hostname, metrics=None, endpoints=None, hardware=None,
             node["cpu_ram_enabled"] = cpu_ram_enabled
         if activity is not None:
             node["activity"] = activity
+        if auto_unload is not None:
+            node["auto_unload"] = auto_unload
         return True
 
 

@@ -165,8 +165,15 @@ def start_agent(agent_type=None, ncore_port=1903):
     token = gen_token(nid, label="local-agent")
     local_secret = secrets.token_urlsafe(32)
 
+    # Read agent version for immediate registration
+    agent_ver = None
+    for a in available_agents():
+        if a.get("version"):
+            agent_ver = a["version"]
+            break
+
     # Pre-register in the registry
-    reg_node(nid, hostname, conn_mode="local", token=token)
+    reg_node(nid, hostname, conn_mode="local", token=token, agent_version=agent_ver)
 
     # Build environment for the subprocess
     env = os.environ.copy()

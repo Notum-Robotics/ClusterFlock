@@ -365,6 +365,7 @@
 
 .endpoint-tag.ready  { border-color: rgba(0,229,255, 0.20); color: var(--accent); }
 .endpoint-tag.loading { border-color: rgba(255,179,0, 0.20); color: var(--amber); }
+.endpoint-tag.sleeping { border-color: rgba(160,120,255, 0.20); color: #a078ff; opacity: .7; }
 .endpoint-tag.error  { border-color: rgba(255,51,51, 0.20); color: var(--danger); }
 
 .endpoint-tag .ep-tps {
@@ -577,6 +578,9 @@
     background: rgba(244,244,244, 0.07);
     border-color: var(--accent);
 }
+.hf-model-row.too-large {
+    opacity: .35;
+}
 .hf-model-name {
     font-family: var(--font-data);
     font-size: .6rem;
@@ -588,6 +592,50 @@
     font-size: .5rem;
     color: rgba(244,244,244, 0.4);
     letter-spacing: .02em;
+}
+.hf-model-meta .fits { color: var(--accent); }
+.hf-model-meta .no-fit { color: var(--danger, #ff5555); }
+
+/* HF Catalog list container */
+.hf-catalog-list {
+    max-height: 260px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 4px;
+}
+.hf-catalog-list::-webkit-scrollbar { width: 4px; }
+.hf-catalog-list::-webkit-scrollbar-thumb { background: rgba(244,244,244,.15); border-radius: 2px; }
+
+/* Mode tabs */
+.hf-mode-tabs {
+    display: flex;
+    gap: 0;
+    margin-bottom: 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+.hf-mode-tab {
+    flex: 1;
+    background: transparent;
+    border: none;
+    padding: 6px 12px;
+    font-family: var(--font-label);
+    font-size: .55rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background .15s, color .15s;
+}
+.hf-mode-tab:hover { background: rgba(244,244,244, 0.04); }
+.hf-mode-tab.active {
+    background: rgba(0,229,255, 0.08);
+    color: var(--accent);
 }
 
 .cf-input {
@@ -1018,6 +1066,44 @@
 }
 .cf-footer-sep {
     opacity: 0.4;
+}
+
+/* ---------- Toggle Switch ---------- */
+.cf-toggle {
+    position: relative;
+    display: inline-block;
+    width: 32px;
+    height: 18px;
+    flex-shrink: 0;
+}
+.cf-toggle input { opacity: 0; width: 0; height: 0; }
+.cf-toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    inset: 0;
+    background: var(--bg-card, #1a1a2e);
+    border: 1px solid var(--border, #333);
+    border-radius: 18px;
+    transition: background .2s;
+}
+.cf-toggle-slider::before {
+    content: '';
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    left: 2px;
+    bottom: 2px;
+    background: var(--text-dim, #888);
+    border-radius: 50%;
+    transition: transform .2s, background .2s;
+}
+.cf-toggle input:checked + .cf-toggle-slider {
+    background: rgba(0,229,255,.15);
+    border-color: var(--accent, #00e5ff);
+}
+.cf-toggle input:checked + .cf-toggle-slider::before {
+    transform: translateX(14px);
+    background: var(--accent, #00e5ff);
 }
 
 /* ---------- Reduced Motion ---------- */

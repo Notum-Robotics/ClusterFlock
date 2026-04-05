@@ -33,7 +33,7 @@ ClusterFlock unifies mixed GPU hardware into a single AI backend. One **nCore** 
                     └──────┬──────┬──────┬─────┬──────┘
                            │      │      │     │
               ┌────────────┘      │      │     └────────────┐
-              │                   │      │                   │
+              │                   │      │                  │
         agent_spark          agent_linux  agent_mac      agent_lms
         (DGX/GB10)           (amd64+CUDA) (Apple Silicon) (LM Studio)
         llama.cpp+CUDA       llama.cpp    llama.cpp+Metal  LM Studio CLI

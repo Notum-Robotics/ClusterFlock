@@ -146,6 +146,44 @@ def models_for_vram(vram_mb):
     return [m for m in get_catalog() if m["total_mem"] <= budget]
 
 
+def best_model_for_vram(vram_mb, exclude_ids=None):
+    """Return the single best (largest params) builtin catalog model that fits.
+
+    Prefers builtin catalog entries over HF-only entries.  Skips graylisted
+    and non-text models.  Returns a catalog entry dict or None.
+    """
+    budget_bytes = int(vram_mb * (1024 ** 2) * 0.85)
+    exclude = set(exclude_ids or [])
+    builtin_ids = set()
+    try:
+        raw = json.loads(_CATALOG_JSON.read_text())
+        builtin_ids = {m["id"] for m in raw}
+    except Exception:
+        pass
+
+    candidates = []
+    for m in get_catalog():
+        mid = m["id"]
+        if mid in exclude:
+            continue
+        if is_graylisted(mid):
+            continue
+        if _is_non_text_model(mid) or _is_non_text_model(m.get("name", "")):
+            continue
+        if m["file_size"] <= 0:
+            continue
+        cost = int(m["file_size"] * 1.2)
+        if cost > budget_bytes:
+            continue
+        is_builtin = mid in builtin_ids
+        candidates.append((is_builtin, m["params_b"], m))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    return candidates[0][2]
+
+
 # ── Model graylist ───────────────────────────────────────────────────────
 
 _graylist: dict = {}  # model_id → {reason, added_at, count}

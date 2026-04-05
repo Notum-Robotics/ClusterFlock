@@ -102,7 +102,7 @@ build_variant() {
             DEST="$BUILD_ROOT/cuda13"
             mkdir -p "$DEST"
             local CUDA_PATH=""
-            for p in /usr/local/cuda-13.0 /usr/local/cuda-13 /usr/local/cuda; do
+            for p in /usr/local/cuda-13.0 /usr/local/cuda-13 /usr/local/cuda /opt/cuda; do
                 if [ -d "$p" ] && "$p/bin/nvcc" --version 2>/dev/null | grep -q "release 13\|V13"; then
                     CUDA_PATH="$p"; break
                 fi

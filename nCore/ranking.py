@@ -71,7 +71,8 @@ def collect_ready_endpoints():
         if node.get("status") == "dead":
             continue
         for ep in node.get("endpoints", []):
-            if ep.get("status") != "ready" or not ep.get("model"):
+            est = ep.get("status")
+            if est not in ("ready", "sleeping") or not ep.get("model"):
                 continue
             if is_vl_model(ep["model"]):
                 continue
@@ -79,6 +80,7 @@ def collect_ready_endpoints():
                 "node_id": node["node_id"],
                 "hostname": node.get("hostname", ""),
                 "model": ep["model"],
+                "status": est,
                 "context_length": ep.get("context_length") or 4096,
                 "toks_per_sec": ep.get("tokens_per_sec") or ep.get("toks_per_sec") or 0,
                 "graylisted": is_graylisted(ep["model"]),
@@ -107,7 +109,7 @@ def elect_showrunner(exclude_node_id=None, min_tier=2):
             if only_starred and node["node_id"] not in stars:
                 continue
             for ep in node.get("endpoints", []):
-                if ep.get("status") != "ready" or not ep.get("model"):
+                if ep.get("status") not in ("ready", "sleeping") or not ep.get("model"):
                     continue
                 if is_vl_model(ep["model"]):
                     continue

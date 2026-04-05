@@ -39,3 +39,4 @@ models/
 _ABOUT.md
 _submit_mission.py
 _monitor_mission.py
+_spark_monitor.sh

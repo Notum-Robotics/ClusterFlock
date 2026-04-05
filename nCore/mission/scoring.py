@@ -17,6 +17,18 @@ from .state import (
 
 # ── Model quality scoring ────────────────────────────────────────────────
 
+def _model_size_label(model_name):
+    """Extract a human-readable size label like '27B' from a model name.
+    Returns '' if no size pattern is found."""
+    if not model_name:
+        return ""
+    m = re.search(r'(\d+\.?\d*)\s*b(?:[^a-z]|$)', model_name.lower())
+    if m:
+        raw = float(m.group(1))
+        return f"{int(raw)}B" if raw == int(raw) else f"{raw}B"
+    return ""
+
+
 def _model_quality_tier(model_name):
     """Return 1-3 quality rating based on model size."""
     if not model_name:

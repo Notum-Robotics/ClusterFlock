@@ -120,30 +120,61 @@
 
 <!-- HuggingFace Import Overlay -->
 <div class="cf-overlay" id="hf-overlay">
-    <div class="cf-overlay-panel">
+    <div class="cf-overlay-panel" style="max-width:560px;">
         <span class="corner corner-tl">⌜</span>
         <span class="corner corner-tr">⌝</span>
         <span class="corner corner-bl">⌞</span>
         <span class="corner corner-br">⌟</span>
         <div class="cf-overlay-title">IMPORT FROM HUGGINGFACE</div>
-        <input class="cf-input" id="hf-url" placeholder="HuggingFace URL or org/model">
+
+        <!-- Mode tabs -->
+        <div class="hf-mode-tabs">
+            <button class="hf-mode-tab active" data-mode="catalog"><i class="ph ph-list-magnifying-glass"></i> CATALOG</button>
+            <button class="hf-mode-tab" data-mode="url"><i class="ph ph-link"></i> URL</button>
+        </div>
+
+        <!-- Shared: agent + GPU selectors -->
         <select class="cf-select" id="hf-agent" style="width:100%;">
             <option value="">Select target agent...</option>
-        </select>
-        <select class="cf-select" id="hf-quant" style="width:100%;">
-            <option value="Q4_K_M">Q4_K_M (default)</option>
-            <option value="Q5_K_M">Q5_K_M</option>
-            <option value="Q6_K">Q6_K</option>
-            <option value="Q8_0">Q8_0</option>
-            <option value="IQ4_XS">IQ4_XS</option>
         </select>
         <select class="cf-select" id="hf-gpu" style="width:100%;">
             <option value="">GPU: auto</option>
         </select>
-        <div class="btn-row">
-            <button class="cf-btn primary" id="hf-btn-go" data-flash data-lockout="2000">DOWNLOAD & LOAD</button>
-            <button class="cf-btn" id="hf-btn-cancel" data-flash>CANCEL</button>
+
+        <!-- CATALOG mode -->
+        <div id="hf-catalog-mode">
+            <input class="cf-input" id="hf-search" placeholder="Search models..." style="margin-bottom:4px;">
+            <div id="hf-catalog-info" class="status-val" style="font-size:.45rem;margin-bottom:4px;"></div>
+            <div id="hf-catalog-list" class="hf-catalog-list"></div>
+            <select class="cf-select" id="hf-cat-quant" style="width:100%;margin-top:4px;">
+                <option value="Q4_K_M">Q4_K_M (default)</option>
+                <option value="Q5_K_M">Q5_K_M</option>
+                <option value="Q6_K">Q6_K</option>
+                <option value="Q8_0">Q8_0</option>
+                <option value="IQ4_XS">IQ4_XS</option>
+            </select>
+            <div class="btn-row" style="margin-top:4px;">
+                <button class="cf-btn primary" id="hf-btn-catalog-go" data-flash data-lockout="2000" disabled>DOWNLOAD & LOAD</button>
+                <button class="cf-btn" id="hf-btn-catalog-cancel" data-flash>CANCEL</button>
+            </div>
         </div>
+
+        <!-- URL mode -->
+        <div id="hf-url-mode" style="display:none;">
+            <input class="cf-input" id="hf-url" placeholder="HuggingFace URL or org/model">
+            <select class="cf-select" id="hf-quant" style="width:100%;">
+                <option value="Q4_K_M">Q4_K_M (default)</option>
+                <option value="Q5_K_M">Q5_K_M</option>
+                <option value="Q6_K">Q6_K</option>
+                <option value="Q8_0">Q8_0</option>
+                <option value="IQ4_XS">IQ4_XS</option>
+            </select>
+            <div class="btn-row" style="margin-top:4px;">
+                <button class="cf-btn primary" id="hf-btn-go" data-flash data-lockout="2000">DOWNLOAD & LOAD</button>
+                <button class="cf-btn" id="hf-btn-cancel" data-flash>CANCEL</button>
+            </div>
+        </div>
+
         <div id="hf-status" class="status-val"></div>
         <div id="hf-progress" style="display:none;">
             <div class="metric-row">
@@ -184,9 +215,13 @@
 
         <div id="no-configure" style="margin-top:8px;display:none;">
             <div class="cf-section-label" style="font-size:.55rem;">CONFIGURE</div>
-            <div class="status-row">
+            <div class="status-row" id="no-cfg-cpuram" style="display:none;">
                 <span class="status-label">CPU/RAM DEVICE</span>
                 <button class="cf-btn" id="no-btn-cpuram" data-flash data-lockout="800" style="font-size:.55rem;padding:2px 8px;">ENABLE</button>
+            </div>
+            <div class="status-row">
+                <span class="status-label">AUTO UNLOAD</span>
+                <button class="cf-btn" id="no-btn-autounload" data-flash data-lockout="800" style="font-size:.55rem;padding:2px 8px;">ENABLE</button>
             </div>
         </div>
 
@@ -342,6 +377,7 @@
             html += '<div class="node-badges">';
             html += '<span class="node-badge ' + st + '">' + st.toUpperCase() + '</span>';
             html += '<span class="node-badge agent-type">' + at + '</span>';
+            if (n.auto_unload) html += '<span class="node-badge agent-type" style="color:#a078ff;border-color:rgba(160,120,255,.3)"><i class="ph ph-moon" style="margin-right:2px"></i>AUTO</span>';
             if (n.conn_mode === 'local') {
                 html += '<span class="node-star" title="Local agent — always preferred" style="font-size:1.1em;margin-left:6px;color:var(--dim);opacity:.4"><i class="ph-fill ph-star"></i></span>';
             } else {
@@ -353,12 +389,21 @@
             if (eps.length) {
                 html += '<div class="endpoint-tags">';
                 eps.forEach(function(ep) {
-                    var cls = ep.status === 'ready' ? 'ready' : ep.status === 'loading' ? 'loading' : ep.status === 'error' ? 'error' : '';
+                    var est = ep.status || '';
+                    var cls = est === 'ready' ? 'ready' : est === 'loading' ? 'loading' : est === 'sleeping' ? 'sleeping' : est === 'error' ? 'error' : '';
                     var tps = ep.tokens_per_sec ? Math.round(ep.tokens_per_sec) + ' t/s' : '';
-                    html += '<span class="endpoint-tag ' + cls + '" data-action="unload" data-model="' + escHtml(ep.model) + '" data-flash style="cursor:pointer;">';
-                    html += escHtml(ep.model || '?');
-                    if (tps) html += ' <span class="ep-tps">' + tps + '</span>';
-                    html += '</span>';
+                    if (est === 'sleeping') {
+                        html += '<span class="endpoint-tag ' + cls + '">';
+                        html += '<i class="ph ph-moon" style="margin-right:3px;opacity:.7"></i>';
+                        html += escHtml(ep.model || '?');
+                        html += ' <span class="ep-tps">ZZZ</span>';
+                        html += '</span>';
+                    } else {
+                        html += '<span class="endpoint-tag ' + cls + '" data-action="unload" data-model="' + escHtml(ep.model) + '" data-flash style="cursor:pointer;">';
+                        html += escHtml(ep.model || '?');
+                        if (tps) html += ' <span class="ep-tps">' + tps + '</span>';
+                        html += '</span>';
+                    }
                 });
                 html += '</div>';
             }
@@ -612,12 +657,23 @@
         // Show/hide load section based on whether there are downloads
         document.getElementById('no-load-section').style.display = nodeDownloads.length ? '' : 'none';
 
-        // CPU/RAM configure — only for linux agents
+        // Configure section — visible for all non-local agents
         var cfgSection = document.getElementById('no-configure');
-        if (node.agent_type === 'linux') {
+        var isLocal = node.conn_mode === 'local';
+        if (!isLocal) {
             cfgSection.style.display = '';
-            var cpuBtn = document.getElementById('no-btn-cpuram');
-            cpuBtn.textContent = node.cpu_ram_enabled ? 'DISABLE' : 'ENABLE';
+            // CPU/RAM — only for linux agents
+            var cpuRow = document.getElementById('no-cfg-cpuram');
+            if (node.agent_type === 'linux') {
+                cpuRow.style.display = '';
+                var cpuBtn = document.getElementById('no-btn-cpuram');
+                cpuBtn.textContent = node.cpu_ram_enabled ? 'DISABLE' : 'ENABLE';
+            } else {
+                cpuRow.style.display = 'none';
+            }
+            // Auto unload
+            var auBtn = document.getElementById('no-btn-autounload');
+            auBtn.textContent = node.auto_unload ? 'DISABLE' : 'ENABLE';
         } else {
             cfgSection.style.display = 'none';
         }
@@ -636,6 +692,117 @@
     document.getElementById('an-btn-cancel').addEventListener('click', function() {
         closeOverlay('addnode-overlay');
     });
+    var catalogCache = [];
+    var catalogSelectedId = null;
+    var catalogFetched = false;
+    var hfMode = 'catalog'; // 'catalog' or 'url'
+
+    function setHfMode(mode) {
+        hfMode = mode;
+        document.querySelectorAll('.hf-mode-tab').forEach(function(t) {
+            t.classList.toggle('active', t.dataset.mode === mode);
+        });
+        document.getElementById('hf-catalog-mode').style.display = mode === 'catalog' ? '' : 'none';
+        document.getElementById('hf-url-mode').style.display = mode === 'url' ? '' : 'none';
+    }
+    document.querySelectorAll('.hf-mode-tab').forEach(function(t) {
+        t.addEventListener('click', function() { setHfMode(t.dataset.mode); });
+    });
+
+    function fetchCatalog() {
+        if (catalogFetched) return;
+        fetch(BASE + '/api/v1/catalog')
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                catalogCache = (d.models || []).filter(function(m) { return m.file_size > 0; });
+                catalogCache.sort(function(a, b) { return b.params_b - a.params_b; });
+                catalogFetched = true;
+                renderCatalog();
+            })
+            .catch(function() {
+                document.getElementById('hf-catalog-info').textContent = '[ CATALOG FETCH FAILED ]';
+            });
+    }
+
+    function getSelectedGpuVram() {
+        var nid = document.getElementById('hf-agent').value;
+        var gpuVal = document.getElementById('hf-gpu').value;
+        var node = nodesCache.find(function(n) { return n.node_id === nid; });
+        if (!node || !node.hardware || !node.hardware.gpu) return 0;
+        var gpus = node.hardware.gpu;
+        var gpuMetrics = (node.metrics && node.metrics.gpu) || [];
+        if (gpuVal !== '') {
+            var idx = parseInt(gpuVal, 10);
+            var gm = gpuMetrics[idx];
+            if (gm && gm.vram_free_mb != null) return gm.vram_free_mb;
+            return gpus[idx] ? (gpus[idx].vram_total_mb || 0) : 0;
+        }
+        // Auto: return smallest GPU free VRAM (conservative)
+        var minVram = Infinity;
+        gpus.forEach(function(g, i) {
+            var gm = gpuMetrics[i];
+            var vf = gm && gm.vram_free_mb != null ? gm.vram_free_mb : (g.vram_total_mb || 0);
+            if (vf < minVram) minVram = vf;
+        });
+        return minVram === Infinity ? 0 : minVram;
+    }
+
+    function renderCatalog() {
+        var list = document.getElementById('hf-catalog-list');
+        var info = document.getElementById('hf-catalog-info');
+        var search = (document.getElementById('hf-search').value || '').toLowerCase().trim();
+        var vramMb = getSelectedGpuVram();
+        var vramBytes = vramMb * 1024 * 1024;
+        var budget = vramBytes * 0.85;
+
+        var filtered = catalogCache.filter(function(m) {
+            if (!search) return true;
+            var haystack = ((m.name || '') + ' ' + (m.id || '')).toLowerCase();
+            return search.split(/\s+/).every(function(w) { return haystack.indexOf(w) >= 0; });
+        });
+
+        var fitsCount = 0;
+        var html = '';
+        filtered.forEach(function(m) {
+            var sizeGb = (m.file_size / (1024*1024*1024)).toFixed(1);
+            var fits = budget > 0 && m.file_size > 0 ? m.file_size * 1.2 <= budget : true;
+            if (fits && m.file_size > 0) fitsCount++;
+            var sel = catalogSelectedId === m.id ? ' selected' : '';
+            var tooLarge = (budget > 0 && !fits) ? ' too-large' : '';
+            html += '<div class="hf-model-row' + sel + tooLarge + '" data-model-id="' + escHtml(m.id) + '">';
+            html += '<div class="hf-model-name">' + escHtml(m.name || m.id) + '</div>';
+            html += '<div class="hf-model-meta">';
+            html += escHtml(m.id) + ' · ' + sizeGb + ' GB';
+            if (m.params_b) html += ' · ' + m.params_b + 'B params';
+            if (budget > 0 && m.file_size > 0) {
+                html += fits ? ' <span class="fits">✓ FITS</span>' : ' <span class="no-fit">✗ TOO LARGE</span>';
+            }
+            html += '</div></div>';
+        });
+
+        list.innerHTML = html || '<div class="status-val" style="padding:12px 0;">[ NO MODELS MATCH ]</div>';
+
+        if (vramMb > 0) {
+            info.textContent = '[ ' + filtered.length + ' models · ' + fitsCount + ' fit ' + fmtBytes(vramMb) + ' VRAM ]';
+        } else {
+            info.textContent = '[ ' + filtered.length + ' models ]';
+        }
+
+        // Click handlers
+        list.querySelectorAll('.hf-model-row').forEach(function(row) {
+            row.addEventListener('click', function() {
+                catalogSelectedId = row.dataset.modelId;
+                list.querySelectorAll('.hf-model-row').forEach(function(r) { r.classList.remove('selected'); });
+                row.classList.add('selected');
+                document.getElementById('hf-btn-catalog-go').disabled = false;
+            });
+        });
+    }
+
+    document.getElementById('hf-search').addEventListener('input', function() {
+        renderCatalog();
+    });
+
     document.getElementById('btn-hf-import').addEventListener('click', function() {
         // Populate agent dropdown
         var sel = document.getElementById('hf-agent');
@@ -649,6 +816,12 @@
         document.getElementById('hf-gpu').innerHTML = '<option value="">GPU: auto</option>';
         document.getElementById('hf-status').textContent = '';
         document.getElementById('hf-progress').style.display = 'none';
+        catalogSelectedId = null;
+        document.getElementById('hf-btn-catalog-go').disabled = true;
+        document.getElementById('hf-search').value = '';
+        setHfMode('catalog');
+        fetchCatalog();
+        renderCatalog();
         document.getElementById('hf-overlay').classList.add('open');
     });
     // Populate GPU dropdown when agent changes
@@ -662,8 +835,15 @@
                 gpuSel.innerHTML += '<option value="' + i + '">GPU ' + i + ': ' + escHtml(g.name || 'GPU') + '</option>';
             });
         }
+        renderCatalog();
+    });
+    document.getElementById('hf-gpu').addEventListener('change', function() {
+        renderCatalog();
     });
     document.getElementById('hf-btn-cancel').addEventListener('click', function() {
+        closeOverlay('hf-overlay');
+    });
+    document.getElementById('hf-btn-catalog-cancel').addEventListener('click', function() {
         closeOverlay('hf-overlay');
     });
     document.getElementById('no-btn-close').addEventListener('click', function() {
@@ -808,6 +988,62 @@
         .catch(function() {
             document.getElementById('an-status').textContent = '[ CONNECTION FAILED ]';
             document.getElementById('an-status').className = 'status-val danger';
+        });
+    });
+
+    // ── Catalog mode: download & load ──
+    document.getElementById('hf-btn-catalog-go').addEventListener('click', function() {
+        var agent = document.getElementById('hf-agent').value;
+        var gpuVal = document.getElementById('hf-gpu').value;
+        var quant = document.getElementById('hf-cat-quant').value;
+        if (!catalogSelectedId || !agent) { toast('Select a model and agent', 'warn'); return; }
+
+        var modelId = catalogSelectedId + '/' + quant.toLowerCase();
+        var body = { model_id: modelId };
+        if (gpuVal !== '') body.gpu_idx = parseInt(gpuVal, 10);
+
+        document.getElementById('hf-status').textContent = '[ IMPORTING... ]';
+        document.getElementById('hf-status').className = 'status-val';
+        document.getElementById('hf-progress').style.display = 'none';
+
+        fetch(BASE + '/api/v1/nodes/' + encodeURIComponent(agent) + '/download_and_load', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        })
+        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+        .then(function(res) {
+            if (res.ok) {
+                var jobId = res.data.job_id;
+                var queued = res.data.queued;
+                if (jobId) {
+                    document.getElementById('hf-status').textContent = '[ DOWNLOADING... ]';
+                    document.getElementById('hf-status').className = 'status-val accent';
+                    document.getElementById('hf-progress').style.display = '';
+                    toast('CATALOG IMPORT STARTED — ' + catalogSelectedId, 'ok');
+                    activeJobs.push({ node_id: agent, job_id: jobId, model_id: modelId });
+                    pollHfJob(agent, jobId);
+                } else if (queued) {
+                    document.getElementById('hf-status').textContent = '[ QUEUED — agent will pick up ]';
+                    document.getElementById('hf-status').className = 'status-val amber';
+                    toast('CATALOG IMPORT QUEUED — ' + catalogSelectedId, 'ok', 5000);
+                    setTimeout(function() { closeOverlay('hf-overlay'); }, 3000);
+                } else {
+                    document.getElementById('hf-status').textContent = '[ STARTED ]';
+                    document.getElementById('hf-status').className = 'status-val accent';
+                    toast('CATALOG IMPORT STARTED — ' + catalogSelectedId, 'ok');
+                    setTimeout(function() { closeOverlay('hf-overlay'); }, 2000);
+                }
+            } else {
+                document.getElementById('hf-status').textContent = '[ ' + (res.data.error || 'FAILED') + ' ]';
+                document.getElementById('hf-status').className = 'status-val danger';
+                toast('IMPORT FAILED: ' + (res.data.error || 'unknown'), 'error', 5000);
+            }
+        })
+        .catch(function() {
+            document.getElementById('hf-status').textContent = '[ FAILED ]';
+            document.getElementById('hf-status').className = 'status-val danger';
+            toast('IMPORT REQUEST FAILED', 'error');
         });
     });
 
@@ -1000,6 +1236,28 @@
             if (res.ok) {
                 toast('CPU/RAM ' + (!current ? 'ENABLED' : 'DISABLED'), 'ok');
                 document.getElementById('no-btn-cpuram').textContent = !current ? 'DISABLE' : 'ENABLE';
+            } else {
+                toast('CONFIGURE FAILED: ' + (res.data.error || 'unknown'), 'error');
+            }
+        })
+        .catch(function() { toast('CONFIGURE FAILED', 'error'); });
+    });
+
+    // ── Configure Auto Unload ──
+    document.getElementById('no-btn-autounload').addEventListener('click', function() {
+        if (!selectedNodeId) return;
+        var node = nodesCache.find(function(n) { return n.node_id === selectedNodeId; });
+        var current = node ? !!node.auto_unload : false;
+        fetch(BASE + '/api/v1/nodes/' + encodeURIComponent(selectedNodeId) + '/configure', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ auto_unload: !current })
+        })
+        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+        .then(function(res) {
+            if (res.ok) {
+                toast('AUTO UNLOAD ' + (!current ? 'ENABLED' : 'DISABLED'), 'ok');
+                document.getElementById('no-btn-autounload').textContent = !current ? 'DISABLE' : 'ENABLE';
             } else {
                 toast('CONFIGURE FAILED: ' + (res.data.error || 'unknown'), 'error');
             }

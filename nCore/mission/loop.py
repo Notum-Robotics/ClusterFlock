@@ -457,7 +457,10 @@ def _mission_loop(mission):
                     n for n, a in mission.flock.items()
                     if a.status == "available"
                 ]
-                if idle_agents and not mission.tasks:
+                # Nudge when majority of flock is idle (not just when ALL tasks empty)
+                flock_size = len(mission.flock)
+                idle_ratio = len(idle_agents) / flock_size if flock_size else 0
+                if idle_agents and idle_ratio >= 0.5:
                     mission._idle_flock_rounds = getattr(
                         mission, '_idle_flock_rounds', 0
                     ) + 1
@@ -471,9 +474,11 @@ def _mission_loop(mission):
                         f"\n\n⚠ CRITICAL: {len(idle_agents)} agents "
                         f"({', '.join(idle_agents)}) have been idle "
                         f"for {mission._idle_flock_rounds} consecutive rounds "
-                        "while you work solo. This is inefficient. Delegate NOW: "
-                        "dispatch a bug-fix, verification, or any sub-task to an "
-                        "idle agent. If there is truly nothing to delegate, "
+                        "while you work solo. This is inefficient. "
+                        "Options: dispatch sub-tasks to idle agents, "
+                        "reassign_agent to give them a new role matching current needs, "
+                        "or rebuild_flock to restructure the whole team. "
+                        "If there is truly nothing to delegate, "
                         "batch your remaining actions (read + fix + test) into "
                         "ONE response."
                     )
@@ -482,8 +487,25 @@ def _mission_loop(mission):
                         f"\n\n💡 {len(idle_agents)} agents idle for "
                         f"{mission._idle_flock_rounds} rounds. "
                         "Consider delegating: bug fixes, test writing, "
-                        "file verification, or documentation improvements "
-                        "can all be dispatched."
+                        "file verification, or documentation. "
+                        "If their current roles don't fit, use reassign_agent "
+                        "to repurpose them for what you need now."
+                    )
+
+                # Self-work nudge: when flock is busy, encourage showrunner
+                # to do useful work instead of just waiting
+                busy_agents = [
+                    n for n, a in mission.flock.items()
+                    if a.status != "available"
+                ]
+                self_work_nudge = ""
+                if busy_agents and not idle_agents:
+                    self_work_nudge = (
+                        "\n\n⚡ All agents are busy. Don't sit idle — "
+                        "while waiting, do useful work yourself: "
+                        "read and review files, update state.json, plan next steps, "
+                        "write code, create tools, or verify completed work. "
+                        "Combine a wait_for_flock with other productive actions."
                     )
 
                 # Nudge about single-action round trips
@@ -544,13 +566,15 @@ def _mission_loop(mission):
                         "\n".join(results_summary) +
                         f"\n\n{flock_line}" +
                         idle_nudge +
+                        self_work_nudge +
                         single_action_nudge +
                         phase_nudge +
                         "\nContinue the mission. What's next?"
                     )
                 else:
                     initial_prompt = (
-                        f"{flock_line}" + idle_nudge + single_action_nudge +
+                        f"{flock_line}" + idle_nudge + self_work_nudge +
+                        single_action_nudge +
                         phase_nudge +
                         "\nContinue the mission. What's next?"
                     )

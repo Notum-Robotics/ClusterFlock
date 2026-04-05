@@ -43,7 +43,7 @@ from .container import (
     _git_diff_since,
 )
 from .showrunner import _compress_agent_history
-from .flock import _generate_agent_system_prompt
+from .flock import _generate_agent_system_prompt, _reassign_flock_roles
 from .agent_loop import _agent_autonomous_loop
 
 
@@ -901,7 +901,69 @@ def _action_advance_phase(mission, action):
     return {"ok": True, "previous": current, "current": new_phase}
 
 
-# ── Action registry — replaces 21-branch if/elif chain ──────────────────
+def _action_reassign_agent(mission, action):
+    """Reassign a single agent's role, experience, and job description mid-mission."""
+    agent_name = action.get("agent", "").strip()
+    new_role = action.get("role", "").strip()
+    new_experience = action.get("experience", "").strip()
+    new_job_description = action.get("job_description", "").strip()
+
+    if not agent_name:
+        return {"ok": False, "error": "agent name required"}
+    agent = mission.flock.get(agent_name)
+    if not agent:
+        available = ", ".join(mission.flock.keys()) or "none"
+        return {"ok": False, "error": f"Unknown agent '{agent_name}'. Available: {available}"}
+    if agent.assigned_task:
+        return {"ok": False, "error": f"{agent_name} is busy on task {agent.assigned_task}. Cancel or wait first."}
+    if not new_role:
+        return {"ok": False, "error": "role required (what this agent should now do)"}
+
+    old_role = agent.role
+    agent.role = new_role[:100]
+    if new_experience:
+        agent.experience = new_experience
+    if new_job_description:
+        agent.system_prompt = _generate_agent_system_prompt(
+            agent.name, agent.role, agent.experience, new_job_description, agent.model)
+    else:
+        # Regenerate with new role but generic description
+        agent.system_prompt = _generate_agent_system_prompt(
+            agent.name, agent.role, agent.experience,
+            f"You are now responsible for: {agent.role}. Adapt your skills to this new assignment.",
+            agent.model)
+    # Clear conversation history so the agent starts fresh with the new identity
+    agent.conversation_history = []
+    agent.scratchpad = []
+    agent.failures = 0
+    mission.log_event("FLOCK", f"Reassigned {agent_name}: {old_role} → {agent.role} ({agent.experience})")
+    return {"ok": True, "agent": agent_name, "old_role": old_role, "new_role": agent.role}
+
+
+def _action_rebuild_flock(mission, action):
+    """Trigger a full flock role reassignment — all agents get new roles for current mission state."""
+    # Don't rebuild while agents are busy
+    busy = [n for n, a in mission.flock.items() if a.assigned_task]
+    if busy:
+        return {"ok": False, "error": f"Cannot rebuild flock while agents are busy: {', '.join(busy)}. Wait or cancel first."}
+    if not mission.flock:
+        return {"ok": False, "error": "No flock agents to reassign."}
+
+    old_roles = {n: a.role for n, a in mission.flock.items()}
+    _reassign_flock_roles(mission)
+    new_roles = {n: a.role for n, a in mission.flock.items()}
+    # Clear conversation histories since identities changed
+    for agent in mission.flock.values():
+        agent.conversation_history = []
+        agent.scratchpad = []
+        agent.failures = 0
+    changes = []
+    for name, role in new_roles.items():
+        old = old_roles.get(name, "?")
+        if old != role:
+            changes.append(f"{name}: {old} → {role}")
+    mission.log_event("FLOCK", f"Flock rebuilt: {len(changes)} role changes")
+    return {"ok": True, "agents": len(mission.flock), "changes": changes or ["no changes"]}
 
 _ACTION_HANDLERS = {
     "dispatch":            _action_dispatch,
@@ -937,6 +999,8 @@ _ACTION_HANDLERS = {
     "diff_since":          _action_diff_since,
     "save_knowledge":      _action_save_knowledge,
     "advance_phase":       _action_advance_phase,
+    "reassign_agent":      _action_reassign_agent,
+    "rebuild_flock":       _action_rebuild_flock,
 }
 
 

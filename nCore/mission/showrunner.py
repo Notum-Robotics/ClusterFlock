@@ -18,6 +18,7 @@ from .state import (
 )
 from .scoring import (
     _model_quality_tier,
+    _model_size_label,
     _composite_score,
     _generation_limits,
     _context_budget,
@@ -59,7 +60,7 @@ def _elect_showrunner(exclude_node_id=None):
             if only_starred and node["node_id"] not in stars:
                 continue
             for ep in node.get("endpoints", []):
-                if ep.get("status") != "ready" or not ep.get("model"):
+                if ep.get("status") not in ("ready", "sleeping") or not ep.get("model"):
                     continue
                 tier = _model_quality_tier(ep["model"])
                 if tier < 2:
@@ -90,7 +91,7 @@ def _find_endpoint(node_id, model):
         if node.get("status") == "dead":
             return None
         for ep in node.get("endpoints", []):
-            if ep.get("model") == model and ep.get("status") == "ready":
+            if ep.get("model") == model and ep.get("status") in ("ready", "sleeping"):
                 tps = ep.get("tokens_per_sec") or ep.get("toks_per_sec") or 10
                 ctx = ep.get("context_length") or 0
                 score = _composite_score(tps, model, ctx)
@@ -185,12 +186,22 @@ def _build_showrunner_context(mission, include_history=True):
             tps = agent.toks_per_sec or 0
             speed_label = "fast" if tps > 50 else "moderate" if tps > 20 else "slow" if tps > 0 else "unknown speed"
             tier = _model_quality_tier(agent.model)
-            quality_label = "large/smart" if tier >= 3 else "medium" if tier >= 2 else "small/fast"
+            size_label = _model_size_label(agent.model)
+            if tier >= 3:
+                quality_label = f"tier-3 large ({size_label})" if size_label else "tier-3 large"
+                capability_hint = "complex reasoning, architecture, code generation, debugging"
+            elif tier >= 2:
+                quality_label = f"tier-2 medium ({size_label})" if size_label else "tier-2 medium"
+                capability_hint = "implementation, testing, focused coding tasks"
+            else:
+                quality_label = f"tier-1 small ({size_label})" if size_label else "tier-1 small"
+                capability_hint = "simple file ops, formatting, grep, copying, single-step tasks ONLY"
             parts.append(
                 f"- {name}: {agent.role} ({agent.experience}, {quality_label})\n"
                 f"    model={agent.model}, {tps} tok/s ({speed_label}), "
                 f"ctx={agent.context_length or '?'}, gpu={agent.gpu_name or '?'}, "
-                f"status={status_str}, failures={agent.failures}"
+                f"status={status_str}, failures={agent.failures}\n"
+                f"    good for: {capability_hint}"
             )
         parts.append("")
 

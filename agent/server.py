@@ -284,7 +284,7 @@ def _auto_context_size(model_path, device="gpu0"):
 # ── Server lifecycle ─────────────────────────────────────────────────────
 
 def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
-                 n_gpu_layers=9999, parallel=4, threads=None,
+                 n_gpu_layers=9999, parallel=None, threads=None,
                  flash_attn="on", cache_type_k=None, cache_type_v=None,
                  host="127.0.0.1", extra_args=None,
                  _retry_count=0, _max_retries=5):
@@ -338,6 +338,16 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
             cache_type_v = "q4_0"
         if ctx_size is None:
             ctx_size = _auto_context_size(model_path, device)
+
+    # Auto-select parallel slots based on context size so each slot
+    # gets a useful context window (at least 65K per slot).
+    if parallel is None:
+        if ctx_size >= 262144:
+            parallel = 1   # full 262K per slot
+        elif ctx_size >= 131072:
+            parallel = 2   # 65K+ per slot
+        else:
+            parallel = 4
 
     cmd = [
         binary,
@@ -674,3 +684,20 @@ def metrics(port=DEFAULT_PORT, host="127.0.0.1"):
             return resp.read().decode()
     except Exception:
         return ""
+
+
+def cleanup_orphaned_servers():
+    """Kill any orphaned llama-server processes on our standard ports.
+
+    Called on agent startup to reclaim GPU memory from servers left
+    behind by a previous unclean exit (crash, SIGKILL, etc.).
+    """
+    killed = 0
+    for port in list(range(_BASE_GPU_PORT, _BASE_GPU_PORT + 8)) + [_CPU_PORT]:
+        if _health_check(port):
+            _kill_port(port)
+            killed += 1
+    if killed:
+        print(f"[cleanup] Killed {killed} orphaned llama-server(s)")
+        time.sleep(2)  # let GPU memory release
+    return killed

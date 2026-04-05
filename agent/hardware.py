@@ -349,26 +349,21 @@ def is_apple_silicon():
 
 
 def is_dgx_spark():
-    """Detect if running on DGX Spark (GB10 / Blackwell)."""
+    """Detect if running on DGX Spark / Tegra / Jetson (unified-memory NVIDIA).
+
+    Key distinction: DGX Spark (GB10) uses unified memory (nvidia-smi
+    reports [N/A] for VRAM), while desktop Blackwell GPUs like RTX 5090
+    have discrete VRAM and should NOT be classified as Spark.
+    """
     if _IS_DARWIN:
         return False
     gpus = gpu()
     for g in gpus:
-        name = g.get("name", "").lower()
-        if "gb10" in name or "dgx" in name or "blackwell" in name:
+        if g.get("unified"):
             return True
-    nvsmi = _find_nvidia_smi()
-    if nvsmi:
-        try:
-            out = subprocess.check_output(
-                [nvsmi, "--query-gpu=compute_cap", "--format=csv,noheader"],
-                timeout=5, text=True, stderr=subprocess.DEVNULL,
-            )
-            cap = out.strip()
-            if cap and float(cap) >= 10.0:
-                return True
-        except Exception:
-            pass
+        name = g.get("name", "").lower()
+        if "gb10" in name or "dgx spark" in name:
+            return True
     return False
 
 
