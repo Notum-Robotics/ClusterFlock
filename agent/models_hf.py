@@ -438,6 +438,33 @@ def _resolve_gguf_repo(hf_repo):
     return hf_repo
 
 
+def _download_mmproj(hf_repo, dest_dir):
+    """Download mmproj-F16.gguf for vision models if available in the repo."""
+    mmproj_name = "mmproj-F16.gguf"
+    dest_path = dest_dir / mmproj_name
+    if dest_path.exists():
+        return  # already have it
+    if not _HAS_HF_HUB:
+        return
+    try:
+        from huggingface_hub import list_repo_files, hf_hub_download
+        files = list_repo_files(hf_repo)
+        if mmproj_name not in files:
+            return  # repo has no mmproj — not a vision model
+        print(f"[download] Fetching vision projector '{mmproj_name}'...")
+        hf_token = os.environ.get("HF_TOKEN")
+        hf_hub_download(
+            repo_id=hf_repo,
+            filename=mmproj_name,
+            local_dir=str(dest_dir),
+            local_dir_use_symlinks=False,
+            token=hf_token,
+        )
+        print(f"[download] ✓ Vision projector: {dest_path}")
+    except Exception as e:
+        print(f"[download] ⚠ mmproj download failed (non-fatal): {e}")
+
+
 def download_model(hf_repo, quant="q4_k_m", filename=None):
     """Download a GGUF model from HuggingFace into models/<org>/<repo>/.
 
@@ -491,10 +518,15 @@ def download_model(hf_repo, quant="q4_k_m", filename=None):
 
     try:
         if _HAS_HF_HUB:
-            return _download_via_hub(hf_repo, quant, filename, dest_dir)
+            result = _download_via_hub(hf_repo, quant, filename, dest_dir)
+        else:
+            print("[download] huggingface_hub not installed — using curl fallback")
+            result = _download_via_curl(hf_repo, quant, filename, dest_dir)
 
-        print("[download] huggingface_hub not installed — using curl fallback")
-        return _download_via_curl(hf_repo, quant, filename, dest_dir)
+        # Auto-download mmproj for vision models if available
+        _download_mmproj(hf_repo, dest_dir)
+
+        return result
     finally:
         _download_state.update(active=False, model="", expected_bytes=0, dest_dir="")
 

@@ -283,6 +283,22 @@ def _auto_context_size(model_path, device="gpu0"):
 
 # ── Server lifecycle ─────────────────────────────────────────────────────
 
+def _find_mmproj(model_path):
+    """Find a multimodal projector file next to the model GGUF.
+    Looks for mmproj-*.gguf in the same directory (prefers F16 > BF16 > F32).
+    Returns path string or None."""
+    model_dir = Path(model_path).parent
+    candidates = sorted(model_dir.glob("mmproj-*.gguf"))
+    if not candidates:
+        return None
+    # Prefer F16 for best speed/quality tradeoff
+    for pref in ("F16", "BF16", "F32"):
+        for c in candidates:
+            if pref in c.name:
+                return str(c)
+    return str(candidates[0])
+
+
 def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
                  n_gpu_layers=9999, parallel=None, threads=None,
                  flash_attn="on", cache_type_k=None, cache_type_v=None,
@@ -364,6 +380,12 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
         "--metrics",
         "--cont-batching",
     ]
+
+    # Auto-detect multimodal projector
+    mmproj = _find_mmproj(model_path)
+    if mmproj:
+        cmd.extend(["--mmproj", mmproj])
+
     if extra_args:
         cmd.extend(extra_args)
 
@@ -394,6 +416,8 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
     print(f"[server]   Flash Attention: {flash_attn}, KV: {cache_type_k}")
     if is_cpu:
         print(f"[server]   CPU-only mode ({threads} threads, system RAM)")
+    if mmproj:
+        print(f"[server]   Vision: {Path(mmproj).name}")
 
     proc = subprocess.Popen(cmd, env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)

@@ -108,6 +108,8 @@ class Handler(BaseHTTPRequestHandler):
             self._autoload_status()
         elif self.path == "/api/v1/autoload/benchmark/status":
             self._benchmark_autoload_status()
+        elif self.path == "/api/v1/profiles":
+            self._list_profiles()
         elif self.path == "/api/v1/local-agent":
             self._get_local_agent()
         elif self.path == "/api/v1/missions":
@@ -169,6 +171,10 @@ class Handler(BaseHTTPRequestHandler):
             self._autoload_execute()
         elif self.path == "/api/v1/autoload/benchmark":
             self._benchmark_autoload_execute()
+        elif self.path == "/api/v1/profiles":
+            self._save_profile()
+        elif self.path.startswith("/api/v1/profiles/") and self.path.endswith("/load"):
+            self._load_profile()
         elif self.path == "/api/v1/local-agent":
             self._start_local_agent()
         elif self.path == "/api/v1/sessions":
@@ -215,6 +221,8 @@ class Handler(BaseHTTPRequestHandler):
             self._delete_mission()
         elif self.path.startswith("/api/v1/sessions/"):
             self._delete_session()
+        elif self.path.startswith("/api/v1/profiles/"):
+            self._delete_profile()
         elif self.path.startswith("/api/v1/nodes/"):
             self._delete_node()
         elif self.path.startswith("/api/v1/tokens/"):
@@ -533,6 +541,12 @@ class Handler(BaseHTTPRequestHandler):
         if body is None:
             return
         text = body.get("prompt", "").strip()
+        if not text:
+            msgs = body.get("messages") or []
+            for m in msgs:
+                if m.get("role") == "user" and m.get("content", "").strip():
+                    text = m["content"].strip()
+                    break
         if not text:
             return self._json(400, {"error": "prompt text required"})
         task_id, expected = orch_mod.broadcast_prompt(text)
@@ -932,6 +946,52 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"status": "idle", "devices": [], "log": []})
         else:
             self._json(200, state)
+
+    # ── Profile endpoints ─────────────────────────────────────────────────
+
+    def _list_profiles(self):
+        """GET /api/v1/profiles — list saved model distribution profiles."""
+        self._json(200, {"profiles": orch_mod.list_profiles()})
+
+    def _save_profile(self):
+        """POST /api/v1/profiles — save current distribution as a named profile."""
+        body = self._body()
+        if body is None:
+            return
+        name = (body.get("name") or "").strip()
+        if not name:
+            return self._json(400, {"error": "name required"})
+        count = orch_mod.save_profile(name)
+        _persist()
+        _log(f"profile     saved '{name}' — {count} endpoints")
+        self._json(200, {"ok": True, "name": name, "endpoints": count})
+
+    def _load_profile(self):
+        """POST /api/v1/profiles/:name/load — load a saved profile."""
+        # /api/v1/profiles/<name>/load
+        parts = self.path.split("/")
+        # ['', 'api', 'v1', 'profiles', '<name>', 'load']
+        name = urllib.parse.unquote(parts[4]) if len(parts) >= 6 else ""
+        if not name:
+            return self._json(400, {"error": "profile name required"})
+        try:
+            loaded, skipped = orch_mod.load_profile(name)
+            _log(f"profile     loaded '{name}' — {loaded} queued, {len(skipped)} skipped")
+            self._json(200, {"ok": True, "name": name, "loaded": loaded, "skipped": skipped})
+        except KeyError as e:
+            self._json(404, {"error": str(e)})
+
+    def _delete_profile(self):
+        """DELETE /api/v1/profiles/:name — delete a saved profile."""
+        parts = self.path.split("/")
+        name = urllib.parse.unquote(parts[4]) if len(parts) >= 5 else ""
+        if not name:
+            return self._json(400, {"error": "profile name required"})
+        if orch_mod.delete_profile(name):
+            _log(f"profile     deleted '{name}'")
+            self._json(200, {"ok": True})
+        else:
+            self._json(404, {"error": "profile not found"})
 
     # ── Mission endpoints ─────────────────────────────────────────────────
 

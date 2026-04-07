@@ -253,6 +253,59 @@
             z-index: 89;
         }
         .sidebar-backdrop.open { display: block; }
+
+        /* Image attachment preview */
+        .img-preview-bar {
+            display: none;
+            padding: 6px 0;
+            gap: 8px;
+            align-items: flex-end;
+        }
+        .img-preview-bar.has-image { display: flex; }
+        .img-preview-bar .img-thumb {
+            position: relative;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+            flex-shrink: 0;
+        }
+        .img-preview-bar .img-thumb img {
+            display: block;
+            max-height: 80px;
+            max-width: 160px;
+            object-fit: cover;
+        }
+        .img-preview-bar .img-remove {
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            background: rgba(0,0,0,0.7);
+            color: var(--text);
+            border: none;
+            border-radius: 50%;
+            width: 18px;
+            height: 18px;
+            font-size: .6rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .img-preview-bar .img-info {
+            font-family: var(--font-data);
+            font-size: .5rem;
+            color: var(--text-dim);
+            letter-spacing: .04em;
+        }
+
+        /* Image in chat messages */
+        .msg-image {
+            max-width: 320px;
+            max-height: 240px;
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            margin: 4px 0;
+        }
     </style>
 </head>
 <body>
@@ -340,8 +393,21 @@
                 <span id="thinking-timer" style="margin-left:auto;font-family:var(--font-data);font-size:.5rem;color:var(--accent);letter-spacing:.04em;"></span>
             </div>
 
+            <!-- Image preview -->
+            <div class="img-preview-bar" id="img-preview-bar">
+                <div class="img-thumb" id="img-thumb">
+                    <img id="img-preview-img" src="">
+                    <button class="img-remove" id="img-remove" title="Remove image">&times;</button>
+                </div>
+                <span class="img-info" id="img-info"></span>
+            </div>
+
             <!-- Input -->
             <div class="chat-input-row">
+                <input type="file" id="img-file-input" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none;">
+                <div class="send-btn" id="btn-attach" data-flash title="Attach image" style="opacity:0.6;">
+                    <i class="ph ph-image"></i>
+                </div>
                 <textarea id="chat-input" rows="1" placeholder="Send a message..."></textarea>
                 <div class="send-btn" id="btn-send" data-flash data-lockout="800">
                     <i class="ph ph-paper-plane-tilt"></i>
@@ -398,6 +464,7 @@
     var thinkingTimer = null;
     var thinkingStart = 0;
     var endpointsReady = 0;
+    var pendingImageData = null;  // {base64, mime, name, size}
 
     // Nav active
     document.querySelectorAll('.nav-tab').forEach(function(t) {
@@ -756,7 +823,7 @@
     });
 
     // ── Message Rendering ──
-    function appendMessage(role, content, meta) {
+    function appendMessage(role, content, meta, imageDataUrl) {
         var msgs = document.getElementById('chat-messages');
         // Remove empty state
         var emptyState = msgs.querySelector('.status-val');
@@ -779,6 +846,15 @@
             if (meta.endpoints_responded != null) parts.push(meta.endpoints_responded + '/' + (meta.endpoints_queried || '?') + ' ENDPOINTS');
             label.textContent = parts.join(' · ') || 'CLUSTERFLOCK';
             el.appendChild(label);
+        }
+
+        // Image display (for user messages with attached images)
+        if (imageDataUrl) {
+            var imgEl = document.createElement('img');
+            imgEl.className = 'msg-image';
+            imgEl.src = imageDataUrl;
+            imgEl.dataset.dataurl = imageDataUrl;
+            el.appendChild(imgEl);
         }
 
         var body = document.createElement('div');
@@ -919,11 +995,80 @@
         this.style.height = Math.min(this.scrollHeight, 120) + 'px';
     });
 
+    // ── Image Attachment ──
+    var imgFileInput = document.getElementById('img-file-input');
+    var imgPreviewBar = document.getElementById('img-preview-bar');
+    var imgPreviewImg = document.getElementById('img-preview-img');
+    var imgInfo = document.getElementById('img-info');
+
+    document.getElementById('btn-attach').addEventListener('click', function() {
+        imgFileInput.click();
+    });
+
+    imgFileInput.addEventListener('change', function() {
+        var file = this.files[0];
+        if (!file) return;
+        if (file.size > 20 * 1024 * 1024) {
+            toast('IMAGE TOO LARGE — max 20 MB', 'warn', 4000);
+            this.value = '';
+            return;
+        }
+        var reader = new FileReader();
+        reader.onload = function(e) {
+            var dataUrl = e.target.result;
+            pendingImageData = {
+                base64: dataUrl,
+                mime: file.type || 'image/png',
+                name: file.name,
+                size: file.size,
+            };
+            imgPreviewImg.src = dataUrl;
+            imgInfo.textContent = file.name + ' (' + (file.size / 1024).toFixed(0) + ' KB)';
+            imgPreviewBar.classList.add('has-image');
+        };
+        reader.readAsDataURL(file);
+        this.value = '';
+    });
+
+    document.getElementById('img-remove').addEventListener('click', function() {
+        pendingImageData = null;
+        imgPreviewBar.classList.remove('has-image');
+        imgPreviewImg.src = '';
+        imgInfo.textContent = '';
+    });
+
+    // Support paste image from clipboard
+    chatInput.addEventListener('paste', function(e) {
+        var items = (e.clipboardData || {}).items;
+        if (!items) return;
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].type.indexOf('image/') === 0) {
+                e.preventDefault();
+                var file = items[i].getAsFile();
+                if (!file) return;
+                var reader = new FileReader();
+                reader.onload = function(ev) {
+                    pendingImageData = {
+                        base64: ev.target.result,
+                        mime: file.type || 'image/png',
+                        name: 'pasted-image',
+                        size: file.size,
+                    };
+                    imgPreviewImg.src = ev.target.result;
+                    imgInfo.textContent = 'Pasted image (' + (file.size / 1024).toFixed(0) + ' KB)';
+                    imgPreviewBar.classList.add('has-image');
+                };
+                reader.readAsDataURL(file);
+                return;
+            }
+        }
+    });
+
     function sendMessage() {
         if (sending) return;
         var input = document.getElementById('chat-input');
         var text = input.value.trim();
-        if (!text) return;
+        if (!text && !pendingImageData) return;
 
         // Warn if no endpoints
         if (endpointsReady === 0) {
@@ -934,8 +1079,21 @@
         input.value = '';
         input.style.height = 'auto';
 
-        // Show user message
-        appendMessage('user', text);
+        // Capture and clear pending image
+        var attachedImage = pendingImageData;
+        pendingImageData = null;
+        imgPreviewBar.classList.remove('has-image');
+        imgPreviewImg.src = '';
+        imgInfo.textContent = '';
+
+        // Build display content: text + optional image marker
+        var displayContent = text || '';
+        if (attachedImage) {
+            displayContent = (displayContent ? displayContent + '\n' : '') + '[image: ' + (attachedImage.name || 'image') + ']';
+        }
+
+        // Show user message (with image if present)
+        appendMessage('user', displayContent, null, attachedImage ? attachedImage.base64 : null);
 
         // Show thinking with timer
         var thinking = document.getElementById('thinking');
@@ -951,12 +1109,35 @@
         document.querySelectorAll('#chat-messages .chat-msg').forEach(function(msg) {
             var role = msg.classList.contains('user') ? 'user' : 'assistant';
             var body = msg.querySelector('.msg-body');
-            if (body) messages.push({ role: role, content: body.textContent || '' });
+            var msgImg = msg.querySelector('.msg-image');
+            if (body) {
+                if (msgImg && msgImg.dataset.dataurl) {
+                    // Multimodal message: content is array
+                    var parts = [];
+                    if (body.textContent) {
+                        parts.push({type: 'text', text: body.textContent});
+                    }
+                    parts.push({
+                        type: 'image_url',
+                        image_url: {url: msgImg.dataset.dataurl}
+                    });
+                    messages.push({role: role, content: parts});
+                } else {
+                    messages.push({role: role, content: body.textContent || ''});
+                }
+            }
         });
 
         // If no messages found (edge case), just send the user message
         if (!messages.length) {
-            messages = [{ role: 'user', content: text }];
+            if (attachedImage) {
+                var parts = [];
+                if (text) parts.push({type: 'text', text: text});
+                parts.push({type: 'image_url', image_url: {url: attachedImage.base64}});
+                messages = [{role: 'user', content: parts}];
+            } else {
+                messages = [{role: 'user', content: text}];
+            }
         }
 
         var payload = { messages: messages };

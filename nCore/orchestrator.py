@@ -1253,3 +1253,134 @@ def _benchmark_autoload_worker(target_tps):
         with _lock:
             if _bench_autoload_state:
                 _bench_autoload_state["status"] = "error"
+
+
+# ── Model Distribution Profiles ──────────────────────────────────────────
+
+from pathlib import Path as _Path
+
+_PROFILES_FILE = _Path(__file__).parent / "profiles.json"
+
+
+def _load_profiles():
+    if not _PROFILES_FILE.exists():
+        return {}
+    try:
+        return json.loads(_PROFILES_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def _save_profiles(profiles):
+    tmp = _PROFILES_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(profiles, indent=2))
+    tmp.replace(_PROFILES_FILE)
+
+
+def list_profiles():
+    """Return list of saved profiles with metadata."""
+    profiles = _load_profiles()
+    result = []
+    for name, data in profiles.items():
+        result.append({
+            "name": name,
+            "created": data.get("created", ""),
+            "assignments": data.get("assignments", []),
+        })
+    result.sort(key=lambda p: p["name"])
+    return result
+
+
+def snapshot_distribution():
+    """Capture current model distribution across all healthy nodes."""
+    nodes = all_nodes()
+    assignments = []
+    for node in nodes:
+        if node.get("status") == "dead":
+            continue
+        nid = node["node_id"]
+        hostname = node.get("hostname", "")
+        for ep in (node.get("endpoints") or []):
+            if ep.get("status") not in ("ready", "sleeping"):
+                continue
+            assignments.append({
+                "node_id": nid,
+                "hostname": hostname,
+                "device": ep.get("device", "gpu0"),
+                "model_id": ep.get("model") or ep.get("id", ""),
+                "context_length": ep.get("context_length"),
+            })
+    return assignments
+
+
+def save_profile(name):
+    """Save current distribution as a named profile. Returns assignment count."""
+    assignments = snapshot_distribution()
+    profiles = _load_profiles()
+    profiles[name] = {
+        "created": time.strftime("%Y-%m-%d %H:%M"),
+        "assignments": assignments,
+    }
+    _save_profiles(profiles)
+    print(f"[{_ts()}] profile     saved '{name}' — {len(assignments)} endpoints")
+    return len(assignments)
+
+
+def delete_profile(name):
+    """Delete a named profile. Returns True if it existed."""
+    profiles = _load_profiles()
+    if name not in profiles:
+        return False
+    del profiles[name]
+    _save_profiles(profiles)
+    print(f"[{_ts()}] profile     deleted '{name}'")
+    return True
+
+
+def load_profile(name):
+    """Load a saved profile: unload all, then load each saved assignment.
+
+    Returns (loaded_count, skipped) or raises KeyError if not found.
+    """
+    profiles = _load_profiles()
+    if name not in profiles:
+        raise KeyError(f"profile '{name}' not found")
+    assignments = profiles[name].get("assignments", [])
+    print(f"[{_ts()}] profile     loading '{name}' — {len(assignments)} assignments")
+
+    # Unload all on every live node
+    nodes = all_nodes()
+    for node in nodes:
+        if node.get("status") == "dead":
+            continue
+        enqueue(node["node_id"], {"action": "unload_all", "ttl": 120})
+
+    # Enqueue loads for each assignment
+    loaded = 0
+    skipped = []
+    for a in assignments:
+        nid = a["node_id"]
+        node = get_node(nid)
+        if not node or node.get("status") == "dead":
+            skipped.append({"node_id": nid, "reason": "node not found or dead"})
+            continue
+        cmd = {"action": "load", "model_id": a["model_id"], "ttl": 600}
+        device = a.get("device", "gpu0")
+        if device.startswith("gpu"):
+            try:
+                idx = int(device.replace("gpu", ""))
+                if idx != 0:
+                    cmd["gpu_idx"] = idx
+            except ValueError:
+                pass
+        elif device == "cpu":
+            cmd["gpu_idx"] = "cpu"
+            cmd["device"] = "cpu"
+        ctx = a.get("context_length")
+        if ctx:
+            cmd["context_length"] = ctx
+        enqueue(nid, cmd)
+        loaded += 1
+        print(f"[{_ts()}] profile     {nid} ← {a['model_id']} on {device}")
+
+    return loaded, skipped

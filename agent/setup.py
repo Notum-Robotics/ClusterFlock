@@ -67,11 +67,7 @@ def run_setup():
             print("       python3 run.py build")
             sys.exit(1)
 
-    # 3. Check memlock (Linux only)
-    if not _IS_DARWIN:
-        _check_memlock()
-
-    # 4. Check huggingface_hub
+    # 3. Check huggingface_hub
     try:
         import huggingface_hub
         print(f"✓ huggingface_hub {huggingface_hub.__version__}")
@@ -165,28 +161,6 @@ def run_setup():
 
 # ── Internals ────────────────────────────────────────────────────────────────
 
-def _check_memlock():
-    """Ensure memlock ulimit is unlimited for mlock() on large model weights."""
-    import resource
-    soft, hard = resource.getrlimit(resource.RLIMIT_MEMLOCK)
-    if soft == resource.RLIM_INFINITY:
-        print("✓ memlock unlimited")
-        return
-    soft_mb = soft // (1024 * 1024)
-    print(f"⚠ memlock limit is {soft_mb} MB — models may fail to lock memory")
-    limits_file = Path("/etc/security/limits.d/99-memlock.conf")
-    user = os.environ.get("USER", "notum")
-    line = f"{user} - memlock unlimited\n"
-    print(f"  Setting memlock unlimited via {limits_file} (requires sudo)")
-    try:
-        subprocess.run(["sudo", "tee", str(limits_file)],
-                       input=line.encode(), capture_output=True, check=True)
-        print(f"  ✓ Written {limits_file} — log out/reboot to apply")
-    except subprocess.CalledProcessError:
-        print(f"  Could not write — set manually:")
-        print(f"    echo '{user} - memlock unlimited' | sudo tee {limits_file}")
-
-
 def _print_hw(hw):
     s = hw["system"]
     print(f"\n  Host:  {s['hostname']} ({s['os']}/{s['arch']})")
@@ -252,7 +226,6 @@ WorkingDirectory={agent_dir}
 ExecStart={py} -u {agent_dir / "watchdog.py"} --port {port}
 Restart=always
 RestartSec=5
-LimitMEMLOCK=infinity
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 [Install]

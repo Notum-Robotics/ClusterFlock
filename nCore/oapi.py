@@ -96,6 +96,66 @@ _oapi_manual_model = None   # model name string when mode == "manual"
 _oapi_thinking_power = 60   # seconds — fan-out collection window (10–300)
 _oapi_max_tokens = 0        # 0 = no limit; >0 forwarded to all endpoints
 
+# ── Multimodal helpers ────────────────────────────────────────────────────
+
+def _content_text(content):
+    """Extract plain text from a message content field.
+    Handles both string content and OpenAI multimodal array format:
+      [{"type":"text","text":"..."}, {"type":"image_url",...}]
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                parts.append(part.get("text", ""))
+        return "\n".join(parts)
+    return str(content) if content else ""
+
+
+def _content_has_media(content):
+    """Return True if content contains image_url or input_audio parts."""
+    if not isinstance(content, list):
+        return False
+    return any(
+        isinstance(p, dict) and p.get("type") in ("image_url", "input_audio")
+        for p in content
+    )
+
+
+def _maximize_image_detail(messages):
+    """Ensure all image_url parts use detail='high' for maximum token budget."""
+    for m in messages:
+        c = m.get("content")
+        if not isinstance(c, list):
+            continue
+        for part in c:
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                img = part.get("image_url")
+                if isinstance(img, dict):
+                    img["detail"] = "high"
+
+
+def _extract_content(result):
+    """Extract content from an endpoint result dict.
+    Returns (content_string, error_string).  Handles agent error results."""
+    if not result:
+        return "", "no result"
+    # Agent-side errors come back as {"error": "...", "_agent_error": True}
+    if result.get("_agent_error") or (result.get("error") and not result.get("choices")):
+        err = result.get("error", "unknown agent error")
+        return "", str(err)
+    content = ""
+    choices = result.get("choices", [])
+    if choices:
+        msg = choices[0].get("message", {})
+        content = msg.get("content", "")
+    if not content:
+        content = result.get("content", "")
+    return content, ""
+
+
 # ── Showrunner state ─────────────────────────────────────────────────────
 
 _showrunner = {
@@ -281,7 +341,7 @@ def _truncate_messages_for_context(messages, max_context):
     chars_per_token = 4
     budget = int(max_context * chars_per_token * 0.6)  # 60% of context for input
 
-    total_chars = sum(len(m.get("content", "")) for m in messages)
+    total_chars = sum(len(_content_text(m.get("content", ""))) for m in messages)
     if total_chars <= budget:
         return messages
 
@@ -297,14 +357,14 @@ def _truncate_messages_for_context(messages, max_context):
     last = remaining[-1] if remaining else None
     middle = remaining[:-1] if remaining else []
 
-    used = sum(len(m.get("content", "")) for m in keep)
+    used = sum(len(_content_text(m.get("content", ""))) for m in keep)
     if last:
-        used += len(last.get("content", ""))
+        used += len(_content_text(last.get("content", "")))
 
     # Add middle messages from most recent backwards
     kept_middle = []
     for m in reversed(middle):
-        mc = len(m.get("content", ""))
+        mc = len(_content_text(m.get("content", "")))
         if used + mc > budget:
             break
         kept_middle.insert(0, m)
@@ -323,6 +383,9 @@ def _process_chat_completion(messages, conv_id=None, max_tokens=0, sampling_para
     Returns (response_dict, error_string)."""
     mode = get_oapi_mode()
 
+    # Force maximum image detail/token budget for all image inputs
+    _maximize_image_detail(messages)
+
     # Merge per-request max_tokens with global setting (per-request wins if nonzero)
     effective_max = max_tokens if max_tokens and max_tokens > 0 else _oapi_max_tokens
 
@@ -335,7 +398,7 @@ def _process_chat_completion(messages, conv_id=None, max_tokens=0, sampling_para
 
 def _estimate_prompt_tokens(messages):
     """Rough token count for context-fit check (~4 chars/token)."""
-    return sum(len(m.get("content", "")) for m in messages) // 4
+    return sum(len(_content_text(m.get("content", ""))) for m in messages) // 4
 
 
 def _build_response(content, model_label, meta_extra=None):
@@ -386,13 +449,9 @@ def _process_speed(messages, max_tokens=0, sampling_params=None):
     if not result:
         return None, f"endpoint {ep['model']} timed out"
 
-    content = ""
-    choices = result.get("choices", [])
-    if choices:
-        msg = choices[0].get("message", {})
-        content = msg.get("content", "")
-    if not content:
-        content = result.get("content", "")
+    content, ep_err = _extract_content(result)
+    if ep_err:
+        return None, f"endpoint {ep['model']}: {ep_err}"
     if not content:
         return None, "endpoint returned empty response"
 
@@ -436,13 +495,9 @@ def _process_manual(messages, max_tokens=0, sampling_params=None):
     if not result:
         return None, f"endpoint {ep['model']} timed out"
 
-    content = ""
-    choices = result.get("choices", [])
-    if choices:
-        msg = choices[0].get("message", {})
-        content = msg.get("content", "")
-    if not content:
-        content = result.get("content", "")
+    content, ep_err = _extract_content(result)
+    if ep_err:
+        return None, f"endpoint {ep['model']}: {ep_err}"
     if not content:
         return None, "endpoint returned empty response"
 
@@ -523,13 +578,9 @@ def _process_fanout(messages, max_tokens=0, sampling_params=None):
 
                 if task["results"]:
                     result = task["results"][0]
-                    content = ""
-                    choices = result.get("choices", [])
-                    if choices:
-                        msg = choices[0].get("message", {})
-                        content = msg.get("content", "")
-                    if not content:
-                        content = result.get("content", "")
+                    content, ep_err = _extract_content(result)
+                    if ep_err:
+                        _log_event(f"error from {ep_info['model']} on {ep_info['hostname']}: {ep_err}")
                     if content:
                         collected.append({
                             "endpoint": ep_info,
@@ -601,7 +652,7 @@ def _process_fanout(messages, max_tokens=0, sampling_params=None):
 
 def _showrunner_evaluate(sr, response_content, ep_info, original_messages):
     """Ask showrunner to evaluate an endpoint's response. Returns thought string or None."""
-    user_msg = original_messages[-1].get("content", "") if original_messages else ""
+    user_msg = _content_text(original_messages[-1].get("content", "")) if original_messages else ""
 
     eval_messages = [
         {"role": "system", "content": (
@@ -654,11 +705,12 @@ def _showrunner_synthesize(sr, original_messages, collected, sr_thoughts, event_
     synth_messages = [{"role": "system", "content": _SYNTH_SYSTEM}]
 
     # Include original conversation context (system + history)
+    # Strip media from synthesis prompt — showrunner can't see images
     for m in original_messages:
         if m.get("role") == "system":
-            synth_messages[0]["content"] += f"\n\nOriginal system context: {m['content']}"
+            synth_messages[0]["content"] += f"\n\nOriginal system context: {_content_text(m['content'])}"
         else:
-            synth_messages.append(dict(m))
+            synth_messages.append({"role": m["role"], "content": _content_text(m.get("content", ""))})
 
     # Add synthesis request
     synth_messages.append({
@@ -893,6 +945,12 @@ class OAPIHandler(BaseHTTPRequestHandler):
         for m in messages:
             if "role" not in m or "content" not in m:
                 return self._json(400, {"error": "each message must have role and content"})
+            # Validate multimodal content array structure
+            c = m["content"]
+            if isinstance(c, list):
+                for part in c:
+                    if not isinstance(part, dict) or "type" not in part:
+                        return self._json(400, {"error": "multimodal content parts must have 'type'"})
 
         # Check queue capacity
         global _queue_depth
@@ -919,9 +977,13 @@ class OAPIHandler(BaseHTTPRequestHandler):
                 conv = _get_or_create_conv(conv_id)
                 conv_id = conv["id"]
 
-                # Store user turn
-                user_msg = messages[-1].get("content", "")
-                _add_turn(conv_id, "user", user_msg)
+                # Store user turn (extract text for display/title)
+                user_text = _content_text(messages[-1].get("content", ""))
+                has_media = _content_has_media(messages[-1].get("content"))
+                turn_content = user_text
+                if has_media:
+                    turn_content = "[image] " + user_text if user_text else "[image]"
+                _add_turn(conv_id, "user", turn_content)
 
                 # Process — forward max_tokens and sampling params from request body
                 req_max_tokens = 0

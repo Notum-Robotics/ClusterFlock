@@ -29,8 +29,8 @@
             <button class="cf-btn" id="btn-hf-import" data-flash>
                 <i class="ph ph-download-simple"></i> IMPORT HF
             </button>
-            <button class="cf-btn" id="btn-toggle-lock" data-flash>
-                <i class="ph ph-lock-simple"></i> <span id="lock-label">LOCK</span>
+            <button class="cf-btn" id="btn-profiles" data-flash>
+                <i class="ph ph-floppy-disk"></i> PROFILES
             </button>
             <button class="cf-btn" id="btn-toggle-tight" data-flash>
                 <i class="ph ph-rows"></i> <span id="tight-label">TIGHT PACK</span>
@@ -228,6 +228,29 @@
         <div class="btn-row" style="margin-top:8px;">
             <button class="cf-btn danger" id="no-btn-remove" data-flash data-lockout="800">REMOVE NODE</button>
             <button class="cf-btn" id="no-btn-close" data-flash>CLOSE</button>
+        </div>
+    </div>
+</div>
+
+<!-- Profile Overlay -->
+<div class="cf-overlay" id="profile-overlay">
+    <div class="cf-overlay-panel" style="max-width:480px;">
+        <span class="corner corner-tl">⌜</span>
+        <span class="corner corner-tr">⌝</span>
+        <span class="corner corner-bl">⌞</span>
+        <span class="corner corner-br">⌟</span>
+        <div class="cf-overlay-title">MODEL PROFILES</div>
+
+        <div id="profile-list" style="margin-bottom:8px;"></div>
+
+        <div class="cf-section-label" style="font-size:.55rem;margin-top:8px;">SAVE CURRENT DISTRIBUTION</div>
+        <div style="display:flex;gap:4px;">
+            <input class="cf-input" id="profile-name" placeholder="Profile name..." style="flex:1;">
+            <button class="cf-btn primary" id="profile-btn-save" data-flash data-lockout="1000">SAVE</button>
+        </div>
+        <div id="profile-status" class="status-val" style="margin-top:4px;"></div>
+        <div class="btn-row" style="margin-top:8px;">
+            <button class="cf-btn" id="profile-btn-close" data-flash>CLOSE</button>
         </div>
     </div>
 </div>
@@ -910,27 +933,6 @@
         .catch(function() { toast('BENCHMARK AUTOLOAD FAILED', 'error'); });
     });
 
-    document.getElementById('btn-toggle-lock').addEventListener('click', function() {
-        var btn = this;
-        fetch(BASE + '/api/v1/config')
-            .then(function(r) { return r.json(); })
-            .then(function(cfg) {
-                return fetch(BASE + '/api/v1/config', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ locked: !cfg.locked })
-                });
-            })
-            .then(function(r) { return r.json(); })
-            .then(function(d) {
-                var locked = d.locked != null ? d.locked : !btn.classList.contains('active-state');
-                btn.classList.toggle('active-state', locked);
-                document.getElementById('lock-label').textContent = locked ? 'UNLOCK' : 'LOCK';
-                toast(locked ? 'CLUSTER LOCKED' : 'CLUSTER UNLOCKED', 'ok');
-            })
-            .catch(function() { toast('TOGGLE FAILED', 'error'); });
-    });
-
     document.getElementById('btn-toggle-tight').addEventListener('click', function() {
         var btn = this;
         fetch(BASE + '/api/v1/config')
@@ -950,6 +952,144 @@
                 toast(tight ? 'TIGHT PACK ENABLED' : 'TIGHT PACK DISABLED', 'ok');
             })
             .catch(function() { toast('TOGGLE FAILED', 'error'); });
+    });
+
+    // ── Profiles ──
+    document.getElementById('btn-profiles').addEventListener('click', function() {
+        loadProfiles();
+        document.getElementById('profile-name').value = '';
+        document.getElementById('profile-status').textContent = '';
+        document.getElementById('profile-overlay').classList.add('open');
+    });
+    document.getElementById('profile-btn-close').addEventListener('click', function() {
+        closeOverlay('profile-overlay');
+    });
+
+    function loadProfiles() {
+        fetch(BASE + '/api/v1/profiles')
+            .then(function(r) { return r.json(); })
+            .then(function(d) { renderProfiles(d.profiles || []); })
+            .catch(function() { document.getElementById('profile-list').innerHTML = '<div class="status-val">[ FETCH FAILED ]</div>'; });
+    }
+
+    function renderProfiles(profiles) {
+        var el = document.getElementById('profile-list');
+        if (!profiles.length) {
+            el.innerHTML = '<div class="status-val" style="padding:8px 0;">[ NO SAVED PROFILES ]</div>';
+            return;
+        }
+        var html = '';
+        profiles.forEach(function(p) {
+            html += '<div class="cf-panel" style="margin-bottom:6px;padding:6px 8px;">';
+            html += '<span class="corner corner-tl">⌜</span><span class="corner corner-tr">⌝</span>';
+            html += '<span class="corner corner-bl">⌞</span><span class="corner corner-br">⌟</span>';
+            html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
+            html += '<div>';
+            html += '<div style="font-weight:600;font-size:.6rem;">' + escHtml(p.name) + '</div>';
+            html += '<div style="font-size:.45rem;opacity:.6;">' + (p.assignments || []).length + ' endpoints · ' + escHtml(p.created || '') + '</div>';
+            html += '</div>';
+            html += '<div class="btn-row" style="gap:4px;">';
+            html += '<button class="cf-btn primary" data-flash data-lockout="2000" data-action="load-profile" data-profile="' + escHtml(p.name) + '" style="font-size:.5rem;padding:2px 8px;">LOAD</button>';
+            html += '<button class="cf-btn danger" data-flash data-action="delete-profile" data-profile="' + escHtml(p.name) + '" style="font-size:.5rem;padding:2px 8px;">DEL</button>';
+            html += '</div></div>';
+            // Show assignments
+            var aHtml = '';
+            (p.assignments || []).forEach(function(a) {
+                aHtml += '<div style="font-size:.45rem;opacity:.7;padding-left:4px;">' + escHtml(a.hostname || a.node_id) + ' / ' + escHtml(a.device) + ' ← ' + escHtml(a.model_id) + '</div>';
+            });
+            html += aHtml;
+            html += '</div>';
+        });
+        el.innerHTML = html;
+
+        el.querySelectorAll('[data-action="load-profile"]').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var name = btn.dataset.profile;
+                nDynamic.showDialog({
+                    title: 'Load Profile',
+                    body: 'Load profile "' + name + '"? This will unload all current models and reload the saved distribution.',
+                    alarm: false,
+                    buttons: [
+                        { label: 'LOAD', value: 'yes', style: 'warning' },
+                        { label: 'CANCEL', value: null }
+                    ]
+                }).then(function(val) {
+                    if (val !== 'yes') return;
+                    document.getElementById('profile-status').textContent = '[ LOADING... ]';
+                    document.getElementById('profile-status').className = 'status-val';
+                    fetch(BASE + '/api/v1/profiles/' + encodeURIComponent(name) + '/load', { method: 'POST' })
+                        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+                        .then(function(res) {
+                            if (res.ok) {
+                                document.getElementById('profile-status').textContent = '[ LOADED — ' + (res.data.loaded || 0) + ' models queued ]';
+                                document.getElementById('profile-status').className = 'status-val accent';
+                                toast('PROFILE "' + name + '" LOADED', 'ok');
+                                if (typeof nbeep === 'function') nbeep('autoload_execute');
+                            } else {
+                                document.getElementById('profile-status').textContent = '[ ' + (res.data.error || 'FAILED') + ' ]';
+                                document.getElementById('profile-status').className = 'status-val danger';
+                            }
+                        })
+                        .catch(function() {
+                            document.getElementById('profile-status').textContent = '[ LOAD FAILED ]';
+                            document.getElementById('profile-status').className = 'status-val danger';
+                        });
+                });
+            });
+        });
+
+        el.querySelectorAll('[data-action="delete-profile"]').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var name = btn.dataset.profile;
+                nDynamic.showDialog({
+                    title: 'Delete Profile',
+                    body: 'Delete profile "' + name + '"?',
+                    alarm: false,
+                    buttons: [
+                        { label: 'DELETE', value: 'yes', style: 'danger' },
+                        { label: 'CANCEL', value: null }
+                    ]
+                }).then(function(val) {
+                    if (val !== 'yes') return;
+                    fetch(BASE + '/api/v1/profiles/' + encodeURIComponent(name), { method: 'DELETE' })
+                        .then(function(r) { return r.json(); })
+                        .then(function() {
+                            toast('PROFILE "' + name + '" DELETED', 'ok');
+                            loadProfiles();
+                        })
+                        .catch(function() { toast('DELETE FAILED', 'error'); });
+                });
+            });
+        });
+    }
+
+    document.getElementById('profile-btn-save').addEventListener('click', function() {
+        var name = document.getElementById('profile-name').value.trim();
+        if (!name) { toast('Enter a profile name', 'warn'); return; }
+        document.getElementById('profile-status').textContent = '[ SAVING... ]';
+        document.getElementById('profile-status').className = 'status-val';
+        fetch(BASE + '/api/v1/profiles', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ name: name })
+        })
+        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+        .then(function(res) {
+            if (res.ok) {
+                document.getElementById('profile-status').textContent = '[ SAVED — ' + (res.data.endpoints || 0) + ' endpoints ]';
+                document.getElementById('profile-status').className = 'status-val accent';
+                toast('PROFILE "' + name + '" SAVED', 'ok');
+                document.getElementById('profile-name').value = '';
+                loadProfiles();
+            } else {
+                document.getElementById('profile-status').textContent = '[ ' + (res.data.error || 'FAILED') + ' ]';
+                document.getElementById('profile-status').className = 'status-val danger';
+            }
+        })
+        .catch(function() {
+            document.getElementById('profile-status').textContent = '[ SAVE FAILED ]';
+            document.getElementById('profile-status').className = 'status-val danger';
+        });
     });
 
     document.getElementById('btn-gc').addEventListener('click', function() {
@@ -1508,9 +1648,7 @@
         fetch(BASE + '/api/v1/config')
             .then(function(r) { return r.json(); })
             .then(function(d) {
-                document.getElementById('lock-label').textContent = d.locked ? 'UNLOCK' : 'LOCK';
                 document.getElementById('tight-label').textContent = d.tight_pack ? 'TIGHT PACK ON' : 'TIGHT PACK';
-                document.getElementById('btn-toggle-lock').classList.toggle('active-state', !!d.locked);
                 document.getElementById('btn-toggle-tight').classList.toggle('active-state', !!d.tight_pack);
             })
             .catch(function() {});
