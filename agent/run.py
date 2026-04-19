@@ -11,11 +11,15 @@ Uses llama.cpp directly — no LM Studio or Ollama dependency.
 import argparse
 import atexit
 import json
+import logging
 import os
 import signal
 import sys
+import threading
 import time
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 CONFIG = Path(__file__).parent / "cluster.json"
 _PIDFILE = Path("/tmp/clusterflock_agent.pid")
@@ -29,8 +33,8 @@ def _acquire_pidlock():
             # Check if that process is still alive
             os.kill(old_pid, 0)
             # Still alive — bail out
-            print(f"ERROR: Another agent is already running (pid {old_pid}).  "
-                  f"Kill it first or remove {_PIDFILE}")
+            log.error(f"Another agent is already running (pid {old_pid}). "
+                      f"Kill it first or remove {_PIDFILE}")
             sys.exit(1)
         except (ValueError, ProcessLookupError, PermissionError):
             # Stale pidfile — previous process died without cleanup
@@ -116,7 +120,7 @@ def _install_service():
     """Install and start a systemd user service for the agent."""
     import platform as _plat
     if _plat.system() != "Linux":
-        print("ERROR: --install-service is Linux-only (systemd)")
+        log.error("--install-service is Linux-only (systemd)")
         sys.exit(1)
 
     unit_dir = Path.home() / ".config" / "systemd" / "user"
@@ -124,7 +128,7 @@ def _install_service():
     unit_file = unit_dir / f"{_SERVICE_NAME}.service"
 
     unit_file.write_text(_service_unit())
-    print(f"[service] Created {unit_file}")
+    log.info(f"[service] Created {unit_file}")
 
     import subprocess
     cmds = [
@@ -137,22 +141,22 @@ def _install_service():
         label = " ".join(cmd)
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode == 0:
-            print(f"[service] ✓ {label}")
+            log.info(f"[service] ✓ {label}")
         else:
             err = r.stderr.strip() or r.stdout.strip()
-            print(f"[service] ✗ {label}: {err}")
+            log.error(f"[service] ✗ {label}: {err}")
 
-    print(f"\n[service] ✓ Installed and started {_SERVICE_NAME}")
-    print(f"  Status:  systemctl --user status {_SERVICE_NAME}")
-    print(f"  Logs:    journalctl --user -u {_SERVICE_NAME} -f")
-    print(f"  Remove:  python3 {Path(__file__).name} --uninstall-service")
+    log.info(f"[service] ✓ Installed and started {_SERVICE_NAME}")
+    log.info(f"  Status:  systemctl --user status {_SERVICE_NAME}")
+    log.info(f"  Logs:    journalctl --user -u {_SERVICE_NAME} -f")
+    log.info(f"  Remove:  python3 {Path(__file__).name} --uninstall-service")
 
 
 def _uninstall_service():
     """Stop, disable, and remove the systemd user service."""
     import platform as _plat
     if _plat.system() != "Linux":
-        print("ERROR: --uninstall-service is Linux-only (systemd)")
+        log.error("--uninstall-service is Linux-only (systemd)")
         sys.exit(1)
 
     import subprocess
@@ -167,11 +171,11 @@ def _uninstall_service():
 
     if unit_file.exists():
         unit_file.unlink()
-        print(f"[service] Removed {unit_file}")
+        log.info(f"[service] Removed {unit_file}")
 
     subprocess.run(["systemctl", "--user", "daemon-reload"],
                    capture_output=True, text=True)
-    print(f"[service] ✓ {_SERVICE_NAME} uninstalled")
+    log.info(f"[service] ✓ {_SERVICE_NAME} uninstalled")
 
 
 def run_agent(config, port=1903):
@@ -189,6 +193,8 @@ def run_agent(config, port=1903):
     from version import __version__ as agent_version
 
     _bench_failed = set()
+    _bench_running = set()          # devices currently being benchmarked
+    _bench_lock = threading.Lock()  # guards _bench_running & _bench_failed
 
     # Load saved settings (cpu_ram_enabled, auto_unload, etc.)
     init_settings()
@@ -203,7 +209,7 @@ def run_agent(config, port=1903):
     try:
         from link import start
     except ModuleNotFoundError:
-        print("ERROR: link.py not found. Copy it into this directory.")
+        log.error("link.py not found. Copy it into this directory.")
         sys.exit(1)
 
     hw = profile()
@@ -213,16 +219,16 @@ def run_agent(config, port=1903):
     plat = detect_platform()
     agent_type = config.get("agent_type", plat)
     if plat == "mac":
-        print(f"[agent] ✓ Apple Silicon detected (Metal GPU)")
+        log.info(f"[agent] ✓ Apple Silicon detected (Metal GPU)")
     elif plat == "spark":
-        print(f"[agent] ✓ DGX Spark detected (GB10 unified memory)")
+        log.info(f"[agent] ✓ DGX Spark detected (GB10 unified memory)")
     else:
         gpus = hw.get("gpu", [])
         gpu_names = [g.get("name", "GPU") for g in gpus]
         n_gpus = len(gpus)
-        print(f"[agent] Linux — {n_gpus} GPU(s): {', '.join(gpu_names)}")
+        log.info(f"[agent] Linux — {n_gpus} GPU(s): {', '.join(gpu_names)}")
     if cpu_ram_enabled():
-        print(f"[agent] CPU/RAM device enabled")
+        log.info(f"[agent] CPU/RAM device enabled")
 
     def payload():
         # Auto-restart any crashed llama-server instances
@@ -244,17 +250,29 @@ def run_agent(config, port=1903):
                     model_id = models[0].get("id", "")
 
             if model_id:
-                # Auto-benchmark first time
-                if (get_bench(model_id, device=dev_id) == 0
-                        and model_id not in _bench_failed):
-                    try:
-                        perf = _benchmark(port=dev_port)
-                        save_bench(model_id, perf, device=dev_id)
-                        print(f"  [payload] Benchmark {dev_id}: "
-                              f"{perf['tokens_per_sec']} tok/s")
-                    except Exception as e:
-                        _bench_failed.add(model_id)
-                        print(f"  [payload] Benchmark failed: {e}")
+                # Auto-benchmark first time (non-blocking background thread)
+                with _bench_lock:
+                    need_bench = (get_bench(model_id, device=dev_id) == 0
+                                  and model_id not in _bench_failed
+                                  and dev_id not in _bench_running)
+                if need_bench:
+                    def _run_bench(_mid=model_id, _did=dev_id, _port=dev_port):
+                        try:
+                            perf = _benchmark(port=_port)
+                            save_bench(_mid, perf, device=_did)
+                            log.info(f"[payload] Benchmark {_did}: "
+                                     f"{perf['tokens_per_sec']} tok/s")
+                        except Exception as e:
+                            with _bench_lock:
+                                _bench_failed.add(_mid)
+                            log.error(f"[payload] Benchmark {_did} failed: {e}")
+                        finally:
+                            with _bench_lock:
+                                _bench_running.discard(_did)
+                    with _bench_lock:
+                        _bench_running.add(dev_id)
+                    t = threading.Thread(target=_run_bench, daemon=True)
+                    t.start()
 
                 # Context: try live value, fall back to config
                 ctx = get_server_context(device=dev_id)
@@ -334,6 +352,9 @@ def run_agent(config, port=1903):
 
 
 def main():
+    import cflog
+    cflog.setup("agent")
+
     parser = argparse.ArgumentParser(
         description="ClusterFlock Agent — unified (llama.cpp)")
     parser.add_argument("command", nargs="?", choices=["run", "build"],
@@ -371,7 +392,7 @@ def main():
         from setup import run_setup
         run_setup()
         if not CONFIG.exists():
-            print("Setup did not create cluster.json.")
+            log.error("Setup did not create cluster.json.")
             sys.exit(1)
         config = json.loads(CONFIG.read_text())
     else:

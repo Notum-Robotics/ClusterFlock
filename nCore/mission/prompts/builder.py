@@ -10,86 +10,44 @@ from ..state import _MISSION_PHASES
 # ── Phase-specific workflow guidance ──────────────────────────────────────
 
 _PHASE_WORKFLOW = {
+    "initializing": (
+        "═══ CURRENT PHASE: INITIALIZING ═══\n"
+        "Container and flock are being set up. Showrunner is being elected.\n"
+        "No action needed — the system handles this phase automatically.\n"
+    ),
     "planning": (
         "═══ CURRENT PHASE: PLANNING ═══\n"
-        "You are in the PLANNING phase. Your goal is to create a structured plan before any code is written.\n\n"
-        "MANDATORY PLANNING OUTPUTS:\n"
-        "1. Create /home/mission/state.json with:\n"
-        "   - 'requirements': array of specific, testable requirements extracted from mission text\n"
-        "   - 'phases': ordered list of implementation phases with descriptions\n"
-        "   - 'architecture': key technical decisions (frameworks, patterns, structure)\n"
-        "   - 'file_map': planned files with purpose and estimated size\n"
-        "2. Use save_note to record architecture decisions\n"
-        "3. Run workspace_tree and outline tool to understand any existing code\n\n"
-        "DO NOT write code yet. Inspect, plan, then advance_phase to 'scaffolding'.\n"
-        "A good plan prevents 80% of agent failures. Invest time here.\n"
+        "Analyze the mission requirements and create your implementation plan.\n"
+        "Break the work into tasks, identify what you'll do vs what to delegate.\n"
+        "Write state.json with requirements and task breakdown.\n"
     ),
-    "scaffolding": (
-        "═══ CURRENT PHASE: SCAFFOLDING ═══\n"
-        "Create the project skeleton. Set up the structure before filling in details.\n\n"
-        "SCAFFOLDING CHECKLIST:\n"
-        "1. Create directory structure matching your plan's file_map\n"
-        "2. Use 'scaffold' action for known project types, or create skeleton files manually\n"
-        "3. Install dependencies (pin versions)\n"
-        "4. Create stub files with function signatures and docstrings — no implementation yet\n"
-        "5. Create test stubs — tests that will pass once implementation is complete\n"
-        "6. Run 'outline' tool to verify structure matches plan\n"
-        "7. Create a checkpoint: {'type': 'checkpoint', 'name': 'scaffold-complete'}\n\n"
-        "DELEGATE: Dispatch scaffolding tasks to agents in parallel when possible.\n"
-        "When scaffold matches plan, advance_phase to 'implementing'.\n"
+    "working": (
+        "═══ CURRENT PHASE: WORKING ═══\n"
+        "You are the lead developer — ALL production code is written by you personally.\n"
+        "Your flock agents are your support team for reviews, tests, docs, and research.\n"
+        "TEST-FIRST WORKFLOW: Write a test/validation script EARLY — before or alongside your\n"
+        "first implementation files. Define expected behavior through tests, then code to pass them.\n"
+        "Run tests after each major change. Fix failures immediately, don't accumulate them.\n"
+        "After writing core code, dispatch flock agents to review it and write tests.\n"
+        "Save memories after key decisions. Checkpoint after milestones.\n"
+        "Update state.json task statuses as you complete them.\n"
     ),
-    "implementing": (
-        "═══ CURRENT PHASE: IMPLEMENTING ═══\n"
-        "Build features incrementally. Each agent task should produce complete, tested code.\n\n"
-        "IMPLEMENTATION STRATEGY:\n"
-        "1. Work feature-by-feature, not file-by-file\n"
-        "2. For each feature: implement → test → verify → checkpoint\n"
-        "3. For files >100 lines: write skeleton first, then flesh out section by section\n"
-        "4. After each agent completes: read their output, run tests, verify quality\n"
-        "5. Use save_knowledge for discoveries agents should share (APIs, patterns, gotchas)\n"
-        "6. Create checkpoints after each major feature: {'type': 'checkpoint', 'name': 'feature-X'}\n"
-        "7. If an approach fails twice, try a completely different approach\n\n"
-        "PARALLEL WORK: Dispatch independent features to different agents simultaneously.\n"
-        "When all planned features are implemented, advance_phase to 'testing'.\n"
-    ),
-    "testing": (
-        "═══ CURRENT PHASE: TESTING ═══\n"
-        "Systematically verify everything works. Fix bugs before declaring victory.\n\n"
-        "TESTING CHECKLIST:\n"
-        "1. Run the verify tool: {'type': 'run_tool', 'name': 'verify', 'args': ['/home/mission']}\n"
-        "2. Run project-specific tests (pytest, npm test, go test, etc.)\n"
-        "3. For each failing test: dispatch fix to an agent with the error + relevant file\n"
-        "4. Read output files manually — do they look correct?\n"
-        "5. For web projects: check HTML renders, scripts work\n"
-        "6. For APIs: run curl tests against endpoints\n"
-        "7. Use diff_since to review total changes from initial state\n\n"
-        "DO NOT advance until ALL tests pass and verify tool reports no failures.\n"
-        "When ready, advance_phase to 'verifying'.\n"
+    "executing": (
+        "═══ CURRENT PHASE: EXECUTING ═══\n"
+        "Active implementation phase. You write ALL production code yourself.\n"
+        "Dispatch flock agents to review your code, write tests, and create docs.\n"
+        "Review completed helper work and integrate their feedback.\n"
     ),
     "verifying": (
         "═══ CURRENT PHASE: VERIFYING ═══\n"
-        "Final quality check. Compare deliverables against every requirement.\n\n"
-        "VERIFICATION PROTOCOL:\n"
-        "1. Re-read the original mission text — what EXACTLY was asked?\n"
-        "2. Read state.json — check EVERY requirement\n"
-        "3. For each requirement: read the relevant files, run the relevant tests\n"
-        "4. Mark each requirement as verified:true in state.json\n"
-        "5. Check file sizes and word counts against requirements\n"
-        "6. Run 'outline' tool — does the project structure match the plan?\n"
-        "7. Run 'diff_since' — review all changes holistically\n"
-        "8. Dispatch a 'code review' task to your best available agent\n\n"
-        "If any requirement is not met, go back and fix it before completing.\n"
-        "When ALL requirements verified, advance_phase to 'completing'.\n"
+        "Implementation is done. Run all tests, lint checks, and verification.\n"
+        "Fix any failing tests or issues found during verification.\n"
+        "Review all deliverables against the original requirements.\n"
     ),
     "completing": (
         "═══ CURRENT PHASE: COMPLETING ═══\n"
-        "Wrap up and deliver. Create the result page and mark mission complete.\n\n"
-        "COMPLETION STEPS:\n"
-        "1. Create a comprehensive result page with create_result\n"
-        "2. Include actual elapsed time, what was built, and verification results\n"
-        "3. Run 'verify' tool one final time\n"
-        "4. Create a final checkpoint: {'type': 'checkpoint', 'name': 'final'}\n"
-        "5. Emit {'type': 'complete', 'summary': '...'} with a detailed summary\n"
+        "Generating result.html, extracting memories, finalizing state.\n"
+        "The system handles this phase automatically.\n"
     ),
 }
 
@@ -103,7 +61,53 @@ _NEW_ACTIONS_BLOCK = (
     '  {"type": "list_checkpoints"}\n'
     '  {"type": "diff_since", "ref": "HEAD~3"}\n'
     '  {"type": "save_knowledge", "key": "db_pattern", "value": "Using SQLAlchemy with async sessions"}\n'
-    '  {"type": "advance_phase", "phase": "implementing"}\n'
+    '  {"type": "advance_phase", "phase": "implementing"}\n\n'
+    "Artifacts (register outputs for downstream tasks):\n"
+    "  When your task produces outputs that other tasks depend on (API contracts,\n"
+    "  schemas, type definitions, config), publish them as artifacts. Dependent tasks\n"
+    "  will automatically receive the artifact content in their prompts.\n"
+    '  {"type": "publish_artifact", "name": "api-contract", "artifact_type": "contract", '
+    '"path": "api/routes.py", "summary": "REST API: GET/POST /tasks, GET/PUT/DELETE /tasks/:id"}\n'
+    '  {"type": "publish_artifact", "name": "db-schema", "artifact_type": "schema", '
+    '"path": "db/schema.sql", "summary": "Tables: users, tasks, sessions"}\n'
+    '  {"type": "publish_artifact", "name": "types", "artifact_type": "file", '
+    '"path": "src/types.ts", "summary": "TypeScript interfaces for API request/response types"}\n'
+    "  artifact_type: file (default), contract (API specs), schema (data models)\n\n"
+    "Test Runner (run tests with structured output parsing):\n"
+    '  {"type": "test_runner"}\n'
+    "    Auto-detects framework (pytest/jest/mocha) and parses results.\n"
+    '  {"type": "test_runner", "command": "python3 -m pytest tests/ -v --tb=short"}\n'
+    '  {"type": "test_runner", "command": "npm test", "path": "/home/mission/frontend/"}\n'
+    "  Returns: {ok, passed, failed, errors: [{test, message}], output}\n\n"
+    "Memory (ACTIVELY maintain your knowledge base):\n"
+    "  Your memory is a file-based store at /home/mission/.memory/ — one file per topic.\n"
+    "  Memory files survive conversation compaction. Use them to persist anything you'll need later.\n\n"
+    "  File operations:\n"
+    '    {"type": "memory_create", "path": "architecture.md", "content": "# Architecture\\n- Server: Flask on port 5000\\n- DB: SQLite at data/app.db"}\n'
+    '    {"type": "memory_create", "path": "bugs/auth-fix.md", "content": "# Auth Bug\\nFixed null check in auth.py:42"}\n'
+    '    {"type": "memory_read", "path": "architecture.md"}\n'
+    '    {"type": "memory_update", "path": "architecture.md", "content": "# Architecture\\n(full new content)"}\n'
+    '    {"type": "memory_append", "path": "architecture.md", "content": "\\n- Cache: Redis on port 6379"}\n'
+    '    {"type": "memory_delete", "path": "bugs/auth-fix.md"}\n'
+    '    {"type": "memory_list"}\n\n'
+    "  ORGANIZE BY TOPIC — one file per subject (architecture, errors, decisions, test-results, etc.).\n"
+    "  Small files (<800B) appear automatically in your context.\n"
+    "  Large files only show a preview — use memory_read for full content.\n\n"
+    "  Legacy (still works): save_memory writes to notes/{category}.md:\n"
+    '    {"type": "save_memory", "category": "decision", "content": "Using Flask because mission needs REST API"}\n\n'
+    "  Global memory (cross-mission, for future missions):\n"
+    '    {"type": "save_memory", "scope": "global", "key": "flask_rest_pattern", "content": "...", "category": "pattern", "tags": ["flask"]}\n'
+    '    {"type": "recall_memory", "query": "flask REST API"}\n\n'
+    "  ⚡ YOUR CONVERSATION GETS COMPACTED (summarized) PERIODICALLY.\n"
+    "  Summaries are lossy — specific error messages, line numbers, and reasoning get lost.\n"
+    "  Memory files survive compaction because they're files, not conversation.\n"
+    "  SAVE anything specific you'll need later:\n"
+    "    - Key decisions and WHY (before you forget the reasoning)\n"
+    "    - Error messages and how you fixed them (exact details)\n"
+    "    - Which approaches failed and why (so you don't retry them)\n"
+    "    - Test results and what's passing/failing\n"
+    "    - Agent performance observations (who's good at what)\n"
+    "  Your memory directory listing + small file contents appear in context every round-trip.\n"
 )
 
 
@@ -148,7 +152,7 @@ def build_knowledge_section(knowledge_base):
 
 def build_phase_section(phase):
     """Return the phase-specific workflow guidance."""
-    return _PHASE_WORKFLOW.get(phase, _PHASE_WORKFLOW["implementing"])
+    return _PHASE_WORKFLOW.get(phase, _PHASE_WORKFLOW["executing"])
 
 
 def build_new_actions_section():

@@ -22,6 +22,7 @@ Endpoints:
 """
 
 import json
+import logging
 import mimetypes
 import os
 import re
@@ -32,6 +33,8 @@ import urllib.error
 import urllib.parse
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 _WEB_ROOT = Path(__file__).parent / "public"
 
@@ -126,10 +129,16 @@ class Handler(BaseHTTPRequestHandler):
             self._download_mission_dir()
         elif self.path.startswith("/api/v1/missions/") and self.path.split("?", 1)[0].endswith("/result"):
             self._get_mission_result()
+        elif self.path.startswith("/api/v1/missions/") and self.path.split("?", 1)[0].endswith("/plan"):
+            self._get_mission_plan()
         elif self.path.startswith("/api/v1/missions/") and "/file?" in self.path:
             self._get_mission_file_content()
         elif self.path.startswith("/api/v1/missions/"):
             self._get_mission()
+        elif self.path == "/api/v1/memories":
+            self._list_memories()
+        elif self.path.startswith("/api/v1/llama/"):
+            self._llama_proxy()
         else:
             self._serve_static()
 
@@ -201,6 +210,8 @@ class Handler(BaseHTTPRequestHandler):
             self._mission_exec()
         elif self.path == "/api/v1/gc":
             self._gc_containers()
+        elif self.path.startswith("/api/v1/llama/"):
+            self._llama_proxy()
         else:
             self._json(404, {"error": "not found"})
 
@@ -217,6 +228,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         if self.path == "/api/v1/local-agent":
             self._stop_local_agent()
+        elif self.path.startswith("/api/v1/memories/"):
+            self._delete_memory()
         elif self.path.startswith("/api/v1/missions/"):
             self._delete_mission()
         elif self.path.startswith("/api/v1/sessions/"):
@@ -278,6 +291,7 @@ class Handler(BaseHTTPRequestHandler):
         if body is None:
             return
 
+        peer_ip = self.client_address[0] if self.client_address else None
         ok = hb_node(
             node_id,
             hostname=body.get("hostname", ""),
@@ -290,6 +304,7 @@ class Handler(BaseHTTPRequestHandler):
             cpu_ram_enabled=body.get("cpu_ram_enabled"),
             activity=body.get("activity"),
             auto_unload=body.get("auto_unload"),
+            peer_address=peer_ip,
         )
         # Track autoload progress from endpoints
         orch_mod.autoload_check_heartbeat(node_id, body.get("endpoints"))
@@ -312,7 +327,8 @@ class Handler(BaseHTTPRequestHandler):
                     agent_type=body.get("agent_type"),
                     cpu_ram_enabled=body.get("cpu_ram_enabled"),
                     activity=body.get("activity"),
-                    auto_unload=body.get("auto_unload"))
+                    auto_unload=body.get("auto_unload"),
+                    peer_address=peer_ip)
             _log(f"auto-readmit {node_id} ({hostname})")
 
         # Drain any pending orchestrator commands for this node
@@ -601,7 +617,18 @@ class Handler(BaseHTTPRequestHandler):
         cmd = {"action": "load", "model_id": model_id}
         gpu_idx = body.get("gpu_idx")
         if gpu_idx is not None:
-            cmd["gpu_idx"] = gpu_idx
+            # Check if this gpu_idx maps to the CPU/RAM device
+            hw = node.get("hardware") or {}
+            gpu_list = hw.get("gpu") or []
+            try:
+                idx = int(gpu_idx)
+                if idx < len(gpu_list) and gpu_list[idx].get("device") == "cpu":
+                    cmd["gpu_idx"] = "cpu"
+                    cmd["device"] = "cpu"
+                else:
+                    cmd["gpu_idx"] = gpu_idx
+            except (ValueError, TypeError):
+                cmd["gpu_idx"] = gpu_idx
         ctx = body.get("context_length")
         if ctx is not None:
             cmd["context_length"] = ctx
@@ -1025,7 +1052,8 @@ class Handler(BaseHTTPRequestHandler):
         session_mod.activate(mission_id)
 
         sr_override = body.get("showrunner_override")  # {node_id, model} or None
-        m, err = mission_mod.start_mission(mission_id, mission_text, showrunner_override=sr_override)
+        m, err = mission_mod.start_mission(mission_id, mission_text,
+                                           showrunner_override=sr_override)
         if err:
             return self._json(409, {"error": err})
         _log(f"mission▶    {mission_id}")
@@ -1085,6 +1113,22 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True})
         else:
             self._json(404, {"error": "mission not found"})
+
+    # ── Memory endpoints ──────────────────────────────────────────────────
+
+    def _list_memories(self):
+        """GET /api/v1/memories — list all long-term memories."""
+        from mission.memory import get_all_memories
+        memories = get_all_memories()
+        self._json(200, {"memories": memories, "count": len(memories)})
+
+    def _delete_memory(self):
+        """DELETE /api/v1/memories/:key — delete a long-term memory."""
+        from mission.memory import delete_long_term
+        import urllib.parse
+        key = urllib.parse.unquote(self.path.rsplit("/", 1)[-1])
+        result = delete_long_term(key)
+        self._json(200 if result.get("ok") else 404, result)
 
     def _gc_containers(self):
         """POST /api/v1/gc — Run container garbage collection."""
@@ -1255,6 +1299,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(html_bytes)
 
+    def _get_mission_plan(self):
+        """GET /api/v1/missions/:id/plan — return the task DAG plan."""
+        parts = self.path.split("/")
+        mid = parts[4] if len(parts) >= 6 else ""
+        data, err = mission_mod.get_mission_plan(mid)
+        if err:
+            return self._json(404, {"error": err})
+        self._json(200, data)
+
     def _respond_to_prompt(self):
         """POST /api/v1/missions/:id/respond — user answers a Showrunner prompt."""
         parts = self.path.split("/")
@@ -1391,6 +1444,122 @@ class Handler(BaseHTTPRequestHandler):
         _log(f"session✓    {sid}")
         self._json(200, session)
 
+    # ── llama.cpp local proxy ─────────────────────────────────────────────
+
+    def _llama_proxy(self):
+        """Reverse-proxy to the local llama.cpp server.
+
+        GET|POST /api/v1/llama/<device>/<path...>
+        <device> is a GPU index (0, 1, ...) or 'cpu'.
+        Only available when a local agent is running.
+        """
+        la = local_agent_mod.status()
+        if not la.get("running"):
+            return self._json(503, {"error": "no local agent running"})
+
+        # Parse: /api/v1/llama/<device>/<downstream_path>
+        raw = self.path  # includes query string and fragment
+        prefix = "/api/v1/llama/"
+        rest = raw[len(prefix):]          # e.g. "0/completion?arg=1"
+        slash = rest.find("/")
+        if slash == -1:
+            device = rest.split("?")[0]
+            downstream = "/"
+        else:
+            device = rest[:slash]
+            downstream = rest[slash:]     # keeps query string intact
+        if not downstream:
+            downstream = "/"
+
+        # Compute port
+        if device == "cpu":
+            port = 8090
+        else:
+            try:
+                port = 8080 + int(device)
+            except ValueError:
+                return self._json(400, {"error": "invalid device — use gpu index or 'cpu'"})
+
+        target = f"http://127.0.0.1:{port}{downstream}"
+
+        # Forward request
+        try:
+            body_data = None
+            clen = int(self.headers.get("Content-Length", 0) or 0)
+            if clen > 0:
+                body_data = self.rfile.read(clen)
+
+            headers = {}
+            ct = self.headers.get("Content-Type")
+            if ct:
+                headers["Content-Type"] = ct
+            accept = self.headers.get("Accept")
+            if accept:
+                headers["Accept"] = accept
+
+            req = urllib.request.Request(
+                target, data=body_data, headers=headers,
+                method=self.command,
+            )
+            resp = urllib.request.urlopen(req, timeout=300)
+        except urllib.error.HTTPError as e:
+            self.send_response(e.code)
+            ct = e.headers.get("Content-Type", "application/octet-stream")
+            self.send_header("Content-Type", ct)
+            body = e.read()
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        except Exception as e:
+            return self._json(502, {"error": str(e)})
+
+        # Stream response back (supports SSE / chunked)
+        resp_ct = resp.headers.get("Content-Type", "application/octet-stream")
+        self.send_response(resp.status)
+        self.send_header("Content-Type", resp_ct)
+        # Carry over specific headers
+        for hdr in ("Cache-Control", "Content-Disposition", "X-Request-Id"):
+            v = resp.headers.get(hdr)
+            if v:
+                self.send_header(hdr, v)
+
+        is_sse = "text/event-stream" in resp_ct
+        cl = resp.headers.get("Content-Length")
+
+        if is_sse:
+            # Stream SSE chunks without Content-Length
+            self.end_headers()
+            try:
+                while True:
+                    chunk = resp.read(4096)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            finally:
+                resp.close()
+        elif cl:
+            self.send_header("Content-Length", cl)
+            self.end_headers()
+            remaining = int(cl)
+            while remaining > 0:
+                chunk = resp.read(min(65536, remaining))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
+            resp.close()
+        else:
+            # Unknown length — read all, send
+            body = resp.read()
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            resp.close()
+
     # ── Static file serving ───────────────────────────────────────────────
 
     def _serve_static(self):
@@ -1448,7 +1617,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def _persist():
     la_status = local_agent_mod.status()
-    local_agent_data = la_status["agent_type"] if la_status["running"] else None
+    # Persist the agent type even when not running so it auto-starts on restart
+    local_agent_data = la_status["agent_type"] if la_status["running"] else local_agent_mod.recommended_agent()
     try:
         import oapi as oapi_mod
         oapi_cfg = oapi_mod.get_oapi_config()
@@ -1468,8 +1638,7 @@ _ncore_port = 1903
 
 
 def _log(msg):
-    ts = time.strftime("%H:%M:%S")
-    print(f"[{ts}] {msg}")
+    log.info(msg)
 
 
 def serve(host="0.0.0.0", port=8080):
@@ -1498,7 +1667,7 @@ def serve(host="0.0.0.0", port=8080):
     push_mod.start(interval=hb_interval)
 
     def _on_reap(nid, hostname):
-        revoke_for_node(nid)
+        # Keep auth tokens so pull-mode agents can auto-readmit on reconnect
         _persist()
         _log(f"reaped      {nid[:12]} ({hostname}) — dead too long")
 

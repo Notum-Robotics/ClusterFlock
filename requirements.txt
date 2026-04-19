@@ -1,6 +1,10 @@
 # ClusterFlock dependencies
 #
-# nCore (orchestrator) has ZERO third-party dependencies — Python 3.10+ stdlib only.
+# nCore (orchestrator):
+jinja2>=3.1.0
 #
 # Agent ideally needs:
 huggingface_hub>=0.20.0 (but is able to fall back to curl)
+#
+# Development / testing:
+pytest>=7.0

@@ -20,11 +20,14 @@ The watchdog:
 Health file: /tmp/clusterflock_agent.alive  (written by link.py)
 """
 
+import logging
 import os
 import signal
 import subprocess
 import sys
 import time
+
+log = logging.getLogger(__name__)
 
 # ── Tunables ─────────────────────────────────────────────────────────────
 
@@ -54,8 +57,7 @@ def _cleanup():
 
 
 def _log(msg):
-    ts = time.strftime("%H:%M:%S")
-    print(f"[{ts}] watchdog: {msg}", flush=True)
+    log.info(f"watchdog: {msg}")
 
 
 def run(agent_dir, extra_args):
@@ -162,8 +164,7 @@ def main():
         if os.path.isfile(os.path.join(here, "run.py")):
             agent_dir = here
         else:
-            print("ERROR: no run.py found next to watchdog.py. "
-                  "Use --agent-dir.")
+            log.error("no run.py found next to watchdog.py. Use --agent-dir.")
             sys.exit(1)
 
     extra_args = ["--port", str(args.port)]

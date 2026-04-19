@@ -8,6 +8,7 @@ Falls back to curl if the library is unavailable.
 """
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -17,6 +18,8 @@ import urllib.request
 import urllib.error
 import urllib.parse
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 try:
     from huggingface_hub import snapshot_download as _snapshot_download
@@ -123,12 +126,41 @@ def download_progress():
 
 # ── Model Discovery ─────────────────────────────────────────────────────────
 
+_SHARD_RE = re.compile(r'(\d{5})-of-(\d{5})')
+
+
+def _is_model_gguf(path):
+    """Return True if this GGUF file is a loadable model (not mmproj, not a non-first shard)."""
+    name = path.name
+    if name.startswith("mmproj-"):
+        return False
+    m = _SHARD_RE.search(name)
+    if m and m.group(1) != '00001':
+        return False
+    return True
+
+
 def local_models():
-    """List GGUF models already downloaded in models/ directory."""
+    """List GGUF models already downloaded in models/ directory.
+
+    Excludes mmproj (vision projector) files and non-first shards so that
+    only actually loadable model files appear in the UI and resolution."""
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     models = []
     for f in sorted(MODELS_DIR.rglob("*.gguf")):
-        size_gb = round(f.stat().st_size / (1024**3), 1)
+        if not _is_model_gguf(f):
+            continue
+        # For first-shard files, report total size across all shards
+        m = _SHARD_RE.search(f.name)
+        if m:
+            total_shards = int(m.group(2))
+            base = f.name[:m.start()]
+            shard_files = [s for s in f.parent.glob(f"{base}*") if _SHARD_RE.search(s.name)]
+            if len(shard_files) < total_shards:
+                continue  # incomplete sharded download — skip
+            size_gb = round(sum(s.stat().st_size for s in shard_files) / (1024**3), 1)
+        else:
+            size_gb = round(f.stat().st_size / (1024**3), 1)
         rel = f.relative_to(MODELS_DIR)
         model_id = str(rel).replace(os.sep, "/")
         name = f.stem.replace("-", " ").replace("_", " ").title()
@@ -151,7 +183,7 @@ def _search_hf_gguf(query="GGUF", limit=50):
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read())
     except Exception as e:
-        print(f"[models] HuggingFace search failed: {e}")
+        log.error(f"[models] HuggingFace search failed: {e}")
         return []
 
 
@@ -219,7 +251,7 @@ def fetch_catalog(include_hf=False):
             })
 
     if include_hf:
-        print("[models] Searching HuggingFace for GGUF models...")
+        log.info("[models] Searching HuggingFace for GGUF models...")
         hf_models = _search_hf_gguf(limit=30)
         existing_repos = {e.get("hf_repo", "").lower() for e in catalog}
         for hm in hf_models:
@@ -311,7 +343,7 @@ def _hf_available_quants(hf_repo):
         with urllib.request.urlopen(req, timeout=15) as resp:
             entries = json.loads(resp.read())
     except Exception as e:
-        print(f"[auto-quant] Failed to list repo tree: {e}")
+        log.error(f"[auto-quant] Failed to list repo tree: {e}")
         return quants
 
     known_quants = {q.upper().replace("_", ""): q for q in _QUANT_RANK}
@@ -358,7 +390,7 @@ def auto_select_quant(hf_repo, vram_free_mb):
     """Pick the highest-quality quantization that fits in available VRAM."""
     quants = _hf_available_quants(hf_repo)
     if not quants:
-        print("[auto-quant] Could not determine available quants, defaulting to q4_k_m")
+        log.info("[auto-quant] Could not determine available quants, defaulting to q4_k_m")
         return "q4_k_m"
 
     budget_bytes = vram_free_mb * 1024 * 1024 * 0.85
@@ -367,19 +399,19 @@ def auto_select_quant(hf_repo, vram_free_mb):
                     key=lambda kv: _QUANT_RANK.index(kv[0]) if kv[0] in _QUANT_RANK else -1,
                     reverse=True)
 
-    print(f"[auto-quant] VRAM budget: {vram_free_mb/1024:.1f} GB (85% of {vram_free_mb/1024:.1f} GB free)")
+    log.info(f"[auto-quant] VRAM budget: {vram_free_mb/1024:.1f} GB (85% of {vram_free_mb/1024:.1f} GB free)")
     for qname, qsize in ranked:
         size_gb = qsize / (1024**3)
         fits = "✓" if qsize <= budget_bytes else "✗"
-        print(f"[auto-quant]   {qname:12s} {size_gb:7.1f} GB  {fits}")
+        log.info(f"[auto-quant]   {qname:12s} {size_gb:7.1f} GB  {fits}")
 
     for qname, qsize in ranked:
         if qsize <= budget_bytes:
-            print(f"[auto-quant] Selected: {qname} ({qsize/(1024**3):.1f} GB)")
+            log.info(f"[auto-quant] Selected: {qname} ({qsize/(1024**3):.1f} GB)")
             return qname
 
     smallest = min(quants.items(), key=lambda kv: kv[1])
-    print(f"[auto-quant] Nothing fits budget, using smallest: {smallest[0]} ({smallest[1]/(1024**3):.1f} GB)")
+    log.info(f"[auto-quant] Nothing fits budget, using smallest: {smallest[0]} ({smallest[1]/(1024**3):.1f} GB)")
     return smallest[0]
 
 
@@ -395,7 +427,7 @@ def _resolve_gguf_repo(hf_repo):
     model_name = hf_repo.split("/")[-1] if "/" in hf_repo else hf_repo
     for repo, *_ in _BUILTIN:
         if model_name.lower() in repo.lower() and repo.upper().endswith("-GGUF"):
-            print(f"[download] Matched builtin GGUF repo: {repo}")
+            log.info(f"[download] Matched builtin GGUF repo: {repo}")
             return repo
     gguf_files = _hf_repo_files(hf_repo)
     if gguf_files:
@@ -404,7 +436,7 @@ def _resolve_gguf_repo(hf_repo):
     gguf_repo = hf_repo + "-GGUF"
     gguf_files = _hf_repo_files(gguf_repo)
     if gguf_files:
-        print(f"[download] Source repo has no GGUF files, using {gguf_repo}")
+        log.info(f"[download] Source repo has no GGUF files, using {gguf_repo}")
         return gguf_repo
     # Search HuggingFace — prefer trusted orgs
     try:
@@ -431,7 +463,7 @@ def _resolve_gguf_repo(hf_repo):
         for rid, _ in candidates:
             check = _hf_repo_files(rid)
             if check:
-                print(f"[download] Source repo has no GGUF files, found {rid}")
+                log.info(f"[download] Source repo has no GGUF files, found {rid}")
                 return rid
     except Exception:
         pass
@@ -439,30 +471,43 @@ def _resolve_gguf_repo(hf_repo):
 
 
 def _download_mmproj(hf_repo, dest_dir):
-    """Download mmproj-F16.gguf for vision models if available in the repo."""
-    mmproj_name = "mmproj-F16.gguf"
-    dest_path = dest_dir / mmproj_name
-    if dest_path.exists():
-        return  # already have it
+    """Download mmproj GGUF for vision models if available in the repo.
+    Handles repos with non-standard mmproj names (e.g. mmproj-ModelName.gguf).
+    Prefers F16 > BF16 > F32 > any other mmproj file."""
+    # Already have one locally? Check both root and subdirectories.
+    existing = list(Path(dest_dir).rglob("mmproj-*.gguf"))
+    if existing:
+        return
     if not _HAS_HF_HUB:
         return
     try:
         from huggingface_hub import list_repo_files, hf_hub_download
         files = list_repo_files(hf_repo)
-        if mmproj_name not in files:
+        mmproj_files = [f for f in files if f.startswith("mmproj-") and f.endswith(".gguf")]
+        if not mmproj_files:
             return  # repo has no mmproj — not a vision model
-        print(f"[download] Fetching vision projector '{mmproj_name}'...")
+        # Pick best: F16 > BF16 > F32 > first available
+        chosen = mmproj_files[0]
+        for pref in ("F16", "BF16", "F32"):
+            for f in mmproj_files:
+                if pref in f:
+                    chosen = f
+                    break
+            else:
+                continue
+            break
+        log.info(f"[download] Fetching vision projector '{chosen}'...")
         hf_token = os.environ.get("HF_TOKEN")
         hf_hub_download(
             repo_id=hf_repo,
-            filename=mmproj_name,
+            filename=chosen,
             local_dir=str(dest_dir),
             local_dir_use_symlinks=False,
             token=hf_token,
         )
-        print(f"[download] ✓ Vision projector: {dest_path}")
+        log.info(f"[download] ✓ Vision projector: {dest_dir / chosen}")
     except Exception as e:
-        print(f"[download] ⚠ mmproj download failed (non-fatal): {e}")
+        log.warning(f"[download] ⚠ mmproj download failed (non-fatal): {e}")
 
 
 def download_model(hf_repo, quant="q4_k_m", filename=None):
@@ -484,29 +529,36 @@ def download_model(hf_repo, quant="q4_k_m", filename=None):
     if filename:
         dest_path = dest_dir / filename
         if dest_path.exists():
-            print(f"[download] Already exists: {dest_path}")
+            log.info(f"[download] Already exists: {dest_path}")
             return str(dest_path)
 
     pattern = _gguf_pattern(quant)
     existing = list(set(dest_dir.glob(pattern)) | set(dest_dir.rglob(pattern)))
     if not existing:
         existing = list(dest_dir.rglob("*.gguf"))
+    # Filter out mmproj and non-first shards
+    existing = [f for f in existing if _is_model_gguf(f)]
     if existing:
         existing.sort(key=lambda f: f.name)
         for f in existing:
             if quant.lower() in f.name.lower() and "00001-of-" in f.name:
-                print(f"[download] Already exists: {f}")
+                # Verify all shards are present
+                m = _SHARD_RE.search(f.name)
+                if m:
+                    total = int(m.group(2))
+                    base = f.name[:m.start()]
+                    present = len([s for s in f.parent.glob(f"{base}*") if _SHARD_RE.search(s.name)])
+                    if present < total:
+                        log.info(f"[download] Incomplete sharded download ({present}/{total} shards) — re-downloading")
+                        continue
+                log.info(f"[download] Already exists: {f}")
                 return str(f)
         for f in existing:
-            if quant.lower() in f.name.lower():
-                print(f"[download] Already exists: {f}")
+            if quant.lower() in f.name.lower() and "00001-of-" not in f.name and "-of-" not in f.name:
+                log.info(f"[download] Already exists: {f}")
                 return str(f)
-        for f in existing:
-            if "00001-of-" in f.name:
-                print(f"[download] Already exists: {f}")
-                return str(f)
-        print(f"[download] Already exists: {existing[0]}")
-        return str(existing[0])
+        # No exact quant match — proceed to download the requested quant
+        log.info(f"[download] Have {len(existing)} GGUF file(s) but none match '{quant}' — downloading")
 
     # Estimate expected size for progress tracking
     expected = 0
@@ -520,7 +572,7 @@ def download_model(hf_repo, quant="q4_k_m", filename=None):
         if _HAS_HF_HUB:
             result = _download_via_hub(hf_repo, quant, filename, dest_dir)
         else:
-            print("[download] huggingface_hub not installed — using curl fallback")
+            log.info("[download] huggingface_hub not installed — using curl fallback")
             result = _download_via_curl(hf_repo, quant, filename, dest_dir)
 
         # Auto-download mmproj for vision models if available
@@ -542,9 +594,9 @@ def _download_via_hub(hf_repo, quant, filename, dest_dir):
         dir_prefix = quant.upper().replace("_", "_")
         allow_pattern = [flat, f"{dir_prefix}/*.gguf"]
 
-    print(f"[download] Fetching '{allow_pattern[0]}' from '{hf_repo}'...")
+    log.info(f"[download] Fetching '{allow_pattern[0]}' from '{hf_repo}'...")
     if not hf_token:
-        print("[download] ⚠ HF_TOKEN not set — gated models will fail")
+        log.warning("[download] ⚠ HF_TOKEN not set — gated models will fail")
 
     try:
         _snapshot_download(
@@ -561,7 +613,7 @@ def _download_via_hub(hf_repo, quant, filename, dest_dir):
             for fallback in ["*Q4_*.gguf", "Q4_*/*.gguf", "*.gguf", "*/*.gguf"]:
                 if fallback in allow_pattern:
                     continue
-                print(f"[download] Pattern '{allow_pattern[0]}' failed, trying '{fallback}'...")
+                log.info(f"[download] Pattern '{allow_pattern[0]}' failed, trying '{fallback}'...")
                 try:
                     _snapshot_download(
                         repo_id=hf_repo,
@@ -579,12 +631,15 @@ def _download_via_hub(hf_repo, quant, filename, dest_dir):
         else:
             raise RuntimeError(f"Download failed for {hf_repo}/{filename}: {e}")
 
-    gguf_files = sorted(dest_dir.rglob("*.gguf"), key=lambda f: f.name)
+    # Filter out mmproj files — those are handled separately
+    gguf_files = sorted(
+        (f for f in dest_dir.rglob("*.gguf") if _is_model_gguf(f)),
+        key=lambda f: f.name,
+    )
     if not gguf_files:
-        raise RuntimeError(f"No GGUF files found after download in {dest_dir}")
+        raise RuntimeError(f"No model GGUF files found after download in {dest_dir}")
 
-    shard_pattern = re.compile(r'(\d{5})-of-(\d{5})')
-    sharded = [(f, shard_pattern.search(f.name)) for f in gguf_files]
+    sharded = [(f, _SHARD_RE.search(f.name)) for f in gguf_files]
     first_shards = [(f, m) for f, m in sharded if m and m.group(1) == '00001']
     if first_shards:
         for f, m in first_shards:
@@ -593,12 +648,16 @@ def _download_via_hub(hf_repo, quant, filename, dest_dir):
                 break
         else:
             result = first_shards[0][0]
-        total_size = sum(ff.stat().st_size for ff in gguf_files
-                         if quant.lower().replace("_", "") in ff.name.lower().replace("_", "").replace("-", ""))
+        # Count all shards (including non-first) for size reporting
+        all_shards = list(dest_dir.rglob("*.gguf"))
+        total_size = sum(ff.stat().st_size for ff in all_shards
+                         if not ff.name.startswith("mmproj-") and
+                         quant.lower().replace("_", "") in ff.name.lower().replace("_", "").replace("-", ""))
         if not total_size:
-            total_size = sum(ff.stat().st_size for ff in gguf_files)
+            total_size = sum(ff.stat().st_size for ff in all_shards if not ff.name.startswith("mmproj-"))
+        shard_count = sum(1 for ff in all_shards if _SHARD_RE.search(ff.name) and not ff.name.startswith("mmproj-"))
         size_gb = round(total_size / (1024**3), 1)
-        print(f"[download] ✓ {result.name} ({size_gb} GB across {len(gguf_files)} shards)")
+        log.info(f"[download] ✓ {result.name} ({size_gb} GB across {shard_count} shards)")
         return str(result)
 
     for f in gguf_files:
@@ -609,14 +668,14 @@ def _download_via_hub(hf_repo, quant, filename, dest_dir):
         result = gguf_files[0]
 
     size_gb = round(result.stat().st_size / (1024**3), 1)
-    print(f"[download] ✓ {result.name} ({size_gb} GB)")
+    log.info(f"[download] ✓ {result.name} ({size_gb} GB)")
     return str(result)
 
 
 def _download_via_curl(hf_repo, quant, filename, dest_dir):
     """Fallback download using curl."""
     if not filename:
-        print(f"[download] Resolving files for {hf_repo}...")
+        log.info(f"[download] Resolving files for {hf_repo}...")
         files = _hf_repo_files(hf_repo)
         if not files:
             raise RuntimeError(f"No GGUF files found in {hf_repo}")
@@ -626,11 +685,11 @@ def _download_via_curl(hf_repo, quant, filename, dest_dir):
 
     dest_path = dest_dir / filename
     if dest_path.exists():
-        print(f"[download] Already exists: {dest_path}")
+        log.info(f"[download] Already exists: {dest_path}")
         return str(dest_path)
 
     url = f"https://huggingface.co/{hf_repo}/resolve/main/{filename}"
-    print(f"[download] Downloading {filename} from {hf_repo}...")
+    log.info(f"[download] Downloading {filename} from {hf_repo}...")
 
     tmp_path = dest_path.with_suffix(".gguf.part")
     curl_cmd = [
@@ -650,7 +709,7 @@ def _download_via_curl(hf_repo, quant, filename, dest_dir):
 
     tmp_path.rename(dest_path)
     size_gb = round(dest_path.stat().st_size / (1024**3), 1)
-    print(f"[download] ✓ {filename} ({size_gb} GB)")
+    log.info(f"[download] ✓ {filename} ({size_gb} GB)")
     return str(dest_path)
 
 
@@ -665,7 +724,7 @@ def delete_model(model_path):
                     parent.rmdir()
             except Exception:
                 pass
-        print(f"[models] Deleted {p.name}")
+        log.info(f"[models] Deleted {p.name}")
 
 
 # ── Model Selection (bin-packing) ────────────────────────────────────────────

@@ -1,0 +1,23 @@
+{# naming.j2 — Prompt for Showrunner to name/role-assign new flock agents #}
+You are assigning identities to AI agents joining your flock for this mission.
+
+Mission: {{ mission_text[:300] }}
+
+New agents to name (assign a short human name, role, and experience level):
+{% for ep in endpoints %}
+- model={{ ep.model }}, {{ ep.tps }} tok/s, tier={{ ep.tier }}, ctx={{ ep.ctx }}, gpu={{ ep.gpu }}
+{% endfor %}
+
+{% if existing_names %}
+Already named agents: {{ existing_names | join(', ') }}
+Avoid duplicate names.
+{% endif %}
+
+Respond with a JSON array:
+[{"name": "FirstName", "role": "brief role", "experience": "junior/mid/senior"}]
+
+Rules:
+- Short first names only (e.g. Maya, Leo, Sam)
+- Role should match the mission needs
+- Experience based on model tier: tier-1=junior, tier-2=mid, tier-3=senior
+- No duplicate names

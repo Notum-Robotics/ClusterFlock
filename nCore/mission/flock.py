@@ -7,87 +7,15 @@ import time
 
 from registry import all_nodes
 
-from .state import (
-    FlockAgent,
-    _FLOCK_RENAME_COOLDOWN,
-)
-from .scoring import (
-    _model_quality_tier,
-    _model_size_label,
-    _get_endpoint_ctx,
-)
-from .showrunner import _ask_showrunner
-from .prompts.builder import build_knowledge_section
-
-
-# ── Flock naming prompts ─────────────────────────────────────────────────
-
-def _build_flock_naming_prompt(mission, endpoints, reassign=False):
-    """Build prompt asking Showrunner to assign mission-specific identities.
-    When reassign=True, re-assigns roles to ALL endpoints for the current mission."""
-    if reassign:
-        lines = [
-            "The mission has changed. Reassign roles to ALL flock members for this mission.",
-        ]
-    else:
-        lines = [
-            "New AI endpoints have joined the flock. Assign each a unique identity.",
-        ]
-
-    lines += [
-        "",
-        f"MISSION: {mission.mission_text[:500]}",
-        "",
-        "Assign each endpoint:",
-        "- name: a SHORT human first name (one word, e.g. Jenna, David, Mira)",
-        "- role: what this agent does for THIS mission (under 50 chars)",
-        "- experience: junior, intermediate, senior, or expert",
-        "- job_description: a 2-4 sentence paragraph describing this agent's responsibilities,",
-        "  strengths, and how they fit into the team. Be specific to the mission. This will be",
-        "  sent to the agent with every task so they understand their identity and purpose.",
-        "",
-        "Examples:",
-        '  {"name": "Jenna", "role": "genetic data analyst", "experience": "expert",',
-        '   "job_description": "You are the team\'s genetics specialist. Your primary responsibility is parsing FASTA/FASTQ data, running sequence alignments, and identifying mutations. You excel at bioinformatics pipelines and should apply rigorous scientific methodology. When in doubt, validate against reference genomes."}',
-        '  {"name": "David", "role": "frontend developer", "experience": "junior",',
-        '   "job_description": "You handle UI implementation using HTML, CSS and JavaScript. Focus on clean, accessible markup and responsive layouts. Ask clarifying questions in your response if requirements are ambiguous. Your work will be reviewed by the Showrunner, so include comments explaining your design choices."}',
-        "",
-    ]
-
-    if not reassign and mission.flock:
-        lines.append("Already assigned agents (do NOT rename these):")
-        for name, agent in mission.flock.items():
-            lines.append(f"  - {name}: {agent.role} ({agent.experience}) = {agent.model}")
-        lines.append("")
-
-    lines.append("Endpoints to assign:")
-    for ep in endpoints:
-        tier = _model_quality_tier(ep['model'])
-        size = _model_size_label(ep['model'])
-        tier_label = f"tier-3 large ({size})" if tier >= 3 else f"tier-2 medium ({size})" if tier >= 2 else f"tier-1 small ({size})"
-        lines.append(f"  - model={ep['model']}, {tier_label}, gpu={ep.get('gpu_name', '?')}, "
-                     f"toks/s={ep.get('toks_per_sec', '?')}, ctx={ep.get('context_length', '?')}")
-    lines.append("")
-    lines.append("IMPORTANT GUIDANCE ON EXPERIENCE LEVELS:")
-    lines.append("- tier-1 small models (< 7B): assign 'junior' experience. They can only handle simple,")
-    lines.append("  concrete tasks — file ops, formatting, copying, single-step work.")
-    lines.append("- tier-2 medium models (7B-26B): assign 'intermediate' experience. Good for focused")
-    lines.append("  coding tasks, testing, implementation of well-defined features.")
-    lines.append("- tier-3 large models (27B+): assign 'senior' or 'expert' experience. Capable of")
-    lines.append("  complex reasoning, architecture decisions, debugging, and multi-step work.")
-
-    lines.append("")
-    lines.append("IMPORTANT: Respond with ONLY a raw JSON array. No wrapping object, no thinking, no explanation.")
-    lines.append("Names MUST be unique single human first names.")
-    lines.append('[{"name": "...", "role": "...", "experience": "...", "job_description": "..."}, ...]')
-    lines.append("One entry per endpoint, same order as listed above.")
-
-    return "\n".join(lines)
+from .state import FlockAgent, _FLOCK_RENAME_COOLDOWN
+from .scoring import model_quality_tier, model_size_label, get_endpoint_ctx
+from .showrunner import ask_showrunner
+from .prompts import render_agent_system, render_agent_lite, render_naming_prompt
 
 
 # ── Flock update & assignment ────────────────────────────────────────────
 
-def _update_flock(mission):
+def update_flock(mission):
     """Scan cluster endpoints and update flock assignments. Returns True if changes made."""
     now = time.time()
     if now - mission.flock_last_update < _FLOCK_RENAME_COOLDOWN and mission.flock:
@@ -95,18 +23,15 @@ def _update_flock(mission):
 
     nodes = all_nodes()
     current_endpoints = []
-
     for node in nodes:
         if node.get("status") == "dead":
             continue
         for ep in node.get("endpoints", []):
             if ep.get("status") not in ("ready", "sleeping") or not ep.get("model"):
                 continue
-            # Skip the Showrunner
             if (node["node_id"] == mission.showrunner_node_id and
                     ep["model"] == mission.showrunner_model):
                 continue
-            # Skip vision/VL models — they can't produce structured agent responses
             model_lower = ep["model"].lower()
             if any(tag in model_lower for tag in ("-vl-", "-vl.", "_vl_", "_vl.", "vl-", "vision")):
                 continue
@@ -121,11 +46,10 @@ def _update_flock(mission):
                 "gpu_name": ep.get("gpu") or ep.get("gpu_name") or "",
             })
 
-    # Find unnamed endpoints
     named_ep_ids = {a.endpoint_id for a in mission.flock.values()}
     unnamed = [ep for ep in current_endpoints if ep["endpoint_id"] not in named_ep_ids]
 
-    # Update tokens_per_sec for existing agents (benchmarks may arrive after naming)
+    # Update tps for existing agents
     ep_by_id = {ep["endpoint_id"]: ep for ep in current_endpoints}
     for name, agent in mission.flock.items():
         ep_data = ep_by_id.get(agent.endpoint_id)
@@ -135,8 +59,8 @@ def _update_flock(mission):
             if old_tps == 0:
                 mission.log_event("FLOCK", f"Agent {name} benchmark: {agent.toks_per_sec} tok/s")
 
-    # Grace period for disappeared endpoints — move to departed, not delete
-    _FLOCK_GRACE_PERIOD = 600  # 10 minutes before permanent removal
+    # Grace period for disappeared endpoints
+    _FLOCK_GRACE_PERIOD = 600
     active_ep_ids = {ep["endpoint_id"] for ep in current_endpoints}
     gone = set()
     for name, agent in mission.flock.items():
@@ -145,8 +69,6 @@ def _update_flock(mission):
     for name in gone:
         agent = mission.flock.pop(name)
         mission._departed_flock[agent.endpoint_id] = (agent, now)
-
-        # Cancel any active tasks assigned to this departed agent
         cancelled_tasks = []
         for tid, task in list(mission.tasks.items()):
             if task.agent_name == name and task.status in ("pending", "running"):
@@ -157,25 +79,22 @@ def _update_flock(mission):
                 mission.task_history.append(task.to_dict())
                 del mission.tasks[tid]
                 cancelled_tasks.append(tid)
-
         if cancelled_tasks:
             mission.log_event("FLOCK",
-                              f"Agent {name} departed — cancelled {len(cancelled_tasks)} active task(s): "
-                              f"{', '.join(cancelled_tasks)}. Reassign to available agents.",
-                              agent=name)
+                              f"Agent {name} departed — cancelled {len(cancelled_tasks)} task(s): "
+                              f"{', '.join(cancelled_tasks)}", agent=name)
         else:
             mission.log_event("FLOCK",
-                              f"Agent {name} departed (endpoint offline) — "
-                              f"will retain identity for {_FLOCK_GRACE_PERIOD}s")
+                              f"Agent {name} departed (endpoint offline) — retain for {_FLOCK_GRACE_PERIOD}s")
 
     # Expire old departed entries
     expired = [eid for eid, (_, ts) in mission._departed_flock.items()
                if now - ts > _FLOCK_GRACE_PERIOD]
     for eid in expired:
         agent, _ = mission._departed_flock.pop(eid)
-        mission.log_event("FLOCK", f"Agent {agent.name} permanently removed after grace period")
+        mission.log_event("FLOCK", f"Agent {agent.name} permanently removed")
 
-    # Restore any departed agents whose endpoints came back
+    # Restore returned agents
     restored = []
     for ep in current_endpoints:
         if ep["endpoint_id"] in mission._departed_flock and ep["endpoint_id"] not in named_ep_ids:
@@ -186,17 +105,39 @@ def _update_flock(mission):
             mission.flock[agent.name] = agent
             named_ep_ids.add(ep["endpoint_id"])
             restored.append(agent.name)
-            mission.log_event("FLOCK", f"Agent {agent.name} restored (endpoint back online) — role: {agent.role}")
+            mission.log_event("FLOCK", f"Agent {agent.name} restored (back online)")
 
-    # Recalculate unnamed after restoration
     if restored:
         unnamed = [ep for ep in current_endpoints if ep["endpoint_id"] not in named_ep_ids]
+
+    # Filter tier-1 when enough tier-2+ agents exist
+    if unnamed:
+        tier2_plus = sum(1 for a in mission.flock.values() if model_quality_tier(a.model) >= 2)
+        if tier2_plus >= 2:
+            filtered = []
+            for ep in unnamed:
+                if model_quality_tier(ep["model"]) < 2:
+                    mission.log_event("FLOCK",
+                                      f"Excluding tier-1 {ep['model']} — {tier2_plus} tier-2+ agents in flock")
+                else:
+                    filtered.append(ep)
+            unnamed = filtered
 
     if not unnamed:
         return bool(gone)
 
-    # Ask Showrunner to name them
-    prompt = _build_flock_naming_prompt(mission, unnamed)
+    # Ask SR to name them
+    prompt = render_naming_prompt(
+        mission_text=mission.mission_text[:500],
+        endpoints=[{
+            "model": ep["model"],
+            "tier_label": _tier_label(ep["model"]),
+            "gpu": ep.get("gpu_name", "?"),
+            "tps": ep.get("toks_per_sec", "?"),
+            "ctx": ep.get("context_length", "?"),
+        } for ep in unnamed],
+        existing_names=list(mission.flock.keys()),
+    )
     names = _parse_flock_naming_response(mission, prompt, unnamed)
     for i, ep in enumerate(unnamed):
         entry = names[i] if i < len(names) else {}
@@ -204,15 +145,11 @@ def _update_flock(mission):
         role = entry.get("role", "general assistant")
         experience = entry.get("experience", "unknown")
         job_desc = entry.get("job_description", "")
-        sys_prompt = _generate_agent_system_prompt(name, role, experience, job_desc, ep["model"])
+        sys_prompt = generate_agent_identity_prompt(name, role, experience, job_desc, ep["model"])
         mission.flock[name] = FlockAgent(
-            endpoint_id=ep["endpoint_id"],
-            node_id=ep["node_id"],
-            hostname=ep["hostname"],
-            model=ep["model"],
-            name=name,
-            role=role,
-            experience=experience,
+            endpoint_id=ep["endpoint_id"], node_id=ep["node_id"],
+            hostname=ep["hostname"], model=ep["model"], name=name,
+            role=role, experience=experience,
             toks_per_sec=ep.get("toks_per_sec", 0),
             context_length=ep.get("context_length", 0),
             gpu_name=ep.get("gpu_name", ""),
@@ -224,50 +161,49 @@ def _update_flock(mission):
     return True
 
 
-def _reassign_flock_roles(mission):
-    """Re-assign mission-specific roles to all flock agents (e.g. after mission text changes)."""
+def reassign_flock_roles(mission):
+    """Re-assign mission-specific roles to all flock agents."""
     if not mission.flock:
         return
-    # Build endpoint list in flock order
     endpoints = []
-    agent_order = []  # track (name, agent) to update in-place
+    agent_order = []
     for name, agent in mission.flock.items():
         endpoints.append({
-            "endpoint_id": agent.endpoint_id,
-            "node_id": agent.node_id,
-            "hostname": agent.hostname,
             "model": agent.model,
-            "toks_per_sec": agent.toks_per_sec,
-            "context_length": agent.context_length,
-            "gpu_name": agent.gpu_name,
+            "tier_label": _tier_label(agent.model),
+            "gpu": agent.gpu_name or "?",
+            "tps": agent.toks_per_sec,
+            "ctx": agent.context_length or "?",
         })
         agent_order.append((name, agent))
 
-    prompt = _build_flock_naming_prompt(mission, endpoints, reassign=True)
-    names = _parse_flock_naming_response(mission, prompt, endpoints)
+    prompt = render_naming_prompt(
+        mission_text=mission.mission_text[:500],
+        endpoints=endpoints,
+        existing_names=[],
+    )
+    raw_endpoints = [{"endpoint_id": a.endpoint_id, "model": a.model} for _, a in agent_order]
+    names = _parse_flock_naming_response(mission, prompt, raw_endpoints)
 
-    # Rebuild flock dict with new names/roles (preserving runtime state)
     new_flock = {}
     existing_names = set()
     for i, (old_name, agent) in enumerate(agent_order):
         entry = names[i] if i < len(names) else {}
         new_name = entry.get("name", old_name)
-        # Ensure unique
         while new_name in existing_names:
             new_name = new_name + "-" + secrets.token_hex(2)
         existing_names.add(new_name)
-
         agent.name = new_name
         agent.role = entry.get("role", agent.role)
         agent.experience = entry.get("experience", agent.experience)
         job_desc = entry.get("job_description", "")
-        agent.system_prompt = _generate_agent_system_prompt(
+        agent.system_prompt = generate_agent_identity_prompt(
             new_name, agent.role, agent.experience, job_desc, agent.model)
         new_flock[new_name] = agent
         if new_name != old_name:
-            mission.log_event("FLOCK", f"Reassigned: {old_name} → {new_name} — {agent.role} ({agent.experience})")
+            mission.log_event("FLOCK", f"Reassigned: {old_name} → {new_name} — {agent.role}")
         else:
-            mission.log_event("FLOCK", f"Reassigned: {new_name} — {agent.role} ({agent.experience})")
+            mission.log_event("FLOCK", f"Reassigned: {new_name} — {agent.role}")
 
     mission.flock = new_flock
     mission.flock_last_update = time.time()
@@ -276,16 +212,12 @@ def _reassign_flock_roles(mission):
 # ── Naming response parsing ──────────────────────────────────────────────
 
 def _parse_flock_naming_response(mission, prompt, endpoints):
-    """Send naming prompt to Showrunner and parse the JSON array response.
-    Returns a list of dicts with 'name', 'role', 'experience' keys.
-    Length matches endpoints (fills with fallbacks if parsing fails)."""
-    response_text = _ask_showrunner(mission, prompt)
+    response_text = ask_showrunner(mission, prompt)
     if not response_text:
         return _flock_fallback_names(len(endpoints), set(mission.flock.keys()))
 
-    mission.log_event("DEBUG", f"Naming raw response ({len(response_text)} chars): {response_text[:1500]}")
+    mission.log_event("DEBUG", f"Naming raw ({len(response_text)} chars): {response_text[:1500]}")
 
-    # Strip think tags and code fences
     naming_text = re.sub(r'<think>.*?</think>', '', response_text, flags=re.DOTALL).strip()
     if not naming_text:
         naming_text = response_text
@@ -293,12 +225,10 @@ def _parse_flock_naming_response(mission, prompt, endpoints):
     if fence_m:
         naming_text = fence_m.group(1).strip()
 
-    # Try parsing JSON
     parsed = None
     try:
         parsed = json.loads(naming_text)
     except json.JSONDecodeError:
-        # Try extracting array from response
         match = re.search(r'\[.*\]', naming_text, re.DOTALL)
         if not match:
             match = re.search(r'\[.*\]', response_text, re.DOTALL)
@@ -309,13 +239,11 @@ def _parse_flock_naming_response(mission, prompt, endpoints):
                 pass
 
     if parsed and isinstance(parsed, dict):
-        # Look for a list value — try known keys first, then any list
         for key in ("names", "agents", "flock", "endpoints", "assignments"):
             if isinstance(parsed.get(key), list):
                 parsed = parsed[key]
                 break
         if isinstance(parsed, dict):
-            # Find any key whose value is a list of dicts with "name"
             for v in parsed.values():
                 if isinstance(v, list) and v and isinstance(v[0], dict) and "name" in v[0]:
                     parsed = v
@@ -324,17 +252,12 @@ def _parse_flock_naming_response(mission, prompt, endpoints):
     if not isinstance(parsed, list):
         parsed = []
 
-    # Validate entries have expected "name" key; discard invalid ones
     valid = [e for e in parsed if isinstance(e, dict) and e.get("name")]
     if not valid and parsed:
-        # List had entries but none with "name" — try regex extraction from raw text
         valid = _extract_name_objects(response_text)
     if valid:
         parsed = valid
 
-    mission.log_event("DEBUG", f"Naming parsed {len(parsed)} entries: {json.dumps(parsed, default=str)[:400]}")
-
-    # Validate and sanitize each entry
     existing_names = set(mission.flock.keys())
     result = []
     for i in range(len(endpoints)):
@@ -342,33 +265,29 @@ def _parse_flock_naming_response(mission, prompt, endpoints):
             name = str(parsed[i].get("name", "")).strip()
             role = str(parsed[i].get("role", parsed[i].get("specialty", ""))).strip()
             experience = str(parsed[i].get("experience", "")).strip().lower()
-            # Sanitize
             if not name:
                 name = f"Agent-{len(existing_names) + 1}"
             if not role:
                 role = "general assistant"
-            role = role[:50]  # enforce 50 char limit
+            role = role[:50]
             if experience not in ("junior", "intermediate", "senior", "expert"):
                 experience = "intermediate"
             job_description = str(parsed[i].get("job_description", "")).strip()
             if not job_description:
-                job_description = f"You are a {experience}-level {role}. Complete tasks thoroughly and report back."
-            # Ensure unique name
+                job_description = f"You are a {experience}-level {role}. Complete tasks thoroughly."
             while name in existing_names:
                 name = name + "-" + secrets.token_hex(2)
             existing_names.add(name)
-            result.append({"name": name, "role": role, "experience": experience, "job_description": job_description})
+            result.append({"name": name, "role": role, "experience": experience,
+                           "job_description": job_description})
         else:
             fallback = _flock_fallback_names(1, existing_names)[0]
             existing_names.add(fallback["name"])
             result.append(fallback)
-
     return result
 
 
 def _extract_name_objects(text):
-    """Try to extract {"name": ..., "role": ..., "experience": ...} objects from free text.
-    Used as fallback when the main JSON parse fails."""
     results = []
     for m in re.finditer(r'\{[^{}]*"name"\s*:\s*"[^"]+?"[^{}]*\}', text):
         try:
@@ -380,9 +299,10 @@ def _extract_name_objects(text):
     return results
 
 
+_FALLBACK_NAMES = ["Alex", "Sam", "Robin", "Casey", "Morgan", "Riley", "Jordan", "Taylor"]
+
+
 def _flock_fallback_names(count, existing_names):
-    """Generate fallback names when Showrunner naming fails."""
-    _FALLBACK_NAMES = ["Alex", "Sam", "Robin", "Casey", "Morgan", "Riley", "Jordan", "Taylor"]
     result = []
     used = set(existing_names)
     idx = 0
@@ -398,139 +318,77 @@ def _flock_fallback_names(count, existing_names):
 
 # ── Agent system prompts ─────────────────────────────────────────────────
 
-def _generate_agent_system_prompt(name, role, experience, job_description, model):
-    """Generate a persistent, elaborate system prompt stored on the FlockAgent."""
-    tier = _model_quality_tier(model)
+def generate_agent_identity_prompt(name, role, experience, job_description, model):
+    """Generate the identity section for a flock agent (stored on FlockAgent.system_prompt)."""
+    tier = model_quality_tier(model)
     capability = "large and powerful" if tier >= 3 else "capable and efficient" if tier >= 2 else "fast and lightweight"
-    base = (
+    return (
         f"You are {name}, a {experience}-level {role}.\n\n"
-        f"IDENTITY & PURPOSE:\n"
-        f"{job_description}\n\n"
+        f"IDENTITY & PURPOSE:\n{job_description}\n\n"
         f"CHAIN OF COMMAND:\n"
         f"You report to the Showrunner — a higher-intelligence orchestrator model that manages "
-        f"the overall mission. The Showrunner assigns you tasks, reviews your output, and "
-        f"coordinates your work with other agents in the flock. Follow the Showrunner's "
-        f"instructions precisely. If a task is ambiguous, do your best interpretation and "
-        f"clearly state your assumptions in your response.\n\n"
+        f"the overall mission. Follow the Showrunner's instructions precisely. If a task is "
+        f"ambiguous, do your best interpretation and clearly state your assumptions.\n\n"
         f"YOUR CAPABILITIES:\n"
         f"You are running on {model} ({capability}). Work within your strengths. "
-        f"Be thorough, precise, and take pride in your work. Your output will be verified "
-        f"by the Showrunner, so accuracy matters more than speed.\n\n"
+        f"Be thorough, precise, and take pride in your work.\n\n"
         f"WORK ETHIC:\n"
         f"- Deliver complete, working solutions — not sketches or placeholders\n"
-        f"- If you encounter an error or blocker, explain it clearly so the Showrunner can help\n"
+        f"- If you encounter an error or blocker, explain it clearly\n"
         f"- Include your reasoning when the task involves judgment calls\n"
         f"- Never fabricate data, URLs, or file contents — if unsure, say so"
     )
-    return base
 
 
-def _build_agent_system_prompt(agent, mission=None):
-    """Build the full system prompt for a flock agent — tier-adapted for model size."""
-    base = agent.system_prompt or (
-        f"You are {agent.name}, a {agent.experience}-level {agent.role}. "
-        f"You are part of a coordinated AI flock reporting to a Showrunner. "
-        f"Be thorough, precise, and take pride in your work."
-    )
-
-    tier = _model_quality_tier(agent.model)
+def build_agent_system_prompt(agent, mission=None):
+    """Build the full system prompt for a flock agent — tier-adapted."""
+    tier = model_quality_tier(agent.model)
 
     if tier < 2:
-        # Simplified prompt for small models — fewer action types, shorter examples
-        return (
-            base + "\n\n"
-            "Respond with ONLY this JSON — no other text:\n"
-            '{"thinking":"what you will do","actions":[...]}\n\n'
-            "Action types:\n"
-            '- {"type":"shell","command":"ls -la /home/mission/"}\n'
-            '- {"type":"write_file","path":"/home/mission/file.py","content":"..."}\n'
-            '- {"type":"write_file","path":"/home/mission/file.py","content":"more...","append":true}\n'
-            '- {"type":"read_file","path":"/home/mission/file.py"}\n'
-            '- {"type":"read_file","path":"/home/mission/big.py","start_line":50,"end_line":120}\n'
-            '- {"type":"replace_lines","path":"/home/mission/file.py","start_line":10,"end_line":15,"content":"new code here"}\n'
-            '- {"type":"find_files","pattern":"*.py","path":"/home/mission/"}\n'
-            '- {"type":"save_note","key":"plan","value":"what I need to do next"}\n'
-            '- {"type":"done","summary":"what was accomplished"}\n\n'
-            "RULES: Raw JSON only. No markdown. No text outside the JSON.\n"
-            "Double quotes only. Escape newlines as \\n in strings.\n"
-            "All files go under /home/mission/.\n"
-            "Iteration 1 is READ-ONLY — inspect first (read_file, find_files, shell 'ls'), "
-            "then write in iteration 2.\n"
-            "Use save_note to remember key findings across iterations.\n"
-            "When done, use the done action.\n"
+        return render_agent_lite(
+            agent={"name": agent.name, "role": agent.role, "experience": agent.experience,
+                   "system_prompt": agent.system_prompt or ""},
+            mission_text=mission.mission_text[:500] if mission else "",
+            scratchpad=agent.scratchpad if isinstance(agent.scratchpad, dict) else {},
         )
 
-    return (
-        base + "\n\n"
-        "<tools>\n"
-        "Respond with EXACTLY this JSON structure — nothing else, no markdown, no text before or after:\n"
-        "{\n"
-        '  "thinking": "your reasoning about what to do next",\n'
-        '  "actions": [\n'
-        '    {"type": "shell", "command": "ls -la /home/mission/"},\n'
-        '    {"type": "write_file", "path": "/home/mission/script.js", "content": "..."},\n'
-        '    {"type": "write_file", "path": "/home/mission/big.js", "content": "more lines...", "append": true},\n'
-        '    {"type": "read_file", "path": "/home/mission/output.txt"},\n'
-        '    {"type": "read_file", "path": "/home/mission/big.py", "start_line": 50, "end_line": 120},\n'
-        '    {"type": "batch_read", "paths": ["/home/mission/a.py", "/home/mission/b.py"]},\n'
-        '    {"type": "workspace_tree", "path": "/home/mission/"},\n'
-        '    {"type": "patch_file", "path": "/home/mission/app.py", '
-        '"old": "return 404", "new": "return 200"},\n'
-        '    {"type": "replace_lines", "path": "/home/mission/app.py", '
-        '"start_line": 10, "end_line": 25, "content": "new code for lines 10-25"},\n'
-        '    {"type": "apply_diff", "path": "/home/mission/app.py", '
-        '"diff": "--- a/app.py\\n+++ b/app.py\\n@@ -10,3 +10,3 @@\\n-old line\\n+new line"},\n'
-        '    {"type": "search", "pattern": "error", "path": "/home/mission/"},\n'
-        '    {"type": "find_files", "pattern": "*.py", "path": "/home/mission/"},\n'
-        '    {"type": "file_info", "path": "/home/mission/app.py"},\n'
-        '    {"type": "run_tool", "name": "tool_name", "args": ["arg1", "arg2"]},\n'
-        '    {"type": "save_note", "key": "plan", "value": "current approach and findings"},\n'
-        '    {"type": "done", "summary": "what was accomplished"}\n'
-        "  ]\n"
-        "}\n"
-        "</tools>\n\n"
-        "<rules>\n"
-        "CRITICAL — respond with valid JSON only. Common mistakes to avoid:\n"
-        "- Do NOT wrap in ```json ... ```. Just raw { } \n"
-        "- Do NOT add text before or after the JSON\n"
-        "- Do NOT use single quotes — JSON requires double quotes\n"
-        "- Escape special chars in strings: newlines as \\n, quotes as \\\"\n"
-        "</rules>\n\n"
-        "<workflow>\n"
-        "Iteration 1 is READ-ONLY — you MUST inspect before modifying:\n"
-        "1. INSPECT: read_file, workspace_tree, find_files, shell 'ls' — understand what exists\n"
-        "2. PLAN: Use save_note to record your approach and key findings\n"
-        "3. ACT (iteration 2+): write code or run commands based on what you found\n"
-        "4. VERIFY: check output, read result files, look at exit codes\n"
-        "5. Repeat until done, then use {\"type\": \"done\", \"summary\": \"...\"}\n\n"
-        "FILE EDITING STRATEGY (for large files):\n"
-        "- Use replace_lines for targeted edits: read the section first, then replace specific lines\n"
-        "- Use patch_file for small text substitutions (needs exact match of old text)\n"
-        "- Use write_file with append:true to build files incrementally across iterations\n"
-        "- Use apply_diff for complex multi-hunk changes (unified diff format)\n"
-        "- AVOID rewriting entire large files — edit surgically\n"
-        "- After writing/patching code files, syntax errors are auto-checked and reported\n"
-        "</workflow>\n\n"
-        "<memory>\n"
-        "Use save_note to store key findings, decisions, and progress across iterations.\n"
-        "Your scratchpad persists across all iterations — notes are always visible in your context.\n"
-        "Good note keys: 'plan', 'findings', 'blockers', 'progress', 'architecture'\n"
-        "</memory>\n\n"
-        "RULES:\n"
-        "- All files go under /home/mission/\n"
-        "- NEVER guess at file contents or structure — always read/inspect first\n"
-        "- If a command fails, read the error and try a DIFFERENT approach\n"
-        "- Shell timeout: {\"type\":\"shell\",\"command\":\"...\",\"timeout\":300} (up to 600s)\n\n"
-        "CONTAINER: Ubuntu 24.04 with curl, wget, python3, pip3, nodejs, npm, jq, git.\n"
+    kb = {}
+    plan_context = ""
+    tools = []
+    if mission:
+        kb = getattr(mission, "knowledge_base", None) or {}
+        tools = mission.tools or []
+        plan = getattr(mission, "plan", None)
+        if plan:
+            plan_parts = [f"MISSION: {mission.mission_text[:500]}",
+                          f"PLAN PROGRESS: {plan.progress_summary()}"]
+            done_tasks = [t for t in plan.tasks if t.status == "done" and t.result]
+            if done_tasks:
+                plan_parts.append("COMPLETED TASKS:")
+                for t in done_tasks[-10:]:
+                    plan_parts.append(f"  - {t.title}: {(t.result or '')[:150]}")
+            plan_context = "\n".join(plan_parts)
+
+    return render_agent_system(
+        agent={"name": agent.name, "role": agent.role, "experience": agent.experience,
+               "model": agent.model, "system_prompt": agent.system_prompt or ""},
+        mission_text=mission.mission_text[:500] if mission else "",
+        tier=tier,
+        scratchpad=agent.scratchpad if isinstance(agent.scratchpad, dict) else {},
+        knowledge_base=kb,
+        plan_context=plan_context,
+        tools=tools,
+        phase=getattr(mission, "mission_phase", "") if mission else "",
     )
 
-    # Inject knowledge base if mission is provided
-    if mission:
-        kb = getattr(mission, "knowledge_base", None)
-        if kb:
-            prompt += "\n" + build_knowledge_section(kb)
-        phase = getattr(mission, "mission_phase", "")
-        if phase:
-            prompt += f"\n[Mission phase: {phase}]\n"
 
-    return prompt
+# ── Helpers ──────────────────────────────────────────────────────────────
+
+def _tier_label(model):
+    tier = model_quality_tier(model)
+    size = model_size_label(model)
+    if tier >= 3:
+        return f"tier-3 large ({size})"
+    if tier >= 2:
+        return f"tier-2 medium ({size})"
+    return f"tier-1 small ({size})"

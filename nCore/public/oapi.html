@@ -49,13 +49,42 @@
         .oapi-config {
             display: flex;
             flex-wrap: wrap;
-            gap: 8px;
+            gap: 10px;
             align-items: center;
             padding: 6px 0;
         }
-        .oapi-config .toggle-group { flex: none; max-width: 100%; }
+        .oapi-config .mode-col {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            flex: none;
+        }
+        .oapi-config .toggle-group { gap: 0; }
+        .oapi-config .tg-option {
+            padding: 7px 14px;
+            font-size: .75rem;
+            letter-spacing: .1em;
+            gap: 6px;
+            display: inline-flex;
+            align-items: center;
+        }
+        .oapi-config .tg-option i {
+            font-size: .85rem;
+        }
+        .oapi-config .tp-row {
+            flex: none;
+            width: 100%;
+        }
         .oapi-config .model-sel {
             flex: 1;
+            min-width: 120px;
+        }
+        .oapi-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-left: auto;
         }
 
         /* Thinking power slider */
@@ -63,7 +92,6 @@
             display: flex;
             flex-direction: column;
             gap: 4px;
-            flex: 1;
         }
         .mt-row {
             display: flex;
@@ -306,6 +334,92 @@
             border: 1px solid var(--border);
             margin: 4px 0;
         }
+
+        /* Copy-pastable connection details */
+        .conn-details {
+            -webkit-user-select: text;
+            user-select: text;
+            cursor: text;
+        }
+        .conn-details code {
+            background: rgba(0,229,255,0.08);
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-family: var(--font-data);
+            color: var(--text);
+            font-size: .55rem;
+            -webkit-user-select: all;
+            user-select: all;
+        }
+
+        /* Direct connection panel */
+        .direct-conn {
+            display: none;
+            margin-top: 12px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 10px 14px;
+            -webkit-user-select: text;
+            user-select: text;
+        }
+        .direct-conn.visible { display: block; }
+        .direct-conn .dc-title {
+            font-family: var(--font-label);
+            font-size: .55rem;
+            letter-spacing: .1em;
+            text-transform: uppercase;
+            color: var(--accent);
+            margin-bottom: 8px;
+            font-weight: 700;
+        }
+        .direct-conn .dc-row {
+            font-family: var(--font-data);
+            font-size: .55rem;
+            color: var(--text-dim);
+            margin-bottom: 4px;
+            display: flex;
+            gap: 6px;
+            align-items: baseline;
+        }
+        .direct-conn .dc-row .dc-label {
+            min-width: 70px;
+            letter-spacing: .06em;
+            flex-shrink: 0;
+        }
+        .direct-conn .dc-row code {
+            background: rgba(0,229,255,0.08);
+            padding: 1px 5px;
+            border-radius: 3px;
+            color: var(--text);
+            font-family: var(--font-data);
+            font-size: .55rem;
+            -webkit-user-select: all;
+            user-select: all;
+            word-break: break-all;
+        }
+        .direct-conn .dc-curl {
+            margin-top: 8px;
+            background: rgba(0,0,0,0.3);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 8px 10px;
+            font-family: var(--font-data);
+            font-size: .5rem;
+            color: var(--text-dim);
+            line-height: 1.6;
+            -webkit-user-select: all;
+            user-select: all;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .direct-conn .dc-note {
+            margin-top: 6px;
+            font-family: var(--font-data);
+            font-size: .45rem;
+            color: var(--text-dim);
+            letter-spacing: .04em;
+        }
     </style>
 </head>
 <body>
@@ -341,8 +455,7 @@
 
         <!-- Config Row -->
         <div class="oapi-config">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex:1;min-width:0;">
-                <span class="cf-section-label" style="border:none;padding:0;">SETTINGS</span>
+            <div class="mode-col">
                 <div class="toggle-group" id="mode-bar">
                     <div class="tg-option active" data-mode="fanout" data-flash data-nbeep="select">
                         <i class="ph ph-broadcast"></i> FAN OUT
@@ -354,21 +467,23 @@
                         <i class="ph ph-hand"></i> MANUAL
                     </div>
                 </div>
-                <select class="cf-select model-sel" id="manual-model-sel" style="display:none;">
-                    <option value="">Select model...</option>
-                </select>
+                <div class="tp-row">
+                    <div class="slider-header">
+                        <span class="cf-section-label" style="border:none;padding:0;">THINKING</span>
+                        <span class="slider-readout" id="tp-val">[ 60s ]</span>
+                    </div>
+                    <div class="seg-slider" id="tp-slider" data-max="20" data-value="4"></div>
+                </div>
+            </div>
+            <select class="cf-select model-sel" id="manual-model-sel" style="display:none;">
+                <option value="">Select model...</option>
+            </select>
+            <div class="oapi-controls">
                 <div class="mt-row">
                     <span class="cf-section-label" style="border:none;padding:0;">MAX TOKENS</span>
                     <input type="number" id="mt-input" min="0" max="131072" step="256" value="0" placeholder="0">
                     <span class="mt-hint">0 = no limit</span>
                 </div>
-            </div>
-            <div class="tp-row">
-                <div class="slider-header">
-                    <span class="cf-section-label" style="border:none;padding:0;">THINKING</span>
-                    <span class="slider-readout" id="tp-val">[ 60s ]</span>
-                </div>
-                <div class="seg-slider" id="tp-slider" data-max="20" data-value="4"></div>
             </div>
         </div>
 
@@ -378,12 +493,13 @@
                 <div class="status-val" style="text-align:center;padding:40px 0;color:var(--text-dim);">
                     [ OAPI CHAT ]<br>
                     <span style="font-size:.5rem;letter-spacing:.06em;">OpenAI-compatible cluster chat · port 1919</span>
-                    <div style="margin-top:16px;font-size:.5rem;color:var(--text-dim);font-family:var(--font-data);letter-spacing:.04em;">
+                    <div class="conn-details" style="margin-top:16px;font-size:.5rem;color:var(--text-dim);font-family:var(--font-data);letter-spacing:.04em;">
                         <div style="margin-bottom:4px;color:var(--accent);letter-spacing:.1em;">CONNECTION DETAILS</div>
-                        <div style="margin-bottom:2px;">Endpoint: <span style="color:var(--text);" id="empty-endpoint"></span></div>
-                        <div style="margin-bottom:2px;">Models: <span style="color:var(--text);" id="empty-models"></span></div>
+                        <div style="margin-bottom:2px;">Endpoint: <code id="empty-endpoint"></code></div>
+                        <div style="margin-bottom:2px;">Models: <code id="empty-models"></code></div>
                         <div>Compatible with: OpenAI SDK, LangChain, LiteLLM, curl</div>
                     </div>
+                    <div class="direct-conn" id="direct-conn-panel"></div>
                 </div>
             </div>
 
@@ -527,10 +643,12 @@
         manualSel.style.display = mode === 'manual' ? '' : 'none';
         saveConfig({ mode: mode, manual_model: mode === 'manual' ? manualSel.value : null });
         toast('MODE: ' + mode.toUpperCase(), 'info', 2000);
+        updateDirectConnPanel();
     });
 
     manualSel.addEventListener('change', function() {
         saveConfig({ manual_model: manualSel.value });
+        updateDirectConnPanel();
     });
 
     // ── Max Tokens ──
@@ -563,6 +681,59 @@
         if (epEl) epEl.textContent = 'http://' + host + ':1919/v1/chat/completions';
         if (modEl) modEl.textContent = 'http://' + host + ':1919/v1/models';
     })();
+
+    // ── Direct Connection Panel ──
+    var _cachedEndpoints = [];
+
+    function updateDirectConnPanel() {
+        var panel = document.getElementById('direct-conn-panel');
+        if (!panel) return;
+
+        var mode = '';
+        modeBar.querySelectorAll('.tg-option.active').forEach(function(o) { mode = o.dataset.mode; });
+        if (mode !== 'manual' || !manualSel.value) {
+            panel.classList.remove('visible');
+            return;
+        }
+
+        var selModel = manualSel.value;
+        var ep = null;
+        for (var i = 0; i < _cachedEndpoints.length; i++) {
+            if (_cachedEndpoints[i].model === selModel) {
+                ep = _cachedEndpoints[i];
+                break;
+            }
+        }
+
+        if (!ep) {
+            panel.classList.remove('visible');
+            return;
+        }
+
+        var host = ep.ip || ep.hostname || location.hostname || 'localhost';
+        var port = ep.llama_port || 8080;
+        var baseUrl = 'http://' + host + ':' + port;
+
+        var html = '<div class="dc-title"><i class="ph ph-plugs-connected"></i> DIRECT CONNECTION — BYPASS NCORE</div>';
+        html += '<div class="dc-row"><span class="dc-label">Host:</span><code>' + escHtml(host) + '</code></div>';
+        html += '<div class="dc-row"><span class="dc-label">Port:</span><code>' + port + '</code></div>';
+        html += '<div class="dc-row"><span class="dc-label">Model:</span><code>' + escHtml(ep.model) + '</code></div>';
+        html += '<div class="dc-row"><span class="dc-label">Endpoint:</span><code>' + escHtml(baseUrl) + '/v1/chat/completions</code></div>';
+        html += '<div class="dc-row"><span class="dc-label">Models:</span><code>' + escHtml(baseUrl) + '/v1/models</code></div>';
+        if (ep.context_length) {
+            html += '<div class="dc-row"><span class="dc-label">Context:</span><code>' + ep.context_length + ' tokens</code></div>';
+        }
+
+        html += '<div class="dc-curl">curl ' + escHtml(baseUrl) + '/v1/chat/completions \\\n';
+        html += '  -H "Content-Type: application/json" \\\n';
+        html += '  -d \'{"model": "' + escHtml(ep.model) + '",\n';
+        html += '       "messages": [{"role": "user", "content": "Hello"}]}\'</div>';
+
+        html += '<div class="dc-note">llama.cpp server · OpenAI-compatible · no auth required on direct port</div>';
+
+        panel.innerHTML = html;
+        panel.classList.add('visible');
+    }
 
     // ── Thinking Power Slider (AHI seg-slider) ──
     var tpSlider = document.getElementById('tp-slider');
@@ -691,6 +862,7 @@
 
                 // Populate manual model selector
                 var endpoints = d.endpoints || [];
+                _cachedEndpoints = endpoints;
                 var curVal = manualSel.value;
                 var html = '<option value="">Select model...</option>';
                 endpoints.forEach(function(ep) {
@@ -700,6 +872,8 @@
                 manualSel.innerHTML = html;
                 if (d.oapi_manual_model) manualSel.value = d.oapi_manual_model;
                 else if (curVal) manualSel.value = curVal;
+
+                updateDirectConnPanel();
             })
             .catch(function() { setConn(false); });
     }

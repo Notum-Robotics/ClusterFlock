@@ -2,10 +2,13 @@
 and deliver pending orchestrator commands."""
 
 import json
+import logging
 import threading
 import time
 import urllib.request
 import urllib.error
+
+log = logging.getLogger(__name__)
 
 from registry import push_nodes, heartbeat as hb_node, get_node
 import orchestrator as orch_mod
@@ -92,7 +95,7 @@ def _send_model_ops(node_id, address, token, cmds):
         model = cmd.get('model_id', '')
         gpu_tag = f" gpu={cmd['gpu_idx']}" if cmd.get('gpu_idx') is not None else ""
         ts = time.strftime("%H:%M:%S")
-        print(f"[{ts}] push  {host:20} [{i+1}/{len(cmds)}] {action} {model}{gpu_tag}")
+        log.info(f"push  {host:20} [{i+1}/{len(cmds)}] {action} {model}{gpu_tag}")
         # Mark autoload step as sending
         if cmd.get("_autoload") and action == "load" and model:
             orch_mod._autoload_update_step(node_id, model, "sending")
@@ -100,10 +103,10 @@ def _send_model_ops(node_id, address, token, cmds):
         _send_cmd(node_id, address, token, cmd, hostname=host)
         elapsed = time.time() - step_t
         if elapsed > 2:
-            print(f"[{time.strftime('%H:%M:%S')}] push  {host:20} [{i+1}/{len(cmds)}] done in {elapsed:.1f}s")
+            log.info(f"push  {host:20} [{i+1}/{len(cmds)}] done in {elapsed:.1f}s")
     total = time.time() - t0
     ts = time.strftime("%H:%M:%S")
-    print(f"[{ts}] push  {host:20} all {len(cmds)} model ops done ({total:.1f}s)")
+    log.info(f"push  {host:20} all {len(cmds)} model ops done ({total:.1f}s)")
 
 
 def _send_cmd(node_id, address, token, cmd, hostname=None):
@@ -131,7 +134,7 @@ def _send_cmd(node_id, address, token, cmd, hostname=None):
             err = result.get("error", "")
             tag = "ok" if ok else f"FAIL {err}" if err else "done"
             ts = time.strftime("%H:%M:%S")
-            print(f"[{ts}] push  {host:20} {action} {model}: {tag}")
+            log.info(f"push  {host:20} {action} {model}: {tag}")
             # Report autoload progress
             if cmd.get("_autoload") and action == "load" and model:
                 orch_mod.autoload_record_load_result(
@@ -157,7 +160,7 @@ def _send_cmd(node_id, address, token, cmd, hostname=None):
                 pass
         detail = f" — {body_text}" if body_text else ""
         ts = time.strftime("%H:%M:%S")
-        print(f"[{ts}] push  {host:20} {action} {model}: FAIL {e}{detail}")
+        log.error(f"push  {host:20} {action} {model}: FAIL {e}{detail}")
         # Report autoload failure
         if cmd.get("_autoload") and action == "load" and model:
             orch_mod.autoload_record_load_result(

@@ -34,9 +34,14 @@ models/
 # Editor / IDE
 .vscode/
 .idea/
+.ncore*.lock
 
 # Internal dev scripts
 _ABOUT.md
 _submit_mission.py
 _monitor_mission.py
 _spark_monitor.sh
+
+# Internal tests
+tests/
+nCore/mission_memory.json

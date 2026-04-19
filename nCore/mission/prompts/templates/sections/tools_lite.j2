@@ -1,0 +1,16 @@
+<tools>
+RESPONSE FORMAT — JSON only:
+{"thinking": "reasoning", "actions": [...]}
+
+ACTIONS (use exact types):
+  read_file: {"type": "read_file", "path": "/home/mission/file.py"}
+  write_file: {"type": "write_file", "path": "/home/mission/file.py", "content": "..."}
+  patch_file: {"type": "patch_file", "path": "...", "old": "exact text", "new": "replacement"}
+  shell: {"type": "shell", "command": "..."}
+  search: {"type": "search", "pattern": "...", "path": "/home/mission/"}
+  workspace_tree: {"type": "workspace_tree"}
+  save_knowledge: {"type": "save_knowledge", "key": "...", "value": "..."}
+  checkpoint: {"type": "checkpoint", "op": "save", "name": "...", "description": "..."}
+
+When done: {"type": "done", "summary": "what you accomplished"}
+</tools>

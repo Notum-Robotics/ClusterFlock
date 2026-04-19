@@ -11,13 +11,17 @@ Public surface:
 
 import hmac
 import json
+import logging
 import os
 import threading
 import time
 import urllib.request
 import urllib.error
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 CONFIG = Path(__file__).parent / "cluster.json"
 _HB_SEC = 5
@@ -43,19 +47,19 @@ def _start_async_job(command_fn, body):
             del _jobs[k]
 
     mid = body.get("model_id", "")
-    print(f"[job] {job_id} started: download_and_load {mid}")
+    log.info(f"[job] {job_id} started: download_and_load {mid}")
 
     def run():
         try:
             command_fn(body)
             with _job_lock:
                 _jobs[job_id]["state"] = "done"
-            print(f"[job] {job_id} done")
+            log.info(f"[job] {job_id} done")
         except Exception as e:
             with _job_lock:
                 _jobs[job_id]["state"] = "error"
                 _jobs[job_id]["error"] = str(e)
-            print(f"[job] {job_id} error: {e}")
+            log.error(f"[job] {job_id} error: {e}")
 
     threading.Thread(target=run, daemon=True).start()
     return job_id
@@ -143,7 +147,7 @@ def _apply_hb_interval(interval):
         val = int(interval)
         val = max(_MIN_HB, min(_MAX_HB, val))
         if val != _HB_SEC:
-            print(f"\n  [heartbeat] interval changed: {_HB_SEC}s → {val}s")
+            log.info(f"[heartbeat] interval changed: {_HB_SEC}s → {val}s")
             _HB_SEC = val
     except (TypeError, ValueError):
         pass
@@ -170,10 +174,10 @@ def _local(config, payload_fn, command_fn):
 
     W = 58
     ver = config.get("agent_version", "?")
-    print(f"\n{'─' * W}")
-    print(f"  nNode · {node_id} (local) v{ver}")
-    print(f"  nCore · {address} (local, every {_HB_SEC}s)")
-    print(f"{'─' * W}")
+    log.info(f"{'─' * W}")
+    log.info(f"  nNode · {node_id} (local) v{ver}")
+    log.info(f"  nCore · {address} (local, every {_HB_SEC}s)")
+    log.info(f"{'─' * W}")
 
     _connected = True
     _pull(config, payload_fn, command_fn)
@@ -188,11 +192,11 @@ def _negotiate(config, payload_fn, command_fn, port):
     if address:
         backoff = 5
         while True:
-            print(f"Connecting to {address}...")
+            log.info(f"Connecting to {address}...")
             try:
                 token = _try_register(config)
             except KeyboardInterrupt:
-                print("\nAborted.")
+                log.info("Aborted.")
                 return
             if token:
                 config["mode"] = "pull"
@@ -201,11 +205,11 @@ def _negotiate(config, payload_fn, command_fn, port):
                 _mode = "pull"
                 _pull(config, payload_fn, command_fn)
                 return
-            print(f"  nCore unreachable — retry in {backoff}s (Ctrl+C to abort)")
+            log.info(f"nCore unreachable — retry in {backoff}s (Ctrl+C to abort)")
             try:
                 time.sleep(backoff)
             except KeyboardInterrupt:
-                print("\nAborted.")
+                log.info("Aborted.")
                 return
             backoff = min(backoff * 2, _MAX_BACKOFF)
     else:
@@ -217,7 +221,7 @@ def _negotiate(config, payload_fn, command_fn, port):
             _mode = "push"
             _push(config, payload_fn, command_fn, port)
         else:
-            print("No connection established.")
+            log.info("No connection established.")
 
 
 def _try_register(config):
@@ -240,7 +244,7 @@ def _try_register(config):
     except urllib.error.HTTPError as e:
         if e.code == 202:
             # Pending admin approval — poll until accepted
-            print("  Awaiting admin approval on nCore dashboard...")
+            log.info("Awaiting admin approval on nCore dashboard...")
             while True:
                 time.sleep(_HB_SEC)
                 try:
@@ -252,24 +256,24 @@ def _try_register(config):
                     with urllib.request.urlopen(req, timeout=10) as resp2:
                         data = json.loads(resp2.read())
                         if data.get("token"):
-                            print("  Approved!")
+                            log.info("Approved!")
                             return data["token"]
                 except urllib.error.HTTPError as e2:
                     if e2.code == 202:
                         continue  # still pending
                     if e2.code == 403:
-                        print("  Rejected by admin.")
+                        log.info("Rejected by admin.")
                         return None
-                    print(f"  {e2}")
+                    log.error(f"{e2}")
                     return None
                 except Exception as e2:
-                    print(f"  {e2}")
+                    log.error(f"{e2}")
                     return None
         else:
-            print(f"  HTTP {e.code}: {e.reason}")
+            log.error(f"HTTP {e.code}: {e.reason}")
             return None
     except Exception as e:
-        print(f"  {e}")
+        log.error(f"{e}")
         return None
 
 
@@ -287,37 +291,37 @@ def _pull(config, payload_fn, command_fn):
     hostname = config.get("hostname", "")
 
     if not address:
-        print("No cluster address configured.")
+        log.info("No cluster address configured.")
         return
 
     W = 58
     ver = config.get("agent_version", "?")
-    print(f"\n{'─' * W}")
-    print(f"  nNode · {node_id} ({hostname}) v{ver}")
-    print(f"  nCore · {address} (every {_HB_SEC}s)")
-    print(f"{'─' * W}")
+    log.info(f"{'─' * W}")
+    log.info(f"  nNode · {node_id} ({hostname}) v{ver}")
+    log.info(f"  nCore · {address} (every {_HB_SEC}s)")
+    log.info(f"{'─' * W}")
 
     # If no token yet (nCore was down during setup), register first
     if not token:
         reg_backoff = 5
         while not token:
-            print(f"  No token — attempting registration with {address}...")
+            log.info(f"No token — attempting registration with {address}...")
             try:
                 t = _try_register(config)
             except KeyboardInterrupt:
-                print("\n  Stopped.")
+                log.info("Stopped.")
                 return
             if t:
                 token = t
                 config["token"] = token
                 _save(config)
-                print("  ✓ Registered")
+                log.info("✓ Registered")
                 break
-            print(f"  ✗ nCore unreachable — retry in {reg_backoff}s")
+            log.error(f"✗ nCore unreachable — retry in {reg_backoff}s")
             try:
                 time.sleep(reg_backoff)
             except KeyboardInterrupt:
-                print("\n  Stopped.")
+                log.info("Stopped.")
                 return
             reg_backoff = min(reg_backoff * 2, _MAX_BACKOFF)
 
@@ -325,11 +329,15 @@ def _pull(config, payload_fn, command_fn):
     fails = 0
     backoff = 1
     t0 = time.time()
+    _was_disconnected = False
 
     while True:
         try:
             payload = payload_fn()
             resp = _post(f"{address}/api/v1/heartbeat", payload, token)
+            if _was_disconnected:
+                log.info(f"✓ reconnected to nCore after {fails} failed heartbeat(s)")
+                _was_disconnected = False
             _connected = True
             _touch_health()
             backoff = 1
@@ -357,7 +365,7 @@ def _pull(config, payload_fn, command_fn):
                 print()  # newline before command output
                 act = cmd.get("action", "")
                 if act == "restart_agent":
-                    print("  [link] restart_agent command received — exiting for watchdog restart")
+                    log.info("[link] restart_agent command received — exiting for watchdog restart")
                     os._exit(0)
                 elif act in ("load", "unload", "unload_all"):
                     # Serialize model ops — concurrent loads cause OOM
@@ -372,12 +380,50 @@ def _pull(config, payload_fn, command_fn):
             # Accept remote heartbeat interval from nCore
             _apply_hb_interval(resp.get("heartbeat_interval"))
         except KeyboardInterrupt:
-            print(f"\n\n  Stopped after {beats} heartbeats ({fails} failed).\n")
+            log.info(f"Stopped after {beats} heartbeats ({fails} failed).")
             return
+        except urllib.error.HTTPError as e:
+            _connected = False
+            _was_disconnected = True
+            fails += 1
+            if e.code == 401:
+                # Token rejected — re-register to get a fresh one
+                log.error(f"✗ 401 Unauthorized — re-registering...")
+                token = ""
+                config["token"] = ""
+                _save(config)
+                reg_backoff = 2
+                while not token:
+                    try:
+                        t = _try_register(config)
+                    except KeyboardInterrupt:
+                        log.info("Stopped.")
+                        return
+                    if t:
+                        token = t
+                        config["token"] = token
+                        _save(config)
+                        log.info("✓ Re-registered")
+                        backoff = 1
+                        break
+                    log.error(f"✗ Re-register failed — retry in {reg_backoff}s")
+                    _touch_health()
+                    try:
+                        time.sleep(reg_backoff)
+                    except KeyboardInterrupt:
+                        log.info("Stopped.")
+                        return
+                    reg_backoff = min(reg_backoff * 2, _MAX_BACKOFF)
+                continue
+            log.error(f"✗ {e} — retry in {backoff}s")
+            time.sleep(backoff)
+            backoff = min(backoff * 2, _MAX_BACKOFF)
+            continue
         except Exception as e:
             _connected = False
+            _was_disconnected = True
             fails += 1
-            print(f"\n  ✗ {e} — retry in {backoff}s")
+            log.error(f"✗ {e} — retry in {backoff}s")
             time.sleep(backoff)
             backoff = min(backoff * 2, _MAX_BACKOFF)
             continue
@@ -390,7 +436,7 @@ def _run_cmd(cmd, command_fn, address, token):
     try:
         result = command_fn(cmd)
     except Exception as e:
-        print(f"[cmd:{action}] execution error: {e}")
+        log.error(f"[cmd:{action}] execution error: {e}")
         result = {"error": str(e), "_agent_error": True}
 
     if result is None or not task_id:
@@ -407,11 +453,11 @@ def _run_cmd(cmd, command_fn, address, token):
             last_err = e
             if attempt < 2:
                 wait = 2 ** attempt
-                print(f"[cmd:{action}] result POST failed (attempt {attempt+1}/3): {e} — retry in {wait}s")
+                log.error(f"[cmd:{action}] result POST failed (attempt {attempt+1}/3): {e} — retry in {wait}s")
                 time.sleep(wait)
 
     # All retries exhausted — post a minimal error so orchestrator unblocks
-    print(f"[cmd:{action}] result delivery FAILED after 3 attempts: {last_err}")
+    log.error(f"[cmd:{action}] result delivery FAILED after 3 attempts: {last_err}")
     try:
         _post(url, {"error": f"result delivery failed: {last_err}", "_agent_error": True},
               token, timeout=10)
@@ -444,7 +490,7 @@ def _push(config, payload_fn, command_fn, port):
     _connected = bool(orch_token)
     port = config.get("listen_port", port)
     tag = "resumed" if orch_token else "awaiting pairing"
-    print(f"[push] listening 0.0.0.0:{port} ({tag})")
+    log.info(f"[push] listening 0.0.0.0:{port} ({tag})")
 
     # Background thread to keep health file fresh while server is alive
     def _push_health_loop():
@@ -456,11 +502,15 @@ def _push(config, payload_fn, command_fn, port):
         threading.Thread(target=_push_health_loop, daemon=True).start()
 
     HTTPServer.allow_reuse_address = True
-    httpd = HTTPServer(("0.0.0.0", port), _PushHandler)
+
+    class _ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+        daemon_threads = True
+
+    httpd = _ThreadedHTTPServer(("0.0.0.0", port), _PushHandler)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        print("\nStopped.")
+        log.info("Stopped.")
         httpd.server_close()
 
 
@@ -508,7 +558,7 @@ class _PushHandler(BaseHTTPRequestHandler):
         if cfg:
             cfg["orchestrator_token"] = tok
             _save(cfg)
-        print("[push] paired with orchestrator")
+        log.info("[push] paired with orchestrator")
         self._reply(200, _ctx["payload_fn"]())
 
     # ── Unpair ───────────────────────────────────────────────────────
@@ -525,7 +575,7 @@ class _PushHandler(BaseHTTPRequestHandler):
         if cfg:
             cfg.pop("orchestrator_token", None)
             _save(cfg)
-        print("[push] unpaired from orchestrator")
+        log.info("[push] unpaired from orchestrator")
         self._reply(200, {"ok": True})
 
     # ── Heartbeat ────────────────────────────────────────────────────
@@ -546,7 +596,7 @@ class _PushHandler(BaseHTTPRequestHandler):
             return
         if body.get("action") == "restart_agent":
             self._reply(200, {"ok": True, "restarting": True})
-            print("[push] restart_agent command received — exiting for watchdog restart")
+            log.info("[push] restart_agent command received — exiting for watchdog restart")
             threading.Thread(target=lambda: (time.sleep(0.5), os._exit(0)),
                              daemon=True).start()
             return

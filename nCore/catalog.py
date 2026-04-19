@@ -7,11 +7,14 @@ warning indicator in the UI.
 """
 
 import json
+import logging
 import re
 import threading
 import time
 import urllib.request
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 HF_API = "https://huggingface.co/api/models"
 _CATALOG_JSON = Path(__file__).resolve().parent.parent / "model_catalog.json"
@@ -57,7 +60,7 @@ def _builtin_catalog():
         raw = json.loads(_CATALOG_JSON.read_text())
         return [_make_entry(m) for m in raw]
     except Exception as e:
-        print(f"[catalog] Failed to load {_CATALOG_JSON}: {e}")
+        log.error(f"[catalog] Failed to load {_CATALOG_JSON}: {e}")
         return []
 
 
@@ -72,7 +75,7 @@ def _hf_catalog(limit=50):
         with urllib.request.urlopen(req, timeout=30) as resp:
             models = json.loads(resp.read())
     except Exception as e:
-        print(f"[catalog] HuggingFace fetch failed: {e}")
+        log.error(f"[catalog] HuggingFace fetch failed: {e}")
         return []
 
     catalog = []
@@ -110,7 +113,7 @@ def refresh():
     with _lock:
         _catalog = merged
         _fetched_at = time.time()
-    print(f"[catalog] {len(merged)} models ({len(builtin)} builtin, {len(hf)} HuggingFace)")
+    log.info(f"[catalog] {len(merged)} models ({len(builtin)} builtin, {len(hf)} HuggingFace)")
 
 
 def get_catalog():
@@ -203,7 +206,7 @@ def _save_graylist():
     try:
         _GRAYLIST_JSON.write_text(json.dumps(_graylist, indent=2) + "\n")
     except Exception as e:
-        print(f"[catalog] graylist save failed: {e}")
+        log.error(f"[catalog] graylist save failed: {e}")
 
 
 def graylist_add(model_id, reason="defective behaviour"):
@@ -219,7 +222,7 @@ def graylist_add(model_id, reason="defective behaviour"):
                 "last_seen": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "count": 1,
             }
-            print(f"[catalog] graylisted model: {model_id} — {reason}")
+            log.info(f"[catalog] graylisted model: {model_id} — {reason}")
         _save_graylist()
 
 
@@ -229,7 +232,7 @@ def graylist_remove(model_id):
         if model_id in _graylist:
             del _graylist[model_id]
             _save_graylist()
-            print(f"[catalog] un-graylisted model: {model_id}")
+            log.info(f"[catalog] un-graylisted model: {model_id}")
             return True
     return False
 

@@ -57,7 +57,8 @@ def register(node_id, hostname, hardware=None, token=None,
 
 def heartbeat(node_id, hostname, metrics=None, endpoints=None, hardware=None,
               agent_version=None, downloaded=None, agent_type=None,
-              cpu_ram_enabled=None, activity=None, auto_unload=None):
+              cpu_ram_enabled=None, activity=None, auto_unload=None,
+              peer_address=None):
     """Process a heartbeat from a node. Returns False if node unknown."""
     with _lock:
         node = _nodes.get(node_id)
@@ -66,6 +67,8 @@ def heartbeat(node_id, hostname, metrics=None, endpoints=None, hardware=None,
         now = time.time()
         node["last_seen"] = now
         node["hostname"] = hostname
+        if peer_address:
+            node["peer_address"] = peer_address
         if metrics:
             node["metrics"] = metrics
         if endpoints is not None:

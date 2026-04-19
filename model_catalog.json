@@ -14,6 +14,7 @@
   {"id": "qwen/qwen3.5-9b",                 "name": "Qwen3.5 9B",              "size_gb": 5.4,   "params_b": 9,     "max_ctx": 131072},
   {"id": "qwen/qwen3.5-27b",                "name": "Qwen3.5 27B",             "size_gb": 16.2,  "params_b": 27,    "max_ctx": 131072},
   {"id": "qwen/qwen3.5-35b-a3b",            "name": "Qwen3.5 35B MoE",         "size_gb": 21.0,  "params_b": 35,    "max_ctx": 131072},
+  {"id": "qwen/qwen3.6-35b-a3b",            "name": "Qwen3.6 35B MoE",         "size_gb": 20.6,  "params_b": 35,    "max_ctx": 131072},
   {"id": "deepseek-ai/deepseek-r1-0528-qwen3-8b", "name": "DeepSeek R1 8B",    "size_gb": 4.9,   "params_b": 8,     "max_ctx": 131072},
   {"id": "deepseek-ai/deepseek-r1-distill-qwen-14b", "name": "DeepSeek R1 14B", "size_gb": 8.5,  "params_b": 14,    "max_ctx": 131072},
   {"id": "deepseek-ai/deepseek-r1-distill-qwen-32b", "name": "DeepSeek R1 32B", "size_gb": 19.9, "params_b": 32,    "max_ctx": 131072},

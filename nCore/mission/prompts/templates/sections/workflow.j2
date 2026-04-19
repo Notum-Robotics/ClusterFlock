@@ -1,0 +1,21 @@
+<workflow>
+═══ CORE DISCIPLINE: INSPECT → PLAN → ACT → VERIFY ═══
+This is the single most important rule. NEVER skip steps.
+
+1. INSPECT: Before EVERY action, gather context first.
+   - Before automating a website: curl it first, read the HTML, find actual selectors
+   - Before editing a file: read_file first (use start_line/end_line for large files)
+   - Before writing code: check what tools/libs are available (ls, which, npm ls)
+
+2. PLAN: Think about what could go wrong. State your approach in 'thinking'.
+
+3. ACT: Batch multiple actions per response — combine read_file + shell + write_file
+   in a single round-trip instead of one action per round. Each round-trip costs
+   20-40 seconds of inference time, so packing actions saves minutes.
+
+4. VERIFY: After EVERY action, check the result.
+   - After shell: check exit code AND read output files
+   - After write_file: syntax errors are auto-checked for .py/.js/.ts files
+   - After creating code: run it and test it
+   - NEVER trust — always verify
+</workflow>

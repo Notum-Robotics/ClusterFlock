@@ -1,79 +1,46 @@
 """Mission persistence, crash-recovery, container GC, and watchdog."""
 
 import json
+import logging
 import threading
 import time
 
+log = logging.getLogger(__name__)
+
 from .state import (
     MissionState,
+    MissionPlan,
     _lock,
     _missions,
     _MISSIONS_FILE,
     _WATCHDOG_INTERVAL,
 )
-from .container import (
-    _docker_exec,
-    _container_exec,
-    _container_write_file,
-    _container_read_file,
-)
+from .container import _docker_exec
 
 
-def _write_mission_log_to_container(mission):
-    """Write a condensed mission log to /home/mission/mission_log.txt.
-    Called periodically and on compaction so showrunner can read_file it."""
-    if not mission.container_id:
-        return
-    lines = []
-    lines.append(f"Mission: {mission.mission_id}")
-    lines.append(f"Status: {mission.status}, Round trips: {mission.round_trips}")
-    lines.append(f"Elapsed: {(time.time() - mission.created_at)/60:.0f} min")
-    lines.append(f"Showrunner: {mission.showrunner_model}")
-    lines.append("")
-
-    # Completed tasks summary
-    if mission.task_history:
-        lines.append("=== COMPLETED TASKS ===")
-        for td in mission.task_history[-20:]:
-            agent = td.get("agent_name", "?")
-            status = td.get("status", "?")
-            result = (td.get("result") or td.get("error") or "")[:200]
-            lines.append(f"- {agent} ({status}): {result}")
-        lines.append("")
-
-    # Key events (filter for important ones only)
-    important = ("THINKING", "COMPLETE", "ERROR", "DISPATCH", "CANCEL_TASK",
-                 "MISSION_CHANGED", "AUTO_DONE", "CONFIG", "REFLECT")
-    key_events = [e for e in mission.event_log if e.get("level") in important]
-    if key_events:
-        lines.append("=== KEY EVENTS (recent) ===")
-        for e in key_events[-30:]:
-            ts = e.get("time_str", "")
-            level = e.get("level", "")
-            agent = e.get("agent", "")
-            msg = e.get("message", "")[:200]
-            prefix = f"[{agent}] " if agent else ""
-            lines.append(f"{ts} {level} {prefix}{msg}")
-        lines.append("")
-
-    # Last summary if available
-    if mission.last_summary:
-        lines.append("=== PROGRESS SUMMARY ===")
-        lines.append(mission.last_summary[:2000])
-
-    try:
-        _container_write_file(mission.container_id, "/home/mission/mission_log.txt",
-                              "\n".join(lines))
-    except Exception:
-        pass  # best effort
-
-
-def _persist_missions():
-    """Save mission metadata to disk for crash recovery.
-    Call OUTSIDE of _lock to avoid deadlock — this function acquires it briefly."""
+def persist_missions():
+    """Save mission metadata to disk for crash recovery."""
     with _lock:
         data = {}
         for mid, m in _missions.items():
+            truncated_history = []
+            for th in (m.task_history or [])[-50:]:
+                entry = dict(th)
+                for key in ("result", "error"):
+                    if entry.get(key) and len(str(entry[key])) > 1000:
+                        entry[key] = str(entry[key])[:1000]
+                truncated_history.append(entry)
+
+            truncated_convo = []
+            for turn in (m.conversation or [])[-20:]:
+                t = dict(turn)
+                content = t.get("content", "")
+                if len(content) > 3000:
+                    t["content"] = content[:3000]
+                truncated_convo.append(t)
+
+            truncated_events = (m.event_log or [])[-200:]
+
             data[mid] = {
                 "mission_id": m.mission_id,
                 "mission_text": m.mission_text,
@@ -85,25 +52,36 @@ def _persist_missions():
                 "round_trips": m.round_trips,
                 "last_summary": m.last_summary,
                 "notes": m.notes,
+                "mission_phase": getattr(m, "mission_phase", "planning"),
+                "plan": m.plan.to_dict() if getattr(m, "plan", None) else None,
+                "phase_history": getattr(m, "phase_history", []),
+                "knowledge_base": dict(m.knowledge_base) if m.knowledge_base else {},
+                "task_history": truncated_history,
+                "conversation": truncated_convo,
+                "event_log": truncated_events,
+                "_sr_node_perf": dict(m._sr_node_perf) if m._sr_node_perf else {},
+                "_agent_perf": dict(m._agent_perf) if m._agent_perf else {},
+                "_has_result": m._has_result,
+                "_flock_advice": dict(m._flock_advice) if m._flock_advice else {},
+                "_advice_milestone_tracker": dict(m._advice_milestone_tracker) if m._advice_milestone_tracker else {},
             }
     try:
         tmp = _MISSIONS_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2))
         tmp.replace(_MISSIONS_FILE)
     except Exception as e:
-        print(f"[mission] Failed to persist missions: {e}")
+        log.error(f"[mission] Failed to persist missions: {e}")
 
 
-def _restore_missions():
-    """Restore missions from disk after nCore restart.
-    Reconnects to existing Docker containers. Restored missions are paused."""
+def restore_missions():
+    """Restore missions from disk after nCore restart."""
     if not _MISSIONS_FILE.exists():
         return
 
     try:
         data = json.loads(_MISSIONS_FILE.read_text())
     except Exception as e:
-        print(f"[mission] Failed to read missions.json: {e}")
+        log.error(f"[mission] Failed to read missions.json: {e}")
         return
 
     if not isinstance(data, dict):
@@ -116,18 +94,15 @@ def _restore_missions():
 
         container_name = mdata.get("container_name", f"cf-mission-{mid}")
 
-        # Check if container still exists and get its ID
         out, _, rc = _docker_exec(
             ["docker", "inspect", "--format", "{{.Id}}", container_name],
             timeout=10,
         )
         if rc != 0:
-            print(f"[mission] Skipping {mid} — container {container_name} not found")
+            log.warning(f"[mission] Skipping {mid} — container {container_name} not found")
             continue
 
         container_id = out.strip()
-
-        # Ensure container is running (may have been stopped)
         _docker_exec(["docker", "start", container_name], timeout=15)
 
         old_status = mdata.get("status", "completed")
@@ -141,6 +116,25 @@ def _restore_missions():
         mission.round_trips = mdata.get("round_trips", 0)
         mission.last_summary = mdata.get("last_summary", "")
         mission.notes = mdata.get("notes", [])
+        mission.mission_phase = mdata.get("mission_phase", "planning")
+        mission.phase_history = mdata.get("phase_history", [])
+        mission.knowledge_base = mdata.get("knowledge_base", {})
+        mission.task_history = mdata.get("task_history", [])
+        mission.conversation = mdata.get("conversation", [])
+        mission.event_log = mdata.get("event_log", [])
+        mission._sr_node_perf = mdata.get("_sr_node_perf", {})
+        mission._agent_perf = mdata.get("_agent_perf", {})
+        mission._has_result = mdata.get("_has_result", False)
+        mission._flock_advice = mdata.get("_flock_advice", {})
+        mission._advice_milestone_tracker = mdata.get("_advice_milestone_tracker", {})
+
+        plan_data = mdata.get("plan")
+        if plan_data:
+            try:
+                mission.plan = MissionPlan.from_dict(plan_data)
+            except Exception as e:
+                log.error(f"[mission] Failed to restore plan for {mid}: {e}")
+                mission.plan = None
         mission.log_event("INFO",
             f"Mission restored from persistence (was {old_status}) — paused, ready to resume")
 
@@ -149,23 +143,17 @@ def _restore_missions():
         restored += 1
 
     if restored:
-        print(f"[mission] Restored {restored} mission(s) from persistence")
+        log.info(f"[mission] Restored {restored} mission(s) from persistence")
 
 
 def gc_containers():
-    """Remove Docker containers and volumes whose missions no longer exist in memory.
-
-    Containers and volumes belonging to ANY existing mission (running, completed,
-    paused, etc.) are kept — only truly orphaned resources are cleaned up.
-    Returns dict with 'removed' and 'kept' lists.
-    """
+    """Remove Docker containers and volumes whose missions no longer exist."""
     with _lock:
         known_ids = set(_missions.keys())
 
     removed = []
     kept = []
 
-    # 1. Clean orphaned containers
     out, _, rc = _docker_exec(
         ["docker", "ps", "-a", "--filter", "name=cf-mission-",
          "--format", "{{.Names}}"],
@@ -183,7 +171,7 @@ def gc_containers():
                 kept.append(name)
                 continue
 
-            print(f"[gc] removing orphaned container {name}")
+            log.info(f"[gc] removing orphaned container {name}")
             _docker_exec(["docker", "stop", name], timeout=30)
             _docker_exec(["docker", "rm", "-f", name], timeout=15)
             _docker_exec(["docker", "volume", "rm", f"{name}-home"], timeout=15)
@@ -191,7 +179,6 @@ def gc_containers():
     elif rc != 0:
         return {"removed": [], "kept": [], "error": "docker query failed"}
 
-    # 2. Clean orphaned volumes
     vol_out, _, vol_rc = _docker_exec(
         ["docker", "volume", "ls", "--filter", "name=cf-mission-",
          "--format", "{{.Name}}"],
@@ -209,12 +196,12 @@ def gc_containers():
             if mission_id in known_ids:
                 continue
 
-            print(f"[gc] removing orphaned volume {vol_name}")
+            log.info(f"[gc] removing orphaned volume {vol_name}")
             _docker_exec(["docker", "volume", "rm", vol_name], timeout=15)
             removed_volumes.append(vol_name)
 
     if removed or removed_volumes:
-        print(f"[gc] cleaned up {len(removed)} container(s), "
+        log.info(f"[gc] cleaned up {len(removed)} container(s), "
               f"{len(removed_volumes)} volume(s), kept {len(kept)}")
     return {
         "removed": removed,
@@ -224,8 +211,8 @@ def gc_containers():
     }
 
 
-def _watchdog_loop():
-    """Background thread: periodically run container GC and persist mission state."""
+def watchdog_loop():
+    """Background thread: periodically run container GC and persist state."""
     time.sleep(60)
     while True:
         try:
@@ -233,7 +220,7 @@ def _watchdog_loop():
         except Exception:
             pass
         try:
-            _persist_missions()
+            persist_missions()
         except Exception:
             pass
         time.sleep(_WATCHDOG_INTERVAL)

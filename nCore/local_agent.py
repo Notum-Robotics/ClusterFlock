@@ -11,6 +11,7 @@ connects directly to localhost, skipping negotiation and auth.
 """
 
 import json
+import logging
 import os
 import secrets
 import signal
@@ -20,6 +21,8 @@ import sys
 import threading
 import time
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 from registry import register as reg_node, remove as rm_node, get_node
 from auth import generate as gen_token
@@ -108,7 +111,7 @@ def _kill_orphaned_agents():
         except OSError:
             continue
 
-        print(f"[local_agent] killing orphaned agent pid {pid}")
+        log.info(f"[local_agent] killing orphaned agent pid {pid}")
         try:
             os.kill(pid, signal.SIGTERM)
             killed_any = True
@@ -124,7 +127,7 @@ def _kill_orphaned_agents():
         ).strip()
         for line in out.splitlines():
             pid = int(line.strip())
-            print(f"[local_agent] killing orphaned llama-server pid {pid}")
+            log.info(f"[local_agent] killing orphaned llama-server pid {pid}")
             try:
                 os.kill(pid, signal.SIGTERM)
                 killed_any = True

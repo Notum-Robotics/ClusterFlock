@@ -11,6 +11,7 @@ Multi-device model (from agent_linux):
 """
 
 import json
+import logging
 import os
 import platform
 import re
@@ -20,6 +21,8 @@ import time
 import urllib.request
 import urllib.error
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 _IS_DARWIN = platform.system() == "Darwin"
 
@@ -147,7 +150,7 @@ def build(jobs=None):
         jobs = max(1, os.cpu_count() or 4)
 
     if _IS_DARWIN:
-        print("[build] Configuring llama.cpp with Metal (Apple Silicon)...")
+        log.info("[build] Configuring llama.cpp with Metal (Apple Silicon)...")
         cmake_args = [
             "cmake", "-B", str(build_dir), "-S", str(LLAMA_CPP_DIR),
             "-DCMAKE_BUILD_TYPE=Release",
@@ -157,7 +160,7 @@ def build(jobs=None):
             "-DCMAKE_OSX_ARCHITECTURES=arm64",
         ]
     else:
-        print("[build] Configuring llama.cpp with CUDA...")
+        log.info("[build] Configuring llama.cpp with CUDA...")
         cmake_args = [
             "cmake", "-B", str(build_dir), "-S", str(LLAMA_CPP_DIR),
             "-DCMAKE_BUILD_TYPE=Release",
@@ -172,7 +175,7 @@ def build(jobs=None):
     if r.returncode != 0:
         raise RuntimeError(f"cmake configure failed:\n{r.stderr}")
 
-    print(f"[build] Building with {jobs} parallel jobs...")
+    log.info(f"[build] Building with {jobs} parallel jobs...")
     r = subprocess.run(
         ["cmake", "--build", str(build_dir), "--config", "Release",
          "-j", str(jobs), "--target", "llama-server"],
@@ -183,19 +186,21 @@ def build(jobs=None):
 
     if not server_binary():
         raise RuntimeError("Build completed but llama-server not found")
-    print(f"[build] ✓ llama-server: {server_binary()}")
+    log.info(f"[build] ✓ llama-server: {server_binary()}")
 
 
 # ── Context auto-detection ────────────────────────────────────────────────
 
-def _gguf_context_length(model_path):
-    """Read the native context length from GGUF metadata. Returns int or None."""
+def _gguf_metadata(model_path):
+    """Read key metadata from GGUF header. Returns dict with available fields:
+    context_length, block_count, head_count_kv, embedding_length, head_count."""
     import struct
+    meta = {}
     try:
         with open(model_path, 'rb') as f:
             magic = f.read(4)
             if magic != b'GGUF':
-                return None
+                return meta
             version = struct.unpack('<I', f.read(4))[0]
             _tensor_count = struct.unpack('<Q', f.read(8))[0]
             kv_count = struct.unpack('<Q', f.read(8))[0]
@@ -228,18 +233,37 @@ def _gguf_context_length(model_path):
                 vtype = struct.unpack('<I', f.read(4))[0]
                 val = read_val(vtype)
                 if key.endswith('.context_length'):
-                    return int(val)
+                    meta['context_length'] = int(val)
+                elif key.endswith('.block_count'):
+                    meta['block_count'] = int(val)
+                elif key.endswith('.attention.head_count_kv'):
+                    meta['head_count_kv'] = int(val)
+                elif key.endswith('.attention.head_count'):
+                    meta['head_count'] = int(val)
+                elif key.endswith('.embedding_length'):
+                    meta['embedding_length'] = int(val)
     except Exception:
         pass
-    return None
+    return meta
 
 
-def _auto_context_size(model_path, device="gpu0"):
-    """Pick the best context size based on VRAM, model size, and model support.
+def _gguf_context_length(model_path):
+    """Read the native context length from GGUF metadata. Returns int or None."""
+    return _gguf_metadata(model_path).get('context_length')
 
-    Strategy: compute how much VRAM is available for KV cache after loading
-    the model, pick the largest power-of-2 context that fits, then cap at
-    the model's native max context length.
+
+# Minimum VRAM (MB) to keep free after model + KV cache allocation.
+# Covers CUDA scratch buffers, attention intermediates, MoE expert routing,
+# and OS/driver overhead.
+_MIN_FREE_VRAM_MB = 2048
+
+
+def _auto_context_size(model_path, device="gpu0", cache_type="q4_0"):
+    """Pick the maximum context size that fits in VRAM/RAM with safe headroom.
+
+    Strategy: parse GGUF architecture to compute precise KV cache cost per token,
+    then calculate the max context that fits while preserving enough free memory
+    for runtime scratch buffers and CUDA intermediates.
     """
     from hardware import gpu as hw_gpu
 
@@ -254,30 +278,66 @@ def _auto_context_size(model_path, device="gpu0"):
         from hardware import _mem_info
         _, free_mb = _mem_info()
 
-    # Reserve: model weights × 1.2 overhead + 15% safety margin
-    available_mb = (free_mb - model_size_mb * 1.2) * 0.85
+    # Reserve: model weights × 1.3 (covers weight loading overhead, compute
+    # graph allocation, and CUDA context) + 15% of remaining for runtime
+    # scratch buffers (attention intermediates, MoE expert routing, etc.)
+    available_mb = (free_mb - model_size_mb * 1.3) * 0.85
 
-    # Pick largest context from tier list that fits
-    # Rough VRAM cost for KV cache with q4_0: ~0.15 MB per 1K tokens (varies by model)
-    # Conservative estimate — the retry mechanism will reduce if we overshoot
-    tiers = [262144, 131072, 65536, 32768, 16384, 8192]
-    ctx = 8192  # minimum
-    for t in tiers:
-        # Estimate: ~0.15 MB per 1K ctx tokens is very rough;
-        # use ~200 MB per 8K tokens as a safer heuristic
-        estimated_kv_mb = (t / 8192) * 200
-        if available_mb >= estimated_kv_mb:
-            ctx = t
-            break
+    # Parse GGUF for precise KV cache estimation
+    meta = _gguf_metadata(model_path)
+    n_layers = meta.get('block_count', 0)
+    n_kv_heads = meta.get('head_count_kv', 0)
+    n_heads = meta.get('head_count', 0)
+    embed_dim = meta.get('embedding_length', 0)
+    native_ctx = meta.get('context_length')
+
+    # Bytes per element based on KV cache quantization
+    kv_bytes = {"f16": 2.0, "f32": 4.0, "q8_0": 1.0, "q4_0": 0.5, "q4_1": 0.5}
+    bpe = kv_bytes.get(cache_type, 2.0)
+
+    if n_layers and n_kv_heads and n_heads and embed_dim:
+        # Precise: head_dim = embed_dim / n_heads
+        # KV per token = 2 (K+V) × n_layers × n_kv_heads × head_dim × bytes
+        head_dim = embed_dim // n_heads
+        kv_per_token = 2 * n_layers * n_kv_heads * head_dim * bpe
+        kv_per_token_mb = kv_per_token / (1024 * 1024)
+        log.info(f"[server] KV architecture: {n_layers} layers, {n_kv_heads} kv_heads, "
+                 f"head_dim={head_dim}, {bpe}B/elem → {kv_per_token:.0f} B/token")
+    else:
+        # Fallback: estimate from model file size (larger models = more KV)
+        # ~0.5 KB/token for 7B-class, ~2 KB/token for 70B-class at f16
+        est_params_b = model_size_mb / 600  # rough: Q4 ≈ 600 MB/B
+        kv_per_token = max(256, est_params_b * 100) * bpe / 2.0
+        kv_per_token_mb = kv_per_token / (1024 * 1024)
+        log.info(f"[server] KV fallback estimate: ~{est_params_b:.0f}B params → "
+                 f"{kv_per_token:.0f} B/token ({cache_type})")
+
+    # Calculate exact max context that fits in available memory
+    if kv_per_token_mb > 0:
+        max_ctx = int(available_mb / kv_per_token_mb)
+    else:
+        max_ctx = 8192
+
+    # Enforce minimum free VRAM floor after KV allocation
+    if kv_per_token_mb > 0 and available_mb > 0:
+        kv_total_mb = max_ctx * kv_per_token_mb
+        leftover_mb = available_mb - kv_total_mb
+        if leftover_mb < _MIN_FREE_VRAM_MB:
+            # Reduce context to guarantee minimum free headroom
+            usable_mb = max(0, available_mb - _MIN_FREE_VRAM_MB)
+            max_ctx = int(usable_mb / kv_per_token_mb)
+
+    # Round down to nearest 1024 for cleanliness
+    ctx = max(2048, (max_ctx // 1024) * 1024)
 
     # Cap at model's native context length
-    native_ctx = _gguf_context_length(model_path)
     if native_ctx and ctx > native_ctx:
         ctx = native_ctx
 
-    print(f"[server] Auto context: {ctx} tokens "
-          f"(VRAM free: {free_mb:.0f} MB, model: {model_size_mb:.0f} MB, "
-          f"native max: {native_ctx or 'unknown'})")
+    log.info(f"[server] Auto context: {ctx} tokens "
+             f"(VRAM free: {free_mb:.0f} MB, model: {model_size_mb:.0f} MB, "
+             f"KV/tok: {kv_per_token:.0f}B, available: {available_mb:.0f} MB, "
+             f"max fit: {max_ctx}, native max: {native_ctx or 'unknown'})")
     return ctx
 
 
@@ -285,24 +345,33 @@ def _auto_context_size(model_path, device="gpu0"):
 
 def _find_mmproj(model_path):
     """Find a multimodal projector file next to the model GGUF.
-    Looks for mmproj-*.gguf in the same directory (prefers F16 > BF16 > F32).
+    Looks for mmproj-*.gguf in the same directory and parent directories
+    (up to MODELS_DIR boundary). Prefers F16 > BF16 > F32.
     Returns path string or None."""
     model_dir = Path(model_path).parent
-    candidates = sorted(model_dir.glob("mmproj-*.gguf"))
-    if not candidates:
-        return None
-    # Prefer F16 for best speed/quality tradeoff
-    for pref in ("F16", "BF16", "F32"):
-        for c in candidates:
-            if pref in c.name:
-                return str(c)
-    return str(candidates[0])
+    # Search current dir, then walk up to MODELS_DIR
+    search_dirs = [model_dir]
+    d = model_dir.parent
+    while d != d.parent and d >= MODELS_DIR:
+        search_dirs.append(d)
+        d = d.parent
+
+    for sdir in search_dirs:
+        candidates = sorted(sdir.glob("mmproj-*.gguf"))
+        if not candidates:
+            continue
+        for pref in ("F16", "BF16", "F32"):
+            for c in candidates:
+                if pref in c.name:
+                    return str(c)
+        return str(candidates[0])
+    return None
 
 
 def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
                  n_gpu_layers=9999, parallel=None, threads=None,
                  flash_attn="on", cache_type_k=None, cache_type_v=None,
-                 host="127.0.0.1", extra_args=None,
+                 host="0.0.0.0", extra_args=None,
                  _retry_count=0, _max_retries=5):
     """Start a llama-server instance pinned to a specific device.
 
@@ -343,7 +412,7 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
         if cache_type_v is None:
             cache_type_v = "f16"
         if ctx_size is None:
-            ctx_size = _auto_context_size(model_path, device)
+            ctx_size = _auto_context_size(model_path, device, cache_type=cache_type_k)
     else:
         # Linux GPU
         if threads is None:
@@ -353,7 +422,7 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
         if cache_type_v is None:
             cache_type_v = "q4_0"
         if ctx_size is None:
-            ctx_size = _auto_context_size(model_path, device)
+            ctx_size = _auto_context_size(model_path, device, cache_type=cache_type_k)
 
     # Auto-select parallel slots based on context size so each slot
     # gets a useful context window (at least 65K per slot).
@@ -401,6 +470,12 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
             env["CUDA_VISIBLE_DEVICES"] = ""
         else:
             gpu_idx = int(device.replace("gpu", ""))
+            from hardware import gpu as _gpu_probe
+            n_physical = len(_gpu_probe())
+            if n_physical > 0 and gpu_idx >= n_physical:
+                raise ValueError(
+                    f"device={device} but only {n_physical} physical "
+                    f"GPU(s) detected — refusing to launch on non-existent GPU")
             env["CUDA_VISIBLE_DEVICES"] = str(gpu_idx)
 
     # Logging
@@ -410,14 +485,14 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
         tag = "Metal"
     else:
         tag = device.upper()
-    print(f"[server] Starting llama-server [{tag}] on {host}:{port}")
-    print(f"[server]   Model: {model_path}")
-    print(f"[server]   Context: {ctx_size}, GPU layers: {n_gpu_layers}")
-    print(f"[server]   Flash Attention: {flash_attn}, KV: {cache_type_k}")
+    log.info(f"[server] Starting llama-server [{tag}] on {host}:{port}")
+    log.info(f"[server]   Model: {model_path}")
+    log.info(f"[server]   Context: {ctx_size}, GPU layers: {n_gpu_layers}")
+    log.info(f"[server]   Flash Attention: {flash_attn}, KV: {cache_type_k}")
     if is_cpu:
-        print(f"[server]   CPU-only mode ({threads} threads, system RAM)")
+        log.info(f"[server]   CPU-only mode ({threads} threads, system RAM)")
     if mmproj:
-        print(f"[server]   Vision: {Path(mmproj).name}")
+        log.info(f"[server]   Vision: {Path(mmproj).name}")
 
     proc = subprocess.Popen(cmd, env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -433,20 +508,20 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
         model_size_gb = model_file.stat().st_size / (1024**3)
     per_gb = 15 if is_cpu else 8
     load_timeout = max(120, int(model_size_gb * per_gb))
-    print(f"[server]   Load timeout: {load_timeout}s (~{model_size_gb:.1f} GB)")
+    log.info(f"[server]   Load timeout: {load_timeout}s (~{model_size_gb:.1f} GB)")
 
     if not _wait_for_server(port, host, timeout=load_timeout, proc=proc):
         if proc.poll() is not None:
             _, stderr = proc.communicate(timeout=5)
             err_text = stderr.decode(errors='replace')[-500:] if stderr else ""
             if err_text:
-                print(f"[server] stderr: {err_text}")
+                log.error(f"[server] stderr: {err_text}")
         _kill_proc(proc)
         # Retry with 10% smaller context on allocation failure
         if _retry_count < _max_retries:
             new_ctx = int(ctx_size * 0.9)
-            print(f"[server] ↻ Retry {_retry_count + 1}/{_max_retries}: "
-                  f"reducing context {ctx_size} → {new_ctx}")
+            log.warning(f"[server] ↻ Retry {_retry_count + 1}/{_max_retries}: "
+                        f"reducing context {ctx_size} → {new_ctx}")
             return start_server(model_path, device=device, port=port,
                                 ctx_size=new_ctx, n_gpu_layers=n_gpu_layers,
                                 parallel=parallel, threads=threads,
@@ -463,7 +538,7 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
         "proc": proc, "port": port, "host": host,
         "model_id": None, "model_path": str(model_path),
     }
-    print(f"[server] ✓ [{tag}] ready on {host}:{port}")
+    log.info(f"[server] ✓ [{tag}] ready on {host}:{port}")
     return proc
 
 
@@ -474,7 +549,7 @@ def stop_server(device=None):
         if info:
             _kill_proc(info["proc"])
             tag = "CPU/RAM" if device == "cpu" else device.upper()
-            print(f"[server] [{tag}] stopped")
+            log.info(f"[server] [{tag}] stopped")
         else:
             port = _port_for_device(device)
             _kill_port(port)
@@ -512,7 +587,7 @@ def _kill_port(port):
                 os.kill(pid, signal.SIGTERM)
             if out:
                 time.sleep(2)
-                print(f"[server] Killed orphaned process on port {port}")
+                log.info(f"[server] Killed orphaned process on port {port}")
         except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
             pass
     else:
@@ -527,7 +602,7 @@ def _kill_port(port):
                 os.kill(pid, signal.SIGTERM)
             if out:
                 time.sleep(2)
-                print(f"[server] Killed orphaned process on port {port}")
+                log.info(f"[server] Killed orphaned process on port {port}")
         except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
             pass
 
@@ -568,6 +643,32 @@ def _health_check(port, host="127.0.0.1"):
         req = urllib.request.Request(f"http://{host}:{port}/health")
         with urllib.request.urlopen(req, timeout=5) as resp:
             return json.loads(resp.read()).get("status") == "ok"
+    except Exception:
+        return False
+
+
+def inference_liveness_check(port, host="127.0.0.1", timeout=30):
+    """Send a tiny inference request to verify the server can actually generate.
+
+    Returns True if it responds within *timeout* seconds, False if it
+    hangs or errors.  This catches the "health ok but inference stuck"
+    scenario that a simple /health poll misses.
+    """
+    body = json.dumps({
+        "messages": [{"role": "user", "content": "Hi"}],
+        "max_tokens": 1,
+        "temperature": 0,
+    }).encode()
+    req = urllib.request.Request(
+        f"http://{host}:{port}/v1/chat/completions",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+            return bool(data.get("choices"))
     except Exception:
         return False
 
@@ -690,9 +791,9 @@ def complete(messages, model=None, *, max_tokens=-1, temperature=0.7,
 def benchmark(model=None, port=DEFAULT_PORT, host="127.0.0.1"):
     """Quick benchmark against a loaded model."""
     messages = [{"role": "user",
-                 "content": "Write a detailed explanation of how neural networks learn through backpropagation."}]
-    result = complete(messages, model, max_tokens=512, temperature=0.0,
-                      port=port, host=host, generation_timeout=120)
+                 "content": "Write a short explanation of backpropagation. /no_think"}]
+    result = complete(messages, model, max_tokens=128, temperature=0.0,
+                      port=port, host=host, generation_timeout=60)
     return {
         "tokens_per_sec": result.get("tokens_per_sec", 0),
         "completion_tokens": result.get("completion_tokens", 0),
@@ -722,6 +823,6 @@ def cleanup_orphaned_servers():
             _kill_port(port)
             killed += 1
     if killed:
-        print(f"[cleanup] Killed {killed} orphaned llama-server(s)")
+        log.info(f"[cleanup] Killed {killed} orphaned llama-server(s)")
         time.sleep(2)  # let GPU memory release
     return killed

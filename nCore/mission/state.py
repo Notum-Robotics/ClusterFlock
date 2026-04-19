@@ -7,131 +7,93 @@ imports from the same canonical location.
 import secrets
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 # ── Global lock & mission registry ────────────────────────────────────────
-# Every module that touches _missions must acquire _lock first.
-# NEVER hold _lock during long operations (network, Docker, inference).
 
 _lock = threading.Lock()
+_missions: dict = {}  # mission_id → MissionState
 
-# mission_id → MissionState
-_missions: dict = {}
+# ── Constants ─────────────────────────────────────────────────────────────
 
-# ── Configurable constants ────────────────────────────────────────────────
-
-_MAX_MISSIONS = 5          # global cap — delete old missions to make room
+_MAX_MISSIONS = 5
 _MAX_CONCURRENT = 3
 _CONTAINER_CPUS = "4"
 _CONTAINER_MEM = "4g"
-_CONTAINER_DISK = "10g"
-_IDLE_TIMEOUT = 7200        # 2 hours — single-user, long-running
-_MAX_DURATION = 604800      # 7 days
 _PROMPT_STACK_MAX = 3
-_FLOCK_RENAME_COOLDOWN = 60   # 1 min
-_RETRY_BUDGET = 3           # retries per task per agent
+_FLOCK_RENAME_COOLDOWN = 60
 
-# Autonomous agent defaults
+# Autonomous agent
 _AUTO_MAX_ITERATIONS = 100
 _AUTO_MAX_SHELL = 200
-_AUTO_TIMEOUT = 7200         # wall-clock seconds for full autonomous loop (2 hours)
-_AUTO_CHECKPOINT_INTERVAL = 5  # iterations between checkpoints
-_AUTO_CHECKPOINT_SECONDS = 120 # seconds between checkpoints
+_AUTO_TIMEOUT = 7200
+_AUTO_CHECKPOINT_INTERVAL = 5
+_AUTO_CHECKPOINT_SECONDS = 120
 
 # Conversation compaction
-_COMPACTION_INTERVAL = 15      # compact every N round-trips (fallback; token-budget trigger is primary)
-_COMPACTION_TIMEOUT = 180      # seconds to wait for summary generation
+_COMPACTION_INTERVAL = 15
+_COMPACTION_TIMEOUT = 180
 
-# Context budget — use as much of the loaded context as safely possible
-_CONTEXT_BUDGET_FRACTION = 0.80   # use 80% of loaded context for content
-_CHARS_PER_TOKEN = 3              # approximate chars-per-token for budget math (conservative for code/JSON)
-_MIN_CONTEXT_BUDGET = 12000       # floor even for small models (chars)
+# Context budget
+_CONTEXT_BUDGET_FRACTION = 0.80
+_CHARS_PER_TOKEN = 3
+_MIN_CONTEXT_BUDGET = 12000
+_PREFLIGHT_HEADROOM = 0.90
+_PREFLIGHT_MIN_HISTORY = 2
+_MAX_CONTEXT_RETRIES = 2
+_WORKSPACE_TREE_MAX_ENTRIES = 400
 
-# Pre-flight context overflow protection
-_PREFLIGHT_HEADROOM = 0.90        # target ≤ 90% of n_ctx for outgoing prompts
-_PREFLIGHT_MIN_HISTORY = 2        # always keep at least 2 conversation pairs
-_MAX_CONTEXT_RETRIES = 2          # retries after context-overflow 400 (per call)
-_WORKSPACE_TREE_MAX_ENTRIES = 400 # max files in recursive tree
+# Shell timeouts
+_SHELL_TIMEOUT_DEFAULT = 600
+_SHELL_TIMEOUT_INSTALL = 1800
 
-# Shell command timeout tiers
-_SHELL_TIMEOUT_DEFAULT = 600    # most shell commands (10 min)
-_SHELL_TIMEOUT_INSTALL = 1800   # package installs, browser downloads (30 min)
-
-# Docker network
+# Docker
 _DOCKER_NETWORK = "mission-net"
 _CONTAINER_IMAGE = "ubuntu:24.04"
 _CONTAINER_IMAGE_PREBAKED = "cf-mission:latest"
 
-# Mission persistence
+# Persistence
 _MISSIONS_FILE = Path(__file__).resolve().parent.parent / "missions.json"
+_WATCHDOG_INTERVAL = 1800
 
-# Container GC watchdog
-_WATCHDOG_INTERVAL = 1800      # run GC every 30 minutes
-
-# Quality tiers for known model families
+# Quality tiers
 _QUALITY_TIERS = {
     "120b": 3, "70b": 3, "72b": 3, "65b": 3, "34b": 3, "35b": 3, "32b": 3, "27b": 3,
     "14b": 2, "13b": 2, "12b": 2, "8b": 2, "7b": 2, "9b": 2,
     "4b": 1, "3b": 1, "2b": 1, "1b": 1, "0.5b": 1, "0.6b": 1,
 }
 
-# Smart agent-task matching — complexity keywords
-_COMPLEX_TASK_KEYWORDS = frozenset({
-    "write", "implement", "create", "build", "design", "architect", "develop",
-    "analyze", "research", "report", "debug", "refactor", "optimize",
-    "generate", "compose", "synthesize", "evaluate", "review", "plan",
-})
-_SIMPLE_TASK_KEYWORDS = frozenset({
-    "copy", "move", "list", "grep", "find", "format", "rename", "delete",
-    "count", "check", "verify", "read", "fetch", "download", "install",
-})
+# Mission phases
+_MISSION_PHASES = ("planning", "working", "verifying", "completing")
 
-# ── Mission phases ────────────────────────────────────────────────────────
-# Missions progress through phases; the Showrunner advances them.
-_MISSION_PHASES = (
-    "planning",       # Produce structured plan in state.json
-    "scaffolding",    # Create project skeleton, install deps
-    "implementing",   # Build features, write code
-    "testing",        # Run tests, fix bugs
-    "verifying",      # Final quality checks
-    "completing",     # Wrap-up and deliver
-)
-
-# ── Maximum consecutive failures before agent bail-out ────────────────────
+# Agent iteration control
 _MAX_CONSECUTIVE_FAILURES = 5
-
-# ── Agent read-only first iteration ──────────────────────────────────────
-# Force agents to inspect before mutating on their first iteration
 _AGENT_READONLY_FIRST_ITER = True
 _READONLY_ACTIONS = frozenset({
-    "read_file", "batch_read", "workspace_tree", "search",
-    "find_files", "file_info", "reflect", "save_note",
+    "read_file", "workspace_tree", "search", "shell",
 })
-# Shell commands that are read-only (prefixes)
 _READONLY_SHELL_PREFIXES = (
     "ls", "cat", "head", "tail", "find", "grep", "wc", "file", "stat",
     "which", "echo", "pwd", "env", "printenv", "whoami", "hostname",
     "tree", "du", "df", "uname", "date", "id", "test",
 )
-
-# ── Syntax-checkable extensions ──────────────────────────────────────────
 _SYNTAX_CHECK_EXTENSIONS = frozenset({"py", "js", "mjs", "ts", "json", "sh", "bash"})
 
-# Hard safety caps — prevent single results from consuming entire context.
-# Base64/binary content tokenizes at ~1:1 char:token (vs assumed 3:1),
-# so a 15K char base64 blob becomes ~15K tokens, not the estimated ~5K.
-_SHELL_STDOUT_HARD_CAP = 8000      # max chars for any single shell stdout
-_ACTION_RESULT_HARD_CAP = 12000    # max chars per action result fed back to Showrunner
+# Hard safety caps
+_SHELL_STDOUT_HARD_CAP = 8000
+_ACTION_RESULT_HARD_CAP = 12000
 
 
 # ── Data structures ──────────────────────────────────────────────────────
 
 class FlockAgent:
-    """Represents a named agent (an endpoint with a friendly identity)."""
-    __slots__ = ("endpoint_id", "node_id", "hostname", "model", "name",
-                 "role", "experience", "toks_per_sec", "context_length",
-                 "gpu_name", "status", "failures", "last_used", "assigned_task",
-                 "system_prompt", "conversation_history", "scratchpad")
+    __slots__ = (
+        "endpoint_id", "node_id", "hostname", "model", "name",
+        "role", "experience", "toks_per_sec", "context_length",
+        "gpu_name", "status", "failures", "last_used", "assigned_task",
+        "system_prompt", "conversation_history", "scratchpad",
+    )
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -142,12 +104,11 @@ class FlockAgent:
         self.status = self.status or "available"
         self.system_prompt = self.system_prompt or ""
         self.conversation_history = self.conversation_history or []
-        self.scratchpad = self.scratchpad or {}  # key → value persistent notes
+        self.scratchpad = self.scratchpad or {}
 
     def to_dict(self):
         d = {k: getattr(self, k) for k in self.__slots__
              if k not in ("conversation_history", "scratchpad")}
-        # Include truncated conversation history for UI display
         hist = self.conversation_history or []
         truncated = []
         for msg in hist[-20:]:
@@ -162,32 +123,75 @@ class FlockAgent:
         return d
 
 
-def _flock_status_line(mission):
-    """One-liner summarising idle/busy flock members for user-turn prompts."""
-    idle, busy = [], []
-    for name, agent in mission.flock.items():
-        if agent.status == "available":
-            idle.append(name)
-        else:
-            task_info = f" on {agent.assigned_task}" if agent.assigned_task else ""
-            busy.append(f"{name}{task_info}")
-    parts = []
-    if idle:
-        parts.append(f"{len(idle)} idle ({', '.join(idle)})")
-    if busy:
-        parts.append(f"{len(busy)} busy ({', '.join(busy)})")
-    if parts:
-        return "Flock: " + ", ".join(parts) + "."
-    return ""
+class PlanTask:
+    __slots__ = (
+        "id", "title", "type", "deps", "agent_tier",
+        "files", "verify_cmd", "status", "result",
+        "assigned_agent", "dispatch_count", "artifacts", "failed_agents",
+    )
+
+    def __init__(self, **kw):
+        self.id = kw.get("id", "")
+        self.title = kw.get("title", "")
+        self.type = kw.get("type", "implement")
+        self.deps = kw.get("deps") or []
+        self.agent_tier = kw.get("agent_tier", 1)
+        self.files = kw.get("files") or []
+        self.verify_cmd = kw.get("verify_cmd")
+        self.status = kw.get("status", "pending")
+        self.result = kw.get("result")
+        self.assigned_agent = kw.get("assigned_agent")
+        self.dispatch_count = kw.get("dispatch_count", 0)
+        self.failed_agents = kw.get("failed_agents") or []
+        self.artifacts = kw.get("artifacts") or []
+
+    def to_dict(self):
+        return {k: getattr(self, k) for k in self.__slots__}
+
+    @classmethod
+    def from_dict(cls, d):
+        return cls(**{k: d[k] for k in cls.__slots__ if k in d})
+
+
+class MissionPlan:
+    def __init__(self, requirements=None, tasks=None):
+        self.requirements: list[str] = requirements or []
+        self.tasks: list[PlanTask] = tasks or []
+
+    def progress_summary(self) -> str:
+        by_status: dict[str, int] = {}
+        for t in self.tasks:
+            by_status[t.status] = by_status.get(t.status, 0) + 1
+        total = len(self.tasks)
+        done = by_status.get("done", 0)
+        parts = [f"{done}/{total} done"]
+        for s in ("dispatched", "pending", "failed", "skipped"):
+            n = by_status.get(s, 0)
+            if n:
+                parts.append(f"{n} {s}")
+        return ", ".join(parts)
+
+    def to_dict(self):
+        return {
+            "requirements": self.requirements,
+            "tasks": [t.to_dict() for t in self.tasks],
+        }
+
+    @classmethod
+    def from_dict(cls, d):
+        tasks = [PlanTask.from_dict(td) for td in d.get("tasks", [])]
+        return cls(requirements=d.get("requirements", []), tasks=tasks)
 
 
 class AgentTask:
-    """A single task dispatched to an agent."""
-    __slots__ = ("task_id", "mission_id", "agent_name", "prompt",
-                 "status", "result", "error", "retries",
-                 "created_at", "completed_at", "timeout",
-                 "capabilities", "constraints",
-                 "task_context", "checkpoint", "_cancel_event")
+    __slots__ = (
+        "task_id", "mission_id", "agent_name", "prompt",
+        "status", "result", "error", "retries",
+        "created_at", "completed_at", "timeout",
+        "capabilities", "constraints",
+        "task_context", "checkpoint",
+        "_cancel_event", "_sr_guidance",
+    )
 
     def __init__(self, **kw):
         self.task_id = kw.get("task_id", "mt-" + secrets.token_hex(6))
@@ -201,26 +205,25 @@ class AgentTask:
         self.created_at = kw.get("created_at", time.time())
         self.completed_at = kw.get("completed_at")
         self.timeout = kw.get("timeout", 600)
-        self.capabilities = kw.get("capabilities", [])  # ["shell","write_file","read_file"]
+        self.capabilities = kw.get("capabilities", [])
         self.constraints = kw.get("constraints", {})
-        self.task_context = kw.get("task_context", [])   # agent's rolling conversation
-        self.checkpoint = kw.get("checkpoint")            # latest progress checkpoint
+        self.task_context = kw.get("task_context", [])
+        self.checkpoint = kw.get("checkpoint")
         self._cancel_event = threading.Event()
+        self._sr_guidance = deque()
 
     def to_dict(self):
-        d = {k: getattr(self, k) for k in self.__slots__ if not k.startswith('_')}
+        d = {k: getattr(self, k) for k in self.__slots__ if not k.startswith("_")}
         d["cancelled"] = self._cancel_event.is_set()
         return d
 
 
 class MissionState:
-    """Full state for a running mission."""
-
     def __init__(self, mission_id, mission_text=""):
         self.mission_id = mission_id
         self.mission_text = mission_text
         self.mission_version = 1
-        self.status = "initializing"  # initializing, running, paused, completed, error
+        self.status = "initializing"
         self.created_at = time.time()
         self.updated_at = time.time()
 
@@ -233,63 +236,75 @@ class MissionState:
         self.showrunner_model = None
         self.showrunner_endpoint_id = None
         self.showrunner_score = 0
-        self.showrunner_override = None  # {"node_id": ..., "model": ...} or None for auto
+        self.showrunner_override = None
 
         # Flock
-        self.flock: dict[str, FlockAgent] = {}  # name → FlockAgent
+        self.flock: dict[str, FlockAgent] = {}
         self.flock_last_update = 0
-        self._departed_flock: dict[str, tuple] = {}  # endpoint_id → (FlockAgent, departed_at)
+        self._departed_flock: dict[str, tuple] = {}
 
         # Tasks
-        self.tasks: dict[str, AgentTask] = {}  # task_id → AgentTask
-        self.task_history: list[dict] = []  # completed tasks
+        self.tasks: dict[str, AgentTask] = {}
+        self.task_history: list[dict] = []
 
         # Context management
         self.round_trips = 0
-        self.conversation: list[dict] = []  # showrunner conversation history
-        self.conversation_window_override = None  # showrunner can request wider window
+        self.conversation: list[dict] = []
+        self.conversation_window_override = None
         self.last_summary = ""
         self.last_summary_at = 0
 
         # User interaction
-        self.pending_prompts: list[dict] = []  # user prompts from showrunner
-        self.user_responses: list[dict] = []  # responses from user
+        self.pending_prompts: list[dict] = []
+        self.user_responses: list[dict] = []
         self.status_message = ""
         self.status_progress = -1
 
-        # Event log (in-memory, also written to container)
+        # Event log
         self.event_log: list[dict] = []
 
-        # Tool manifest
+        # Tools, notes, knowledge
         self.tools: list[dict] = []
+        self.notes: list[dict] = []
+        self.knowledge_base: dict[str, str] = {}
 
-        # Persistent scratchpad — always visible in system prompt
-        self.notes: list[dict] = []  # [{"key": ..., "value": ...}]
+        # Phase tracking
+        self.mission_phase = "planning"
+        self.phase_history: list[dict] = []
 
-        # Mission phase tracking
-        self.mission_phase = "planning"  # current phase from _MISSION_PHASES
-        self.phase_history: list[dict] = []  # [{"phase": ..., "entered_at": ..., "exited_at": ...}]
-
-        # Shared knowledge base — visible to all agents
-        self.knowledge_base: dict[str, str] = {}  # key → value, capped at 50 entries
+        # Structured plan
+        self.plan: MissionPlan | None = None
 
         # Thread control
         self._thread = None
         self._stop_event = threading.Event()
         self._has_result = False
+        self._completion_verified = False
 
-        # Workspace tree cache
+        # Caches
         self._workspace_tree_cache = ""
         self._workspace_tree_at = 0.0
+        self._state_json_cache = ""
+        self._state_json_at = 0.0
 
-        # Stall detection
-        self._consecutive_empty = 0
-        self._sr_consecutive_fails = 0   # consecutive showrunner timeout/failures
-        self._idle_flock_rounds = 0      # consecutive rounds with idle agents and no tasks
-        self._sr_overflow_streak = 0     # consecutive showrunner context overflow rounds
+        # Performance tracking
+        self._sr_overflow_streak = 0
+        self._sr_node_perf = {}
+        self._agent_perf = {}
+
+        # Flock offers system (post-plan, pre-working)
+        # offers: {agent_name: {"role": str, "offer": str}}
+        self._flock_offers: dict[str, dict] = {}
+        self._flock_offers_pending: dict[str, dict] = {}  # agent_name → {orch_task_id, timeout, started_at}
+        self._flock_offers_collected: bool = False  # True once offers round is done
+
+        # Flock advice system
+        # advice: {agent_name: {"milestone": str, "advice": str, "role": str, "experience": str}}
+        self._flock_advice: dict[str, dict] = {}
+        self._flock_advice_pending: dict[str, dict] = {}  # agent_name → {orch_task_id, timeout, milestone, ...}
+        self._advice_milestone_tracker: dict[str, any] = {}  # {"_current": task_id, "_rounds": int}
 
     def log_event(self, level, message, **extra):
-        """Append to event log."""
         entry = {
             "timestamp": time.time(),
             "time_str": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -298,7 +313,6 @@ class MissionState:
             **extra,
         }
         self.event_log.append(entry)
-        # Keep log bounded
         if len(self.event_log) > 2000:
             self.event_log = self.event_log[-1500:]
         return entry
@@ -322,7 +336,11 @@ class MissionState:
             "showrunner_override": self.showrunner_override,
             "flock": {name: a.to_dict() for name, a in self.flock.items()},
             "tasks_active": {tid: t.to_dict() for tid, t in self.tasks.items()},
-            "tasks_completed": len(self.task_history),
+            "tasks_completed": (
+                sum(1 for t in self.plan.tasks if t.status == "done")
+                if self.plan and self.plan.tasks
+                else len(self.task_history)
+            ),
             "round_trips": self.round_trips,
             "pending_prompts": self.pending_prompts,
             "status_message": self.status_message,
@@ -331,6 +349,18 @@ class MissionState:
             "notes": self.notes,
             "mission_phase": self.mission_phase,
             "knowledge_base": dict(self.knowledge_base) if self.knowledge_base else {},
+            "plan": self.plan.to_dict() if self.plan else None,
+            "plan_progress": self.plan.progress_summary() if self.plan else None,
             "event_log_count": len(self.event_log),
             "has_result": self._has_result,
+            "flock_offers": {k: {"role": v.get("role", ""),
+                                  "offer": v.get("offer", "")[:400]}
+                             for k, v in self._flock_offers.items()},
+            "flock_advice": {k: {"milestone": v.get("milestone", ""),
+                                  "agent": k,
+                                  "role": v.get("role", ""),
+                                  "experience": v.get("experience", ""),
+                                  "advice": v.get("advice", "")[:300]}
+                             for k, v in self._flock_advice.items()},
+
         }

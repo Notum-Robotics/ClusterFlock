@@ -18,12 +18,15 @@ Endpoints:
 """
 
 import json
+import logging
 import math
 import re
 import secrets
 import threading
 import time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+
+log = logging.getLogger(__name__)
 
 from registry import all_nodes, get_node
 import orchestrator as orch_mod
@@ -1021,7 +1024,12 @@ class OAPIHandler(BaseHTTPRequestHandler):
                 response["_conversation_id"] = conv_id
 
                 _status["requests_completed"] += 1
-                self._json(200, response)
+
+                # If client requested streaming, wrap response in SSE format
+                if body.get("stream"):
+                    self._stream_response(response, conv_id)
+                else:
+                    self._json(200, response)
 
         finally:
             with _lock:
@@ -1035,13 +1043,45 @@ class OAPIHandler(BaseHTTPRequestHandler):
         sr.pop("elected_at", None)
         endpoints = _collect_ready_endpoints()
         cfg = get_oapi_config()
+
+        import socket as _sock
+        import re as _re
+        try:
+            _ncore_ip = _sock.gethostbyname(_sock.gethostname())
+        except Exception:
+            _ncore_ip = ""
+
+        def _llama_port(ep):
+            gpu = ep.get("gpu", 0)
+            return 8090 if gpu == "cpu" else 8080 + int(gpu)
+
+        def _agent_ip(ep):
+            # Push nodes: extract IP from address (http://IP:port)
+            addr = ep.get("address", "")
+            if addr:
+                m = _re.search(r'//([\d.]+)', addr)
+                if m:
+                    return m.group(1)
+            # Pull/local: use peer_address from heartbeat
+            peer = ep.get("peer_address", "")
+            if peer and peer not in ("127.0.0.1", "::1"):
+                return peer
+            # Local agent on same machine as nCore
+            if peer in ("127.0.0.1", "::1") and _ncore_ip:
+                return _ncore_ip
+            return ep.get("hostname", "")
+
         self._json(200, {
             "showrunner": sr,
             "endpoints_ready": len(endpoints),
             "endpoints": [{"model": e["model"], "hostname": e["hostname"],
+                           "ip": _agent_ip(e),
                            "toks_per_sec": e["toks_per_sec"],
                            "context_length": e["context_length"],
-                           "graylisted": e.get("graylisted", False)}
+                           "graylisted": e.get("graylisted", False),
+                           "gpu": e.get("gpu", 0),
+                           "device": e.get("device", "gpu0"),
+                           "llama_port": _llama_port(e)}
                           for e in endpoints],
             "queue": dict(_status),
             "oapi_mode": cfg["mode"],
@@ -1122,6 +1162,55 @@ class OAPIHandler(BaseHTTPRequestHandler):
             return self._json(404, {"error": "conversation not found"})
         self._json(200, conv)
 
+    # ── Streaming (SSE) ────────────────────────────────────────────────
+
+    def _stream_response(self, response, conv_id):
+        """Wrap a completed response in SSE format for clients that set stream=true."""
+        resp_id = response["id"]
+        model = response.get("model", "clusterflock")
+        created = response.get("created", int(time.time()))
+        content = response["choices"][0]["message"]["content"]
+
+        # Send headers
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self._cors_headers()
+        self.end_headers()
+
+        # Single chunk with the full content
+        chunk = {
+            "id": resp_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "delta": {"role": "assistant", "content": content},
+                "finish_reason": None,
+            }],
+        }
+        if conv_id:
+            chunk["_conversation_id"] = conv_id
+        self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+        self.wfile.flush()
+
+        # Final chunk with finish_reason
+        done_chunk = {
+            "id": resp_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "delta": {},
+                "finish_reason": "stop",
+            }],
+        }
+        self.wfile.write(f"data: {json.dumps(done_chunk)}\n\n".encode())
+        self.wfile.write(b"data: [DONE]\n\n")
+        self.wfile.flush()
+
     # ── Helpers ──────────────────────────────────────────────────────────
 
     def _body(self):
@@ -1159,8 +1248,7 @@ class OAPIHandler(BaseHTTPRequestHandler):
 # ── Module-level ─────────────────────────────────────────────────────────
 
 def _log(msg):
-    ts = time.strftime("%H:%M:%S")
-    print(f"[{ts}] oapi: {msg}")
+    log.info(f"oapi: {msg}")
 
 
 def serve(host="0.0.0.0", port=_DEFAULT_PORT):

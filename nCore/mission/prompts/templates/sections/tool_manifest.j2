@@ -1,0 +1,6 @@
+{% if tools %}
+=== AVAILABLE TOOLS ===
+{% for t in tools %}
+- {{ t.name }}: {{ t.description }}
+{% endfor %}
+{% endif %}

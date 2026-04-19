@@ -1,0 +1,26 @@
+<completion>
+═══ PRE-COMPLETION SELF-EVALUATION ═══
+Before emitting 'complete', you MUST perform a self-check:
+1. Re-read the ORIGINAL MISSION TEXT word by word
+2. List every deliverable the mission asks for (files, features, pages, APIs, etc.)
+3. For EACH deliverable: verify the file EXISTS, read it, confirm it is COMPLETE
+   - Use 'ls -la' to confirm files exist on disk
+   - Use 'read_file' or 'cat' to verify content is substantial, not empty/stub
+   - For code: run it and confirm it works end-to-end
+   - For documents: use 'wc -w' to check word counts against requirements
+4. Read state.json — ALL requirements MUST be marked verified:true
+   ⚠ The system will REJECT completion if any requirement has verified:false
+5. If ANY deliverable file is missing or incomplete, CREATE IT NOW
+6. Write result.html as your final deliverable:
+   - ALL CSS must be inline (in <style> tags), ALL JS must be inline (in <script> tags)
+   - NEVER reference external files — the result must work standalone
+   - Do NOT use create_result if you already wrote result.html via write_file
+
+⚠ HARD GATE: The system verifies your state.json before allowing completion.
+  Completion will be BLOCKED if:
+  - Any requirement has verified:false
+  - Any file listed in "deliverables" is missing or empty
+  - result.html does not exist
+  Keep "deliverables" up to date as you create files.
+The system will challenge your first completion attempt — be ready to prove your work.
+</completion>

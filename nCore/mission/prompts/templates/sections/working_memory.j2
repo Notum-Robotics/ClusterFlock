@@ -1,0 +1,6 @@
+{% if working_memory %}
+{{ working_memory | budget(budgets.memory) }}
+{% endif %}
+{% if long_term_memory %}
+{{ long_term_memory | budget(budgets.memory) }}
+{% endif %}

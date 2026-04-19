@@ -921,6 +921,12 @@
 .flock-card.showrunner {
     border-color: rgba(0,229,255, 0.30);
 }
+.flock-card.dispatched {
+    border-color: rgba(0,200,83, 0.40);
+}
+.flock-card.advised {
+    border-color: rgba(167,100,255, 0.45);
+}
 
 .flock-card .fc-name {
     font-family: var(--font-label);

@@ -5,12 +5,15 @@ Works on both macOS and Linux.
 """
 
 import json
+import logging
 import os
 import platform
 import shutil
 import subprocess
 import time
 import urllib.request
+
+log = logging.getLogger(__name__)
 
 _IS_DARWIN = platform.system() == "Darwin"
 
@@ -103,20 +106,20 @@ def cleanup_lmstudio():
     result["models_found"] = len(models)
     if models:
         names = [m.get("identifier") or m.get("modelKey") or "?" for m in models]
-        print(f"[cleanup] LM Studio: {len(models)} model(s) loaded: {', '.join(names)}")
+        log.info(f"[cleanup] LM Studio: {len(models)} model(s) loaded: {', '.join(names)}")
         count = _lms_unload_all()
-        print(f"[cleanup] Unloaded {count} model(s)")
+        log.info(f"[cleanup] Unloaded {count} model(s)")
         result["models_unloaded"] = count
     else:
-        print("[cleanup] LM Studio: no models loaded")
+        log.info("[cleanup] LM Studio: no models loaded")
         result["models_unloaded"] = 0
 
     killed = _kill_lmstudio()
     result["processes_killed"] = killed
     if killed:
-        print(f"[cleanup] LM Studio processes terminated")
+        log.info("[cleanup] LM Studio processes terminated")
     else:
-        print("[cleanup] LM Studio: no running processes found")
+        log.info("[cleanup] LM Studio: no running processes found")
 
     return result
 
@@ -222,20 +225,20 @@ def cleanup_ollama():
     result["models_found"] = len(models)
     if models:
         names = [m.get("name", "?") for m in models]
-        print(f"[cleanup] Ollama: {len(models)} model(s) running: {', '.join(names)}")
+        log.info(f"[cleanup] Ollama: {len(models)} model(s) running: {', '.join(names)}")
         count = _ollama_unload_all()
-        print(f"[cleanup] Unloaded {count} model(s)")
+        log.info(f"[cleanup] Unloaded {count} model(s)")
         result["models_unloaded"] = count
     else:
-        print("[cleanup] Ollama: no models running")
+        log.info("[cleanup] Ollama: no models running")
         result["models_unloaded"] = 0
 
     killed = _kill_ollama()
     result["processes_killed"] = killed
     if killed:
-        print(f"[cleanup] Ollama processes terminated")
+        log.info("[cleanup] Ollama processes terminated")
     else:
-        print("[cleanup] Ollama: no running processes found")
+        log.info("[cleanup] Ollama: no running processes found")
 
     return result
 
@@ -248,12 +251,12 @@ def cleanup_gpu():
     Call this before starting llama.cpp to ensure GPU/memory is fully available.
     Returns summary dict.
     """
-    print("[cleanup] Checking for competing inference servers...")
+    log.info("[cleanup] Checking for competing inference servers...")
     summary = {
         "lmstudio": cleanup_lmstudio(),
         "ollama": cleanup_ollama(),
     }
 
     time.sleep(2)
-    print("[cleanup] Cleanup complete")
+    log.info("[cleanup] Cleanup complete")
     return summary

@@ -1,0 +1,85 @@
+{# showrunner.j2 — Complete Showrunner system prompt.
+   This is the single source of truth for prompt structure. #}
+{% include "sections/identity.j2" %}
+
+{% include "sections/tools.j2" %}
+
+{% include "sections/workflow.j2" %}
+
+{% include "sections/memory.j2" %}
+
+{% include "sections/delegation.j2" %}
+
+{% include "sections/editing.j2" %}
+
+{% include "sections/completion.j2" %}
+
+{% include "sections/rules.j2" %}
+
+{% include "sections/phase.j2" %}
+
+=== CURRENT TIME: {{ timestamp }} | Mission elapsed: {{ elapsed_secs | elapsed }} | Phase: {{ phase }} ===
+
+=== MISSION (v{{ mission_version }}) ===
+{{ mission_text }}
+
+{% if agents %}
+=== AVAILABLE AGENTS ===
+{% for a in agents %}
+- {{ a.name }}: {{ a.role }} ({{ a.experience }}, {{ a.quality_label }})
+    model={{ a.model }}, {{ a.tps }} tok/s ({{ a.speed_label }}), ctx={{ a.ctx }}, gpu={{ a.gpu }}, status={{ a.status_str }}, failures={{ a.failures }}{{ a.perf_note }}
+    good for: {{ a.capability_hint }}
+{% endfor %}
+{% endif %}
+
+{% if sr_info %}
+=== YOU (SHOWRUNNER) ===
+model={{ sr_info.model }}, {{ sr_info.tps }} tok/s, score={{ sr_info.score }}, context={{ sr_info.ctx }} tokens, content_budget≈{{ sr_info.budget_kb }}KB
+{% endif %}
+
+{% if workspace_tree %}
+=== WORKSPACE TREE (/home/mission/) ===
+{{ workspace_tree }}
+{% endif %}
+
+{% include "sections/container_env.j2" %}
+
+{% include "sections/tool_manifest.j2" %}
+
+{% if notes %}
+=== YOUR NOTES (scratchpad) ===
+{% for note in notes %}
+- {{ note.key }}: {{ note.value }}
+{% endfor %}
+{% endif %}
+
+{% include "sections/state_json.j2" %}
+
+{% include "sections/knowledge.j2" %}
+
+{% include "sections/working_memory.j2" %}
+
+{% include "sections/flock_status.j2" %}
+
+{% if conversation_summary %}
+=== PROGRESS SUMMARY (round-trip {{ round_trips }}) ===
+{{ conversation_summary }}
+{% endif %}
+
+{% if recent_history %}
+=== RECENT HISTORY ===
+{% for msg in recent_history %}
+[{{ msg.role }}]: {{ msg.content }}
+{% endfor %}
+{% endif %}
+
+{% if user_responses %}
+=== USER RESPONSES ===
+{% for resp in user_responses %}
+[USER @ {{ resp.time_str }}]: {{ resp.response }}
+{% endfor %}
+{% endif %}
+
+{% if mission_version > 1 %}
+⚠ MISSION TEXT UPDATED (now v{{ mission_version }}). Review the mission text above and decide: pivot, complete current tasks then pivot, or ignore.
+{% endif %}

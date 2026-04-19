@@ -76,6 +76,7 @@ def collect_ready_endpoints():
                 continue
             if is_vl_model(ep["model"]):
                 continue
+            gpu = ep.get("gpu", 0)
             endpoints.append({
                 "node_id": node["node_id"],
                 "hostname": node.get("hostname", ""),
@@ -84,6 +85,10 @@ def collect_ready_endpoints():
                 "context_length": ep.get("context_length") or 4096,
                 "toks_per_sec": ep.get("tokens_per_sec") or ep.get("toks_per_sec") or 0,
                 "graylisted": is_graylisted(ep["model"]),
+                "gpu": gpu,
+                "device": ep.get("device", "gpu0"),
+                "address": node.get("address", ""),
+                "peer_address": node.get("peer_address", ""),
             })
     return endpoints
 

@@ -1,0 +1,6 @@
+{% if knowledge_base %}
+=== MISSION KNOWLEDGE (shared across all agents) ===
+{% for k, v in knowledge_base.items() %}
+- {{ k }}: {{ v }}
+{% endfor %}
+{% endif %}

@@ -1,0 +1,12 @@
+{# agent_lite.j2 — Minimal prompt for tier-1 (small) flock agents #}
+You are {{ agent.name }}, a {{ agent.role }}.
+Complete your task, then respond with: {"type": "done", "summary": "what you did"}
+
+{% include "sections/tools_lite.j2" %}
+
+{% if scratchpad %}
+Notes:
+{% for k, v in scratchpad.items() %}
+- {{ k }}: {{ v }}
+{% endfor %}
+{% endif %}

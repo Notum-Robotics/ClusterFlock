@@ -1,10 +1,13 @@
 """Docker container lifecycle, file I/O, and workspace tree."""
 
 import base64
+import logging
 import secrets
 import shlex
 import subprocess
 import time
+
+log = logging.getLogger(__name__)
 
 from .state import (
     _DOCKER_NETWORK,
@@ -22,9 +25,11 @@ def _docker_exec(cmd, timeout=30):
     """Run a docker command. Returns (stdout, stderr, returncode)."""
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout
+            cmd, capture_output=True, timeout=timeout
         )
-        return proc.stdout.strip(), proc.stderr.strip(), proc.returncode
+        stdout = proc.stdout.decode("utf-8", errors="replace").strip()
+        stderr = proc.stderr.decode("utf-8", errors="replace").strip()
+        return stdout, stderr, proc.returncode
     except subprocess.TimeoutExpired:
         return "", "timeout", -1
     except FileNotFoundError:
@@ -57,7 +62,7 @@ def _ensure_prebaked_image():
         _prebaked_image_ready = True
         return True
 
-    print(f"[mission] Pre-baked image {_CONTAINER_IMAGE_PREBAKED} not found — building...")
+    log.info(f"[mission] Pre-baked image {_CONTAINER_IMAGE_PREBAKED} not found — building...")
 
     dockerfile = (
         f"FROM {_CONTAINER_IMAGE}\n"
@@ -67,6 +72,11 @@ def _ensure_prebaked_image():
         "    curl wget python3 python3-pip jq git nodejs npm ca-certificates \\\n"
         "    build-essential universal-ctags && \\\n"
         "    apt-get clean && rm -rf /var/lib/apt/lists/*\n"
+        "ENV TMPDIR=/tmp\n"
+        "RUN python3 -m pip install --break-system-packages --quiet \\\n"
+        "    fastapi uvicorn pytest httpx requests flask aiohttp \\\n"
+        "    beautifulsoup4 lxml pyyaml toml markdown jinja2 2>/dev/null || true\n"
+        "RUN ln -sf /usr/bin/python3 /usr/bin/python 2>/dev/null || true\n"
         "RUN mkdir -p /home/mission/tools\n"
     )
 
@@ -76,14 +86,14 @@ def _ensure_prebaked_image():
             input=dockerfile, capture_output=True, text=True, timeout=600,
         )
         if proc.returncode == 0:
-            print(f"[mission] Pre-baked image {_CONTAINER_IMAGE_PREBAKED} built successfully")
+            log.info(f"[mission] Pre-baked image {_CONTAINER_IMAGE_PREBAKED} built successfully")
             _prebaked_image_ready = True
             return True
         else:
-            print(f"[mission] Failed to build pre-baked image: {proc.stderr[:500]}")
+            log.error(f"[mission] Failed to build pre-baked image: {proc.stderr[:500]}")
             return False
     except subprocess.TimeoutExpired:
-        print("[mission] Pre-baked image build timed out (600s)")
+        log.error("[mission] Pre-baked image build timed out (600s)")
         return False
 
 
@@ -136,6 +146,9 @@ def _create_container(mission_id):
             "apt-get update -qq && apt-get install -y -qq curl wget python3 python3-pip jq git nodejs npm universal-ctags > /dev/null 2>&1 || true"
         )
 
+    # Ensure python -> python3 alias exists (prebaked has it, base image may not)
+    setup_cmds.append("ln -sf /usr/bin/python3 /usr/bin/python 2>/dev/null || true")
+
     # Git init — gives agents rollback, diff tracking, and checkpoint capability
     setup_cmds += [
         "cd /home/mission && git init -q",
@@ -167,14 +180,21 @@ def _container_exec(container_id, command, timeout=60):
 
 
 def _container_write_file(container_id, path, content):
-    """Write a file inside the container."""
+    """Write a file inside the container.
+    Uses stdin pipe to avoid shell argument length limits on large files."""
     if not container_id:
         return False
-    # Use docker exec with base64 to safely transfer content
-    b64 = base64.b64encode(content.encode()).decode()
-    cmd = f"echo '{b64}' | base64 -d > {shlex.quote(path)}"
-    _, _, rc = _container_exec(container_id, cmd)
-    return rc == 0
+    import subprocess
+    try:
+        encoded = base64.b64encode(content.encode()).decode()
+        proc = subprocess.run(
+            ["docker", "exec", "-i", container_id, "bash", "-c",
+             f"base64 -d > {shlex.quote(path)}"],
+            input=encoded, capture_output=True, text=True, timeout=60,
+        )
+        return proc.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return False
 
 
 def _container_read_file(container_id, path):

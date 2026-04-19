@@ -1,0 +1,14 @@
+{% if active_tasks %}
+=== ACTIVE TASKS ===
+{% for task in active_tasks %}
+- {{ task.task_id }}: {{ task.agent_name }} ({{ task.status }}, {{ task.elapsed | elapsed }}){%
+  if task.checkpoint %}
+    iter={{ task.checkpoint.iteration }}/{{ task.checkpoint.max_iterations }}, shells={{ task.checkpoint.shell_commands }}, status={{ task.checkpoint.status }}
+    last_action: {{ task.checkpoint.last_action }}
+    files_created: {{ task.checkpoint.files_written | join(', ') or 'none' }}{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if task_history %}
+{{ task_history | budget(budgets.history) }}
+{% endif %}

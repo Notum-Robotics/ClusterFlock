@@ -252,6 +252,97 @@
             cursor: pointer;
         }
 
+        /* Plan panel */
+        .plan-tasks {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            flex: 1;
+            overflow-y: auto;
+            min-height: 0;
+        }
+        .plan-tasks::-webkit-scrollbar { display: none; }
+        .plan-task-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 10px;
+            background: var(--bg);
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+        }
+        .plan-task-row.is-done { border-color: rgba(0,229,255,0.15); }
+        .plan-task-row.is-dispatched { border-color: rgba(255,179,0,0.15); }
+        .plan-task-row.is-idle { opacity: 0.5; }
+        .pt-icon {
+            font-size: .9rem;
+            width: 18px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+        .pt-icon.done { color: var(--accent); }
+        .pt-icon.dispatched { color: var(--amber); }
+        .pt-icon.pending { color: var(--text-dim); }
+        .pt-icon.failed { color: var(--danger); }
+        .pt-info { flex: 1; min-width: 0; }
+        .pt-title {
+            font-family: var(--font-data);
+            font-size: .65rem;
+            color: var(--text);
+            letter-spacing: .04em;
+        }
+        .plan-task-row.is-done .pt-title { color: var(--accent); }
+        .pt-meta {
+            font-family: var(--font-data);
+            font-size: .5rem;
+            color: var(--text-dim);
+            letter-spacing: .06em;
+            margin-top: 1px;
+        }
+        .pt-agent {
+            font-family: var(--font-data);
+            font-size: .55rem;
+            color: var(--text-dim);
+            letter-spacing: .04em;
+            flex-shrink: 0;
+        }
+        .pt-agent.active { color: var(--amber); }
+        .pt-status-badge {
+            font-family: var(--font-label);
+            font-size: .5rem;
+            font-weight: 600;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            padding: 2px 6px;
+            border-radius: var(--radius);
+            flex-shrink: 0;
+        }
+        .pt-status-badge.done { background: rgba(0,229,255,0.12); color: var(--accent); }
+        .pt-status-badge.dispatched { background: rgba(255,179,0,0.12); color: var(--amber); }
+        .pt-status-badge.pending { background: rgba(244,244,244,0.06); color: var(--text-dim); }
+        .pt-status-badge.failed { background: rgba(255,51,51,0.12); color: var(--danger); }
+        .plan-deps {
+            display: flex;
+            gap: 3px;
+            flex-wrap: wrap;
+            margin-top: 2px;
+        }
+        .plan-dep-tag {
+            font-family: var(--font-data);
+            font-size: .45rem;
+            color: var(--text-dim);
+            background: rgba(244,244,244,0.04);
+            padding: 1px 4px;
+            border-radius: var(--radius);
+            letter-spacing: .04em;
+        }
+        .plan-summary {
+            display: flex;
+            gap: 12px;
+            padding: 6px 0;
+            flex-wrap: wrap;
+        }
+
         /* Mission detail area — fill remaining space */
         .mission-detail-area {
             display: none;
@@ -390,10 +481,19 @@
             <!-- View Tabs -->
             <div class="toggle-group" id="view-tabs">
                 <div class="tg-option active" data-tab="activity" data-flash data-nbeep="select">ACTIVITY</div>
-                <div class="tg-option" data-tab="flock" data-flash data-nbeep="select">FLOCK</div>
+                <div class="tg-option ahi-disabled" data-tab="plan" data-flash data-nbeep="select" id="tab-plan">PLAN</div>
+                <div class="tg-option ahi-disabled" data-tab="flock" data-flash data-nbeep="select" id="tab-flock">FLOCK</div>
                 <div class="tg-option" data-tab="context" data-flash data-nbeep="select">CONTEXT</div>
                 <div class="tg-option" data-tab="files" data-flash data-nbeep="select">FILES</div>
                 <div class="tg-option" data-tab="terminal" data-flash data-nbeep="select">TERMINAL</div>
+            </div>
+
+            <!-- PLAN -->
+            <div class="view-panel" id="panel-plan">
+                <div class="plan-summary" id="plan-summary"></div>
+                <div class="plan-tasks" id="plan-tasks">
+                    <div class="status-val" style="padding:8px 0;">[ WAITING FOR PLAN ]</div>
+                </div>
             </div>
 
             <!-- ACTIVITY -->
@@ -632,9 +732,13 @@
 
     // ── View Tabs ──
     var viewTabs = document.getElementById('view-tabs');
+    var _planTabEnabled = false;
+    var _planSwitchedOnce = false;
+    var _sawPlanAbsent = false;
+    var _flockTabEnabled = false;
     viewTabs.addEventListener('click', function(e) {
         var opt = e.target.closest('.tg-option');
-        if (!opt) return;
+        if (!opt || opt.classList.contains('ahi-disabled')) return;
         viewTabs.querySelectorAll('.tg-option').forEach(function(o) { o.classList.remove('active'); });
         opt.classList.add('active');
         document.querySelectorAll('.view-panel').forEach(function(p) { p.classList.remove('active'); });
@@ -731,11 +835,28 @@
 
     function deselectMission() {
         activeMissionId = null;
+        _planTabEnabled = false;
+        _planSwitchedOnce = false;
+        _sawPlanAbsent = false;
         document.getElementById('missions-list-section').style.display = '';
         document.getElementById('detail-area').classList.remove('active');
         missionIdEl.value = genId();
         document.getElementById('mission-text').value = '';
         document.getElementById('status-message').textContent = '';
+        // Reset flock tab
+        _flockTabEnabled = false;
+        document.getElementById('tab-flock').classList.add('ahi-disabled');
+        // Reset plan tab
+        var tabPlan = document.getElementById('tab-plan');
+        tabPlan.classList.add('ahi-disabled');
+        if (typeof nComp !== 'undefined') { nComp.status(tabPlan, null); nComp.progress(tabPlan, null); }
+        document.getElementById('plan-tasks').innerHTML = '<div class="status-val" style="padding:8px 0;">[ WAITING FOR PLAN ]</div>';
+        document.getElementById('plan-summary').innerHTML = '';
+        // Switch back to activity tab
+        viewTabs.querySelectorAll('.tg-option').forEach(function(o) { o.classList.remove('active'); });
+        viewTabs.querySelector('[data-tab="activity"]').classList.add('active');
+        document.querySelectorAll('.view-panel').forEach(function(p) { p.classList.remove('active'); });
+        document.getElementById('panel-activity').classList.add('active');
         updateButtons(null);
         updateStats(null);
     }
@@ -1191,7 +1312,10 @@
                 names.forEach(function(name) {
                     var agent = flock[name];
                     var isSR = d.showrunner && d.showrunner.node_id === agent.node_id && d.showrunner.model === agent.model;
-                    html += '<div class="flock-card' + (isSR ? ' showrunner' : '') + '" data-flock-name="' + escHtml(name) + '" style="cursor:pointer;">';
+                    var extraCls = isSR ? ' showrunner' : '';
+                    if (agent.was_dispatched) extraCls += ' dispatched';
+                    else if (agent.gave_advice) extraCls += ' advised';
+                    html += '<div class="flock-card' + extraCls + '" data-flock-name="' + escHtml(name) + '" style="cursor:pointer;">';
                     html += '<span class="corner corner-tl">⌜</span><span class="corner corner-tr">⌝</span>';
                     html += '<span class="corner corner-bl">⌞</span><span class="corner corner-br">⌟</span>';
                     html += '<div class="fc-name">' + escHtml(name) + '</div>';
@@ -1199,6 +1323,7 @@
                     html += '<div class="fc-role ' + (isSR ? 'sr' : 'worker') + '">' + (isSR ? 'SHOWRUNNER' : 'WORKER') + ' @ ' + escHtml(agent.hostname || agent.node_id || '—') + '</div>';
                     html += '<div class="metric-label">' + escHtml((agent.status || 'unknown').toUpperCase());
                     if (agent.assigned_task) html += ' · ' + escHtml(agent.assigned_task);
+                    if (agent.gave_advice) html += ' · <span style="color:rgba(167,100,255,0.9);">ADVISED</span>';
                     html += '</div>';
                     html += '</div>';
                 });
@@ -1465,6 +1590,111 @@
         }
     }
 
+    // ── Flock Tab ──
+    function updateFlockTab(m) {
+        var tabEl = document.getElementById('tab-flock');
+        var flock = m && m.flock ? m.flock : {};
+        var count = Object.keys(flock).length;
+        if (count > 0 && !_flockTabEnabled) {
+            _flockTabEnabled = true;
+            tabEl.classList.remove('ahi-disabled');
+        } else if (count === 0 && _flockTabEnabled) {
+            _flockTabEnabled = false;
+            tabEl.classList.add('ahi-disabled');
+        }
+    }
+
+    // ── Plan Tab ──
+    function updatePlanTab(m) {
+        var plan = m && m.plan;
+        var tabEl = document.getElementById('tab-plan');
+        if (!plan || !plan.tasks || !plan.tasks.length) { _sawPlanAbsent = true; return; }
+
+        // Enable tab if first time
+        if (!_planTabEnabled) {
+            _planTabEnabled = true;
+            tabEl.classList.remove('ahi-disabled');
+            if (typeof nComp !== 'undefined') nComp.status(tabEl, 'ok');
+            // Auto-switch to plan tab only when plan is first generated during a live mission
+            // (not when opening an already-running mission that has a plan)
+            if (!_planSwitchedOnce && _sawPlanAbsent) {
+                _planSwitchedOnce = true;
+                tabEl.click();
+            }
+        }
+
+        // Only re-render if plan panel is visible
+        var panelVisible = document.getElementById('panel-plan').classList.contains('active');
+        if (!panelVisible) return;
+
+        var tasks = plan.tasks;
+        var totalCore = 0, doneCore = 0, totalAll = tasks.length, doneAll = 0;
+        tasks.forEach(function(t) {
+            var isIdle = t.type === 'misc' || (t.id && t.id.indexOf('idle-') === 0);
+            var isFix = t.type === 'fix' || (t.id && t.id.indexOf('sr-fix-') === 0);
+            if (!isIdle && !isFix) { totalCore++; if (t.status === 'done') doneCore++; }
+            if (t.status === 'done') doneAll++;
+        });
+
+        // Summary bar
+        var sumEl = document.getElementById('plan-summary');
+        sumEl.innerHTML =
+            '<div class="stat-item"><span class="stat-label">CORE</span><span class="stat-value accent">[ ' + doneCore + ' / ' + totalCore + ' ]</span></div>' +
+            '<div class="stat-item"><span class="stat-label">TOTAL</span><span class="stat-value">[ ' + doneAll + ' / ' + totalAll + ' ]</span></div>' +
+            '<div class="stat-item"><span class="stat-label">PHASE</span><span class="stat-value">' + (m.mission_phase || '—').toUpperCase() + '</span></div>' +
+            (plan.workstreams ? '<div class="stat-item"><span class="stat-label">WORKSTREAMS</span><span class="stat-value">[ ' + plan.workstreams + ' ]</span></div>' : '');
+
+        // Update tab badge with progress
+        if (typeof nComp !== 'undefined') {
+            var pct = totalCore > 0 ? Math.round((doneCore / totalCore) * 100) : 0;
+            nComp.progress(tabEl, pct < 100 ? pct : null);
+            nComp.status(tabEl, doneCore === totalCore ? 'ok' : 'busy');
+        }
+
+        // Render tasks
+        var container = document.getElementById('plan-tasks');
+        var html = '';
+        tasks.forEach(function(t) {
+            var st = t.status || 'pending';
+            var isIdle = t.type === 'misc' || (t.id && t.id.indexOf('idle-') === 0);
+            var isFix = t.type === 'fix' || (t.id && t.id.indexOf('sr-fix-') === 0);
+
+            var iconCls, iconPh, badgeCls, rowCls;
+            if (st === 'done') {
+                iconCls = 'done'; iconPh = 'ph ph-check-circle'; badgeCls = 'done';
+            } else if (st === 'dispatched') {
+                iconCls = 'dispatched'; iconPh = 'ph ph-circle-notch'; badgeCls = 'dispatched';
+            } else if (st === 'failed') {
+                iconCls = 'failed'; iconPh = 'ph ph-x-circle'; badgeCls = 'failed';
+            } else {
+                iconCls = 'pending'; iconPh = 'ph ph-circle-dashed'; badgeCls = 'pending';
+            }
+            rowCls = 'plan-task-row is-' + st + (isIdle ? ' is-idle' : '');
+
+            html += '<div class="' + rowCls + '">';
+            html += '<i class="pt-icon ' + iconCls + ' ' + iconPh + '"></i>';
+            html += '<div class="pt-info">';
+            html += '<div class="pt-title">' + escHtml(t.title || t.id) + '</div>';
+            html += '<div class="pt-meta">';
+            html += escHtml(t.id);
+            html += '</div>';
+            if (t.deps && t.deps.length) {
+                html += '<div class="plan-deps">';
+                t.deps.forEach(function(dep) {
+                    html += '<span class="plan-dep-tag">← ' + escHtml(dep) + '</span>';
+                });
+                html += '</div>';
+            }
+            html += '</div>';
+            if (t.assigned_agent) {
+                html += '<span class="pt-agent' + (st === 'dispatched' ? ' active' : '') + '">' + escHtml(t.assigned_agent) + '</span>';
+            }
+            html += '<span class="pt-status-badge ' + badgeCls + '">' + st.toUpperCase() + '</span>';
+            html += '</div>';
+        });
+        container.innerHTML = html;
+    }
+
     // ── Poll ──
     function poll() {
         fetch(BASE + '/api/v1/missions')
@@ -1485,6 +1715,12 @@
                         // Status message
                         var msgEl = document.getElementById('status-message');
                         msgEl.textContent = m.status_message || '';
+
+                        // Flock tab
+                        updateFlockTab(m);
+
+                        // Plan tab
+                        updatePlanTab(m);
 
                         // User prompts
                         updatePromptToasts(m.pending_prompts);

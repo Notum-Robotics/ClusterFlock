@@ -421,6 +421,8 @@
                     var est = ep.status || 'unknown';
                     var cls = est === 'ready' ? 'ready' : est === 'loading' ? 'loading' : est === 'sleeping' ? 'sleeping' : est === 'error' ? 'error' : '';
                     var tps = ep.tokens_per_sec ? ' ' + Math.round(ep.tokens_per_sec) + ' t/s' : '';
+                    var ctxLen = ep.context_length || 0;
+                    var ctxLabel = ctxLen >= 1000 ? Math.round(ctxLen / 1024) + 'K ctx' : (ctxLen ? ctxLen + ' ctx' : '');
                     var gpuLabel = ep.gpu != null ? ' GPU ' + ep.gpu : '';
                     html += '<span class="endpoint-tag ' + cls + '">';
                     if (ep.graylisted) html += '⚠️ ';
@@ -429,6 +431,7 @@
                     if (gpuLabel) html += '<span class="ep-tps">' + gpuLabel + '</span>';
                     if (est === 'sleeping') html += '<span class="ep-tps">ZZZ</span>';
                     else if (tps) html += '<span class="ep-tps">' + tps + '</span>';
+                    if (ctxLabel) html += '<span class="ep-tps">' + ctxLabel + '</span>';
                     html += '</span>';
                 });
                 html += '</div>';
@@ -556,13 +559,32 @@
 
         body += '</div>';
 
+        // Build buttons — INTERFACE only for local agent with loaded endpoints
+        var buttons = [];
+        if (isLocal) {
+            var gpus = [];
+            (node.endpoints || []).forEach(function(ep) {
+                if (ep.status === 'ready' || ep.status === 'loading') {
+                    gpus.push(ep.gpu != null ? ep.gpu : 0);
+                }
+            });
+            if (gpus.length) {
+                // Default to first loaded GPU
+                buttons.push({ label: 'INTERFACE', value: 'interface:' + gpus[0], style: 'primary' });
+            }
+        }
+        buttons.push({ label: 'DONE', value: 'close' });
+
         nDynamic.showDialog({
-            title: escHtml(node.hostname || nid),
-            body: body,
+            title: node.hostname || nid,
+            bodyHtml: body,
             alarm: false,
-            buttons: [
-                { label: 'DONE', value: 'close' }
-            ]
+            buttons: buttons
+        }).then(function(val) {
+            if (val && val.indexOf('interface:') === 0) {
+                var dev = val.split(':')[1];
+                window.open('/llama.html#' + dev, '_blank');
+            }
         });
 
         // Bind toggle immediately after dialog renders

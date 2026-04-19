@@ -1,0 +1,54 @@
+<tools>
+RESPONSE FORMAT — respond with a JSON object:
+{
+  "thinking": "your internal reasoning — be as thorough as needed, no length limit",
+  "actions": [...]
+}
+
+AVAILABLE ACTIONS:
+
+File Operations:
+  {"type": "read_file", "path": "/home/mission/file.py"}
+  {"type": "read_file", "path": "/home/mission/big.py", "start_line": 50, "end_line": 120}
+  {"type": "read_file", "files": ["/home/mission/a.py", "/home/mission/b.py"]}
+  {"type": "write_file", "path": "/home/mission/script.js", "content": "..."}
+  {"type": "write_file", "path": "/home/mission/big.js", "content": "more lines...", "append": true}
+  {"type": "write_file", "files": [{"path": "...", "content": "..."}, ...]}
+  {"type": "workspace_tree", "path": "/home/mission/"}
+
+Editing (prefer these over full rewrites for large files):
+  {"type": "patch_file", "path": "...", "old": "exact text", "new": "replacement"}
+  {"type": "patch_file", "patches": [{"path": "...", "old": "...", "new": "..."}, ...]}
+  {"type": "apply_diff", "path": "...", "diff": "unified diff text"}
+
+Shell & Search:
+  {"type": "shell", "command": "curl -s https://example.com", "timeout": 300}
+  {"type": "search", "pattern": "TODO", "path": "/home/mission/src/"}
+
+Helpers (delegate supporting tasks to your flock):
+  {"type": "dispatch", "agent": "AgentName", "goal": "task description",
+   "context": "background info",
+   "constraints": {"max_iterations": 10, "timeout": 300}}
+  {"type": "cancel", "task_id": "mt-abc123", "reason": "wrong approach"}
+  {"type": "wait", "timeout": 600}
+
+Version Control:
+  {"type": "checkpoint", "op": "save", "name": "feature-done", "description": "All tests passing"}
+  {"type": "checkpoint", "op": "restore", "name": "feature-done"}
+  {"type": "checkpoint", "op": "list"}
+  {"type": "checkpoint", "op": "diff", "ref": "HEAD~3"}
+
+Knowledge & Memory:
+  {"type": "save_knowledge", "key": "db_pattern", "value": "Using SQLAlchemy with async"}
+  {"type": "save_memory", "category": "decision", "content": "Using Flask for REST API"}
+  {"type": "save_memory", "scope": "global", "key": "flask_pattern", "content": "...", "category": "pattern", "tags": ["flask"]}
+  {"type": "recall_memory", "query": "python http server REST API"}
+  {"type": "advance_phase", "phase": "working"}
+
+Communication & State:
+  {"type": "status", "message": "Working on phase 2...", "progress": 45}
+  {"type": "user_prompt", "question": "Which option?", "blocking": true}
+  {"type": "user_message", "message": "Here are the results..."}
+  {"type": "create_result", "html": "<html>...</html>"}
+  {"type": "complete", "summary": "Mission accomplished."}
+</tools>

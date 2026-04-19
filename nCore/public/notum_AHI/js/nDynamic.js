@@ -613,7 +613,8 @@ var nDynamic = (function () {
                 '<span class="corner corner-bl">\u231E</span>' +
                 '<span class="corner corner-br">\u231F</span>';
             if (opts.title) html += '<div class="dialog-title">' + escHtml(opts.title) + '</div>';
-            if (opts.body)  html += '<div class="dialog-body">'  + escHtml(opts.body)  + '</div>';
+            if (opts.bodyHtml) html += '<div class="dialog-body">' + opts.bodyHtml + '</div>';
+            else if (opts.body)  html += '<div class="dialog-body">'  + escHtml(opts.body)  + '</div>';
 
             html += '<div class="dialog-actions">';
             (opts.buttons || []).forEach(function (btn) {

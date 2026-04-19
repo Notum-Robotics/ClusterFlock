@@ -415,6 +415,8 @@
                     var est = ep.status || '';
                     var cls = est === 'ready' ? 'ready' : est === 'loading' ? 'loading' : est === 'sleeping' ? 'sleeping' : est === 'error' ? 'error' : '';
                     var tps = ep.tokens_per_sec ? Math.round(ep.tokens_per_sec) + ' t/s' : '';
+                    var ctxLen = ep.context_length || 0;
+                    var ctxLabel = ctxLen >= 1000 ? Math.round(ctxLen / 1024) + 'K ctx' : (ctxLen ? ctxLen + ' ctx' : '');
                     if (est === 'sleeping') {
                         html += '<span class="endpoint-tag ' + cls + '">';
                         html += '<i class="ph ph-moon" style="margin-right:3px;opacity:.7"></i>';
@@ -425,6 +427,7 @@
                         html += '<span class="endpoint-tag ' + cls + '" data-action="unload" data-model="' + escHtml(ep.model) + '" data-flash style="cursor:pointer;">';
                         html += escHtml(ep.model || '?');
                         if (tps) html += ' <span class="ep-tps">' + tps + '</span>';
+                        if (ctxLabel) html += ' <span class="ep-tps">' + ctxLabel + '</span>';
                         html += '</span>';
                     }
                 });
@@ -1443,14 +1446,21 @@
             fetch(BASE + '/api/v1/tasks/' + encodeURIComponent(taskId))
                 .then(function(r) { return r.json(); })
                 .then(function(d) {
-                    if (d.status === 'complete' || d.status === 'error') {
+                    if (d.status === 'done' || d.status === 'error') {
                         clearInterval(interval);
                         var results = d.results || [];
                         var html = '<div class="cf-section-label">' + escHtml(promptText.substring(0, 80)) + '</div>';
                         results.forEach(function(r) {
+                            var content = '';
+                            if (r.choices && r.choices.length && r.choices[0].message) {
+                                content = r.choices[0].message.content || '';
+                            } else {
+                                content = r.content || '';
+                            }
+                            var tps = r.tokens_per_sec ? r.tokens_per_sec.toFixed(1) + ' t/s' : '';
                             html += '<div style="padding:4px 0;border-bottom:1px solid var(--border);">';
-                            html += '<div class="metric-label" style="margin-bottom:2px;">' + escHtml(r.model || '?') + ' · ' + escHtml(r.hostname || '') + '</div>';
-                            html += '<div style="font-family:var(--font-data);font-size:.65rem;color:var(--text);white-space:pre-wrap;">' + escHtml(r.content || r.error || '—') + '</div>';
+                            html += '<div class="metric-label" style="margin-bottom:2px;">' + escHtml(r.model || '?') + ' · ' + escHtml(r.hostname || '') + (tps ? ' · ' + tps : '') + '</div>';
+                            html += '<div style="font-family:var(--font-data);font-size:.65rem;color:var(--text);white-space:pre-wrap;">' + escHtml(content || r.error || '—') + '</div>';
                             html += '</div>';
                         });
                         card.innerHTML = '<span class="corner corner-tl">⌜</span><span class="corner corner-tr">⌝</span><span class="corner corner-bl">⌞</span><span class="corner corner-br">⌟</span>' + html;

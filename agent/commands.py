@@ -12,14 +12,18 @@ IMPORTANT: No model splitting. Ever. Each model runs entirely on one device.
 """
 
 import json
+import logging
 import os
 import re
 import time
+import urllib.request
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 from server import (start_server, stop_server, server_running, complete,
                     benchmark, loaded_models, active_devices, _port_for_device,
-                    get_server_context)
+                    get_server_context, inference_liveness_check)
 from models_hf import (local_models, download_model,
                         get_bench, save_bench, MODELS_DIR,
                         auto_select_quant, _resolve_gguf_repo,
@@ -172,6 +176,30 @@ def execute(cmd):
             device, port = _wake_primed(cmd.get("model"))
         if not device:
             raise ValueError("no model loaded for prompt")
+
+        # Verify the server process is actually alive before sending prompt.
+        # If it crashed, attempt a single inline recovery so the prompt can
+        # still succeed without waiting for the next heartbeat cycle.
+        if not _is_server_alive(device):
+            model_id = _devices.get(device, {}).get("model_id", "")
+            model_path = _devices.get(device, {}).get("model_path")
+            log.info(f"[prompt-recovery] Server {device} dead "
+                     f"— attempting inline reload of {model_id}")
+            try:
+                stop_server(device)
+                _set_activity("loading", model_id)
+                _load_model(model_id, device=device, model_path=model_path)
+                log.info(f"[prompt-recovery] ✓ {model_id} reloaded on {device}")
+                _restart_cooldown[device] = time.time()
+            except Exception as e:
+                log.error(f"[prompt-recovery] ✗ Failed to reload {model_id}: {e}")
+                raise ValueError(
+                    f"no model loaded for prompt (server crashed, "
+                    f"reload failed: {e})")
+            finally:
+                _set_activity("idle")
+            port = _port_for_device(device)
+
         kwargs = {}
         if cmd.get("temperature") is not None:
             kwargs["temperature"] = float(cmd["temperature"])
@@ -212,7 +240,7 @@ def _resolve_device(cmd):
     """Determine target device from a command.
 
     - device="cpu" or gpu_idx="cpu" → "cpu"
-    - gpu_idx=N → "gpuN"
+    - gpu_idx=N → "gpuN" (validated against physical GPUs)
     - No hint → first available GPU slot, or "gpu0" if all occupied
     """
     if cmd.get("device") == "cpu":
@@ -221,6 +249,20 @@ def _resolve_device(cmd):
     if gpu_idx is not None:
         if str(gpu_idx) == "cpu":
             return "cpu"
+        # Validate numeric gpu_idx against physical GPU count
+        try:
+            idx = int(gpu_idx)
+        except (ValueError, TypeError):
+            raise ValueError(f"invalid gpu_idx: {gpu_idx}")
+        from hardware import gpu
+        n_physical = len(gpu())
+        if idx >= n_physical:
+            if cpu_ram_enabled():
+                log.info(f"[device] gpu_idx={idx} beyond {n_physical} "
+                         f"physical GPU(s) → remapping to CPU")
+                return "cpu"
+            raise ValueError(f"gpu_idx={idx} but only {n_physical} "
+                             f"physical GPU(s) available")
         return f"gpu{gpu_idx}"
     # Default: first GPU not currently loaded
     from hardware import gpu
@@ -262,7 +304,7 @@ def _load_model(model_id, *, device="gpu0", context_length=None,
     kwargs = {"device": device}
     if context_length:
         kwargs["ctx_size"] = context_length
-    print(f"[load] Loading {model_id} on {tag}...")
+    log.info(f"[load] Loading {model_id} on {tag}...")
 
     start_server(model_path, **kwargs)
 
@@ -272,7 +314,7 @@ def _load_model(model_id, *, device="gpu0", context_length=None,
         "model_path": model_path,
         "port": port,
     }
-    print(f"[load] ✓ {model_id} ready on {tag}")
+    log.info(f"[load] ✓ {model_id} ready on {tag}")
 
 
 def _unload(model_id):
@@ -280,7 +322,7 @@ def _unload(model_id):
     for dev, info in list(_devices.items()):
         if info.get("model_id") == model_id:
             tag = "CPU/RAM" if dev == "cpu" else dev.upper()
-            print(f"[unload] Stopping {model_id} on {tag}...")
+            log.info(f"[unload] Stopping {model_id} on {tag}...")
             stop_server(dev)
             del _devices[dev]
             return
@@ -290,13 +332,13 @@ def _unload(model_id):
             stop_server(dev)
             del _devices[dev]
             return
-    print(f"[unload] {model_id} not found on any device")
+    log.info(f"[unload] {model_id} not found on any device")
 
 
 def _unload_all():
     """Unload all models on all devices."""
     count = len(_devices)
-    print(f"[unload] Stopping all servers ({count} device(s))...")
+    log.info(f"[unload] Stopping all servers ({count} device(s))...")
     stop_server()  # stops all
     _devices.clear()
 
@@ -324,8 +366,8 @@ def _download_and_load(model_id, *, device="gpu0", context_length=None):
                 vram_free = hw.get("system", {}).get("ram_total_mb", 0)
         gguf_repo = _resolve_gguf_repo(hf_repo)
         quant = auto_select_quant(gguf_repo, vram_free)
-        print(f"[dl+load] Auto-selected quant: {quant} "
-              f"(VRAM free: {vram_free/1024:.1f} GB)")
+        log.info(f"[dl+load] Auto-selected quant: {quant} "
+                 f"(VRAM free: {vram_free/1024:.1f} GB)")
 
     path = download_model(hf_repo, quant=quant)
     _set_activity("loading", model_id)
@@ -360,7 +402,7 @@ def _delete_model(model_id):
         f.unlink()
         freed += sz
         deleted.append(str(f.relative_to(MODELS_DIR)))
-        print(f"[delete] Removed {f.relative_to(MODELS_DIR)} ({sz/(1024**3):.1f} GB)")
+        log.info(f"[delete] Removed {f.relative_to(MODELS_DIR)} ({sz/(1024**3):.1f} GB)")
 
     # Clean up empty parent dirs
     for f in candidates:
@@ -392,7 +434,7 @@ def _detect_running_model():
             _devices["gpu0"] = {
                 "model_id": mid, "model_path": "", "port": port,
             }
-            print(f"[detect] Found running model: {mid}")
+            log.info(f"[detect] Found running model: {mid}")
 
 
 # ── Remote configuration ────────────────────────────────────────────────
@@ -413,13 +455,13 @@ def _handle_configure(cmd):
         _save_config({"cpu_ram_enabled": new_val})
 
         if new_val and not old_val:
-            print("[configure] ✓ CPU/RAM device ENABLED")
+            log.info("[configure] ✓ CPU/RAM device ENABLED")
         elif not new_val and old_val:
-            print("[configure] CPU/RAM device DISABLED")
+            log.info("[configure] CPU/RAM device DISABLED")
             if "cpu" in _devices:
                 stop_server("cpu")
                 del _devices["cpu"]
-                print("[configure]   Stopped CPU server")
+                log.info("[configure]   Stopped CPU server")
 
     if "auto_unload" in cmd:
         new_val = bool(cmd["auto_unload"])
@@ -428,17 +470,17 @@ def _handle_configure(cmd):
         _save_config({"auto_unload": new_val})
 
         if new_val and not old_val:
-            print("[configure] ✓ Auto-unload ENABLED (15 min idle)")
+            log.info("[configure] ✓ Auto-unload ENABLED (15 min idle)")
         elif not new_val and old_val:
-            print("[configure] Auto-unload DISABLED")
+            log.info("[configure] Auto-unload DISABLED")
             # Wake any primed models back
             for dev, pinfo in list(_primed.items()):
                 try:
                     _load_model(pinfo["model_id"], device=dev,
                                 model_path=pinfo["model_path"])
-                    print(f"[configure]   Woke {pinfo['model_id']} on {dev}")
+                    log.info(f"[configure]   Woke {pinfo['model_id']} on {dev}")
                 except Exception as e:
-                    print(f"[configure]   Failed to wake {pinfo['model_id']}: {e}")
+                    log.error(f"[configure]   Failed to wake {pinfo['model_id']}: {e}")
             _primed.clear()
 
     settings = []
@@ -447,7 +489,7 @@ def _handle_configure(cmd):
     if "auto_unload" in cmd:
         settings.append(f"auto_unload={_auto_unload_enabled}")
     if settings:
-        print(f"[configure] {', '.join(settings)}")
+        log.info(f"[configure] {', '.join(settings)}")
 
 
 def init_settings():
@@ -458,49 +500,120 @@ def init_settings():
     _auto_unload_enabled = cfg.get("auto_unload", False)
     _last_command_time = time.time()  # reset on startup
     if _cpu_ram_enabled:
-        print("[config] CPU/RAM device enabled (from saved config)")
+        log.info("[config] CPU/RAM device enabled (from saved config)")
     if _auto_unload_enabled:
-        print("[config] Auto-unload enabled (15 min idle)")
+        log.info("[config] Auto-unload enabled (15 min idle)")
+
+
+# ── Server liveness helper ───────────────────────────────────────────────
+
+def _is_server_alive(device):
+    """Check if the llama-server process for a device is still running."""
+    alive = active_devices()
+    return device in alive
+
+
+def _server_is_busy(port, host="127.0.0.1"):
+    """Check if the llama-server has an active inference request via /slots.
+
+    Returns True if any slot has is_processing=True, meaning the server
+    is legitimately busy (not stuck).  Returns False on any error so we
+    fall through to the liveness probe.
+    """
+    try:
+        url = f"http://{host}:{port}/slots"
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            slots = json.loads(resp.read())
+            return any(s.get("is_processing") for s in slots)
+    except Exception:
+        return False
 
 
 # ── Crashed-server auto-restart ──────────────────────────────────────────
 
 _restart_cooldown = {}  # device → last_attempt_time
+_restart_failures = {}  # device → consecutive failure count
+_liveness_interval = {}  # device → last_liveness_check_time
+_LIVENESS_CHECK_SEC = 120  # run inference liveness check every 2 min
+_MAX_RESTART_FAILURES = 5  # give up after this many consecutive failures
 
 def check_crashed_servers():
-    """Detect and auto-restart servers that crashed while a model was loaded.
+    """Detect and auto-restart servers that crashed or are stuck.
 
-    Called from the heartbeat loop. If _devices has an entry but the
-    corresponding server process is dead, attempt to reload once with a
-    30-second cooldown between retries.
+    Called from the heartbeat loop.  Handles two failure modes:
+      1. Process died — _devices has an entry but the process exited.
+      2. Inference stuck — process alive, /health ok, but actual inference
+         hangs (the "zombie server" scenario).
+
+    Liveness probes run every _LIVENESS_CHECK_SEC to avoid overloading.
     """
     alive = active_devices()
+    now = time.time()
+
     for dev, info in list(_devices.items()):
-        if dev in alive:
-            continue
-        # Server is dead but _devices still has the record
         model_id = info.get("model_id")
         model_path = info.get("model_path")
         if not model_id:
-            # No model to reload — clean up stale entry
-            del _devices[dev]
+            if dev not in alive:
+                del _devices[dev]
             continue
+
+        need_restart = False
+        reason = ""
+
+        if dev not in alive:
+            # ── Mode 1: process crashed ──────────────────────────────
+            need_restart = True
+            reason = "crashed"
+        else:
+            # ── Mode 2: inference liveness probe ─────────────────────
+            last_check = _liveness_interval.get(dev, 0)
+            if now - last_check >= _LIVENESS_CHECK_SEC:
+                _liveness_interval[dev] = now
+                port = info.get("port") or _port_for_device(dev)
+                # Skip liveness probe if server is actively generating —
+                # the probe would queue behind the real request and time
+                # out, falsely triggering a restart.
+                if _server_is_busy(port):
+                    continue
+                if not inference_liveness_check(port, timeout=30):
+                    need_restart = True
+                    reason = "stuck (inference unresponsive)"
+
+        if not need_restart:
+            continue
+
         # Cooldown: don't retry more than once every 30 seconds
-        now = time.time()
         last = _restart_cooldown.get(dev, 0)
         if now - last < 30:
             continue
         _restart_cooldown[dev] = now
-        print(f"\n[recovery] Server {dev} crashed — reloading {model_id}...")
+
+        fail_count = _restart_failures.get(dev, 0)
+        if fail_count >= _MAX_RESTART_FAILURES:
+            log.error(f"[recovery] Server {dev} {reason} — giving up after "
+                      f"{fail_count} consecutive reload failures, removing {model_id}")
+            _devices.pop(dev, None)
+            _restart_failures.pop(dev, None)
+            continue
+
+        log.info(f"[recovery] Server {dev} {reason} — reloading {model_id} "
+                 f"(attempt {fail_count + 1}/{_MAX_RESTART_FAILURES})...")
         try:
+            # Force-kill the stuck process before reloading
+            stop_server(dev)
             _set_activity("loading", model_id)
             _load_model(model_id, device=dev, model_path=model_path)
-            print(f"[recovery] ✓ {model_id} reloaded on {dev}")
+            log.info(f"[recovery] ✓ {model_id} reloaded on {dev}")
+            _liveness_interval[dev] = time.time()  # reset liveness timer
+            _restart_failures.pop(dev, None)  # reset on success
             _auto_bench(model_id, dev)
         except Exception as e:
-            print(f"[recovery] ✗ Failed to reload {model_id}: {e}")
-            # Remove stale entry so we don't keep retrying forever
-            _devices.pop(dev, None)
+            _restart_failures[dev] = fail_count + 1
+            log.error(f"[recovery] ✗ Failed to reload {model_id} "
+                      f"(failure {fail_count + 1}/{_MAX_RESTART_FAILURES}): {e}")
+            # Keep _devices entry so we retry on next heartbeat
         finally:
             _set_activity("idle")
 
@@ -516,9 +629,9 @@ def _auto_bench(model_id, device):
         port = _port_for_device(device)
         perf = benchmark(port=port)
         save_bench(model_id, perf, device=device)
-        print(f"  Benchmark: {perf['tokens_per_sec']} tok/s")
+        log.info(f"[benchmark] {perf['tokens_per_sec']} tok/s")
     except Exception as e:
-        print(f"  Benchmark failed: {e}")
+        log.error(f"[benchmark] failed: {e}")
     finally:
         _set_activity("idle")
 
@@ -593,8 +706,8 @@ def check_auto_unload():
         # Store primed state before unloading
         _primed[dev] = {"model_id": model_id, "model_path": model_path}
         tag = "CPU/RAM" if dev == "cpu" else dev.upper()
-        print(f"\n[auto-unload] {model_id} on {tag} → sleeping "
-              f"(idle {_AUTO_UNLOAD_SEC // 60}min)")
+        log.info(f"[auto-unload] {model_id} on {tag} → sleeping "
+                 f"(idle {_AUTO_UNLOAD_SEC // 60}min)")
         stop_server(dev)
 
     _devices.clear()
@@ -623,15 +736,15 @@ def _wake_primed(model_hint=None):
     model_id = pinfo["model_id"]
     model_path = pinfo["model_path"]
     tag = "CPU/RAM" if target_dev == "cpu" else target_dev.upper()
-    print(f"\n[wake] Reloading {model_id} on {tag} (was sleeping)...")
+    log.info(f"[wake] Reloading {model_id} on {tag} (was sleeping)...")
     _set_activity("loading", model_id)
     try:
         _load_model(model_id, device=target_dev, model_path=model_path)
-        print(f"[wake] ✓ {model_id} ready on {tag}")
+        log.info(f"[wake] ✓ {model_id} ready on {tag}")
         port = _port_for_device(target_dev)
         return target_dev, port
     except Exception as e:
-        print(f"[wake] ✗ Failed to reload {model_id}: {e}")
+        log.error(f"[wake] ✗ Failed to reload {model_id}: {e}")
         return None, None
     finally:
         _set_activity("idle")

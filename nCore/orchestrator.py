@@ -5,6 +5,7 @@ and coordinates multi-node prompt tasks with result aggregation.
 """
 
 import json
+import logging
 import math
 import re
 import secrets
@@ -12,6 +13,8 @@ import threading
 import time
 import urllib.request
 import urllib.error
+
+log = logging.getLogger(__name__)
 
 from registry import all_nodes, get_node
 
@@ -498,6 +501,12 @@ def plan_autoload(clean_slate=False, priorities=None):
                 # CPU device (Linux agent): system RAM used as "VRAM"
                 is_cpu_device = gpu.get("device") == "cpu"
 
+                # Skip CPU devices during autoload — CPU inference is too
+                # slow for deadline-bounded requests and many agents lack
+                # a dedicated CPU build of llama-server.
+                if is_cpu_device:
+                    continue
+
                 vram_mb = gpu.get("vram_total_mb", 0)
                 if vram_mb <= 0:
                     continue
@@ -623,7 +632,7 @@ def autoload_record_load_result(node_id, model_id, ok, error=None):
             if s["node_id"] == node_id and s["model_id"] == model_id:
                 ts = time.strftime("%H:%M:%S")
                 tag = "ok" if ok else f"FAIL {error}" if error else "done"
-                print(f"[{ts}] autoload    {s.get('hostname','?'):20} {model_id}: {tag}")
+                log.info(f"autoload    {s.get('hostname','?'):20} {model_id}: {tag}")
                 break
 
 
@@ -653,22 +662,22 @@ def execute_autoload(priorities=None):
     """
     global _autoload_state
     prio_label = f" (priorities: {len(priorities)})" if priorities else ""
-    print(f"[{_ts()}] autoload ── starting{prio_label}")
+    log.info(f"autoload ── starting{prio_label}")
 
     nodes = all_nodes()
     unloaded = 0
     for node in nodes:
         if node.get("status") == "dead":
-            print(f"[{_ts()}] autoload    skip {node.get('hostname','?'):15} (dead)")
+            log.info(f"autoload    skip {node.get('hostname','?'):15} (dead)")
             continue
         enqueue(node["node_id"], {"action": "unload_all", "ttl": 120})
         unloaded += 1
-        print(f"[{_ts()}] autoload    unload_all → {node.get('hostname','?')}")
+        log.info(f"autoload    unload_all → {node.get('hostname','?')}")
 
     plan = plan_autoload(clean_slate=True, priorities=priorities)
 
     if not plan:
-        print(f"[{_ts()}] autoload    no models to load (0 steps)")
+        log.info(f"autoload    no models to load (0 steps)")
         with _lock:
             _autoload_state = {
                 "status": "done",
@@ -705,12 +714,12 @@ def execute_autoload(priorities=None):
         by_host.setdefault(h, []).append(step)
         total_gb += step.get("file_size", 0) / 1e9
 
-    print(f"[{_ts()}] autoload ── plan: {len(plan)} model(s), {total_gb:.1f}GB total across {len(by_host)} node(s)")
+    log.info(f"autoload ── plan: {len(plan)} model(s), {total_gb:.1f}GB total across {len(by_host)} node(s)")
     for host, host_steps in by_host.items():
         for s in host_steps:
             sz = s.get('file_size', 0) / 1e9
             action_tag = '⬇+' if s.get('action') == 'download_and_load' else ''
-            print(f"[{_ts()}] autoload    {host:20} ← {action_tag}{s['model_name']:30} ({sz:.1f}GB) on {s.get('gpu_name','?')}")
+            log.info(f"autoload    {host:20} ← {action_tag}{s['model_name']:30} ({sz:.1f}GB) on {s.get('gpu_name','?')}")
 
     for step in plan:
         action = step.get("action", "load")
@@ -731,7 +740,7 @@ def execute_autoload(priorities=None):
     parts = []
     if load_count: parts.append(f"{load_count} load")
     if dl_count: parts.append(f"{dl_count} download+load")
-    print(f"[{_ts()}] autoload ── {' + '.join(parts)} commands queued")
+    log.info(f"autoload ── {' + '.join(parts)} commands queued")
     return plan, len(plan)
 
 
@@ -768,7 +777,7 @@ def benchmark_autoload_status():
 def _bench_log(msg):
     """Append to benchmark autoload log."""
     ts = time.strftime("%H:%M:%S")
-    print(f"[{ts}] bench-al    {msg}")
+    log.info(f"bench-al    {msg}")
     with _lock:
         if _bench_autoload_state is not None:
             _bench_autoload_state["log"].append({"ts": ts, "msg": msg})
@@ -1322,7 +1331,7 @@ def save_profile(name):
         "assignments": assignments,
     }
     _save_profiles(profiles)
-    print(f"[{_ts()}] profile     saved '{name}' — {len(assignments)} endpoints")
+    log.info(f"profile     saved '{name}' — {len(assignments)} endpoints")
     return len(assignments)
 
 
@@ -1333,7 +1342,7 @@ def delete_profile(name):
         return False
     del profiles[name]
     _save_profiles(profiles)
-    print(f"[{_ts()}] profile     deleted '{name}'")
+    log.info(f"profile     deleted '{name}'")
     return True
 
 
@@ -1346,7 +1355,7 @@ def load_profile(name):
     if name not in profiles:
         raise KeyError(f"profile '{name}' not found")
     assignments = profiles[name].get("assignments", [])
-    print(f"[{_ts()}] profile     loading '{name}' — {len(assignments)} assignments")
+    log.info(f"profile     loading '{name}' — {len(assignments)} assignments")
 
     # Unload all on every live node
     nodes = all_nodes()
@@ -1381,6 +1390,6 @@ def load_profile(name):
             cmd["context_length"] = ctx
         enqueue(nid, cmd)
         loaded += 1
-        print(f"[{_ts()}] profile     {nid} ← {a['model_id']} on {device}")
+        log.info(f"profile     {nid} ← {a['model_id']} on {device}")
 
     return loaded, skipped

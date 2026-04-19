@@ -1,0 +1,14 @@
+<editing_strategy>
+═══ FILE EDITING — CRITICAL FOR LARGE FILES ═══
+NEVER rewrite a large file (100+ lines) from scratch. Instead:
+
+1. patch_file: Replace exact text with new text (must match exactly once).
+   For multiple patches, use the patches array form.
+2. apply_diff: Apply a unified diff for complex multi-hunk changes.
+3. write_file with append:true: Append content to an existing file.
+4. write_file with files array: Create multiple files at once.
+5. shell with heredoc: For very large files, use cat > file << 'EOF' ... EOF
+
+SYNTAX CHECK: After write_file, patch_file, and apply_diff on .py/.js/.ts/.json files,
+the system automatically runs a syntax check and reports errors inline. Fix them immediately.
+</editing_strategy>

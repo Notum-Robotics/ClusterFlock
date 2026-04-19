@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>ClusterFlock — Interface</title>
+    <link rel="stylesheet" href="notum_AHI/css/phosphor.css?v=20260330">
+    <link rel="stylesheet" href="notum_AHI/css/style.css?v=20260330">
+    <link rel="stylesheet" href="notum_AHI/css/notum.css?v=20260330">
+    <link rel="stylesheet" href="app.css?v=20260330">
+    <style>
+        .llama-frame-wrap {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            padding: 0 1rem 1rem;
+        }
+        .llama-frame-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.5rem 0;
+            font-size: 0.55rem;
+            color: var(--text-dim);
+        }
+        .llama-frame-bar .llama-device {
+            font-weight: 600;
+            color: var(--text);
+            text-transform: uppercase;
+        }
+        .llama-frame-bar a {
+            color: var(--accent);
+            text-decoration: none;
+            cursor: pointer;
+        }
+        .llama-frame-bar a:hover {
+            text-decoration: underline;
+        }
+        #llama-iframe {
+            flex: 1;
+            width: 100%;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: #1a1a1a;
+        }
+        .llama-error {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-dim);
+            font-size: 0.6rem;
+        }
+        /* Make app fill viewport */
+        html, body { height: 100%; margin: 0; }
+        .cf-app { display: flex; flex-direction: column; height: 100vh; }
+        main { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+    </style>
+</head>
+<body>
+<div class="cf-app">
+    <header>
+        <h1>CLUSTER<span class="accent">FLOCK</span></h1>
+    </header>
+
+    <!--#include file="nav.part"-->
+
+    <main>
+        <div class="llama-frame-wrap" id="llama-wrap">
+            <div class="llama-frame-bar">
+                <span>LLAMA.CPP INTERFACE · <span class="llama-device" id="llama-device">—</span></span>
+                <a id="llama-back" href="/status.html">← BACK TO STATUS</a>
+            </div>
+            <div class="llama-error" id="llama-error" style="display:none;"></div>
+            <iframe id="llama-iframe" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" src="about:blank"></iframe>
+        </div>
+    </main>
+
+    <!--#include file="footer.part"-->
+</div>
+<script src="notum_AHI/js/notum.js?v=20260330"></script>
+<script src="notum_AHI/js/nComp.js?v=20260330"></script>
+<script>
+(function() {
+    // Parse device from hash: llama.html#0 or llama.html#cpu
+    var device = (location.hash || '#0').substring(1) || '0';
+    var deviceLabel = device === 'cpu' ? 'CPU' : 'GPU ' + device;
+    document.getElementById('llama-device').textContent = deviceLabel;
+
+    var proxyBase = '/api/v1/llama/' + encodeURIComponent(device) + '/';
+    var iframe = document.getElementById('llama-iframe');
+    var errorEl = document.getElementById('llama-error');
+
+    // Verify the proxy is reachable before loading
+    fetch(proxyBase, { method: 'HEAD' })
+        .then(function(r) {
+            if (r.ok || r.status === 200) {
+                iframe.src = proxyBase;
+                iframe.style.display = '';
+                errorEl.style.display = 'none';
+            } else {
+                return r.json().then(function(d) { throw new Error(d.error || r.statusText); });
+            }
+        })
+        .catch(function(e) {
+            iframe.style.display = 'none';
+            errorEl.style.display = '';
+            errorEl.textContent = 'LLAMA.CPP SERVER NOT REACHABLE — ' + (e.message || 'unknown error');
+        });
+
+    // Listen for hash changes to switch device
+    window.addEventListener('hashchange', function() {
+        location.reload();
+    });
+})();
+</script>
+</body>
+</html>
