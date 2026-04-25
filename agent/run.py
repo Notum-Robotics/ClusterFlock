@@ -186,9 +186,11 @@ def run_agent(config, port=1903):
                         benchmark as _benchmark, _port_for_device,
                         get_server_context, cleanup_orphaned_servers)
     from commands import (execute, all_loaded_models, cpu_ram_enabled,
-                          auto_unload_enabled,
+                          auto_unload_enabled, aggressive_vram_enabled,
+                          ram_offload_enabled,
                           init_settings, get_activity, check_crashed_servers,
-                          check_auto_unload, primed_models)
+                          check_auto_unload, primed_models,
+                          spec_decode_status, find_compatible_draft_models)
     from models_hf import get_bench, save_bench, local_models
     from version import __version__ as agent_version
 
@@ -282,6 +284,11 @@ def run_agent(config, port=1903):
                 gpu_idx = ("cpu" if dev_id == "cpu"
                            else int(dev_id.replace("gpu", "")))
 
+                from models_hf import local_nvfp4_engines
+                engine_paths = {e["path"]: e for e in local_nvfp4_engines()}
+                model_path = dev_info.get("model_path", "")
+                is_nvfp4 = model_path in engine_paths or "nvfp4" in model_path.lower()
+
                 endpoints.append({
                     "id": model_id,
                     "model": model_id,
@@ -290,6 +297,9 @@ def run_agent(config, port=1903):
                     "device": dev_id,
                     "context_length": ctx,
                     "tokens_per_sec": get_bench(model_id, device=dev_id),
+                    "quant": "nvfp4" if is_nvfp4 else None,
+                    "backend": "trtllm" if is_nvfp4 else "llama.cpp",
+                    "spec_decode": bool(spec_decode_status().get(dev_id)),
                 })
 
         # Add primed (sleeping) models — unloaded but ready to wake
@@ -304,6 +314,8 @@ def run_agent(config, port=1903):
                 "device": dev_id,
                 "context_length": 0,
                 "tokens_per_sec": get_bench(pinfo["model_id"], device=dev_id),
+                "quant": None,
+                "backend": "llama.cpp",
             })
 
         # Build hardware profile, including CPU device if enabled
@@ -331,6 +343,14 @@ def run_agent(config, port=1903):
                "file_size": int(m["size_gb"] * 1024**3)}
               for m in local_models()]
 
+        # Per-device spec-decode candidates (used by UI to decide button state)
+        spec_candidates = {}
+        active_devs = active_devices()
+        for dev_id, dev_info in active_devs.items():
+            mp = dev_info.get("model_path", "")
+            if mp:
+                spec_candidates[dev_id] = find_compatible_draft_models(mp, dev_id)
+
         return {
             "node_id": node_id,
             "hostname": hostname,
@@ -339,6 +359,10 @@ def run_agent(config, port=1903):
             "agent_type": agent_type,
             "cpu_ram_enabled": cpu_ram_enabled(),
             "auto_unload": auto_unload_enabled(),
+            "aggressive_vram": aggressive_vram_enabled(),
+            "ram_offload": ram_offload_enabled(),
+            "spec_decode": spec_decode_status(),
+            "spec_candidates": spec_candidates,
             "downloaded": dl,
             "hardware": hw_payload,
             "metrics": live_metrics(),

@@ -424,14 +424,18 @@
                     var ctxLen = ep.context_length || 0;
                     var ctxLabel = ctxLen >= 1000 ? Math.round(ctxLen / 1024) + 'K ctx' : (ctxLen ? ctxLen + ' ctx' : '');
                     var gpuLabel = ep.gpu != null ? ' GPU ' + ep.gpu : '';
+                    var isNvfp4 = ep.quant === 'nvfp4';
+                    var quantLabel = (!isNvfp4 && ep.quant) ? ep.quant.toUpperCase() : '';
                     html += '<span class="endpoint-tag ' + cls + '">';
                     if (ep.graylisted) html += '⚠️ ';
                     if (est === 'sleeping') html += '<i class="ph ph-moon" style="margin-right:3px;opacity:.7"></i>';
+                    if (isNvfp4) html += '<span class="ep-nvfp4">NVFP4</span>';
                     html += escHtml(ep.model || '?');
                     if (gpuLabel) html += '<span class="ep-tps">' + gpuLabel + '</span>';
                     if (est === 'sleeping') html += '<span class="ep-tps">ZZZ</span>';
                     else if (tps) html += '<span class="ep-tps">' + tps + '</span>';
                     if (ctxLabel) html += '<span class="ep-tps">' + ctxLabel + '</span>';
+                    if (quantLabel) html += '<span class="ep-tps">' + quantLabel + '</span>';
                     html += '</span>';
                 });
                 html += '</div>';

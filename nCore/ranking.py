@@ -89,6 +89,7 @@ def collect_ready_endpoints():
                 "device": ep.get("device", "gpu0"),
                 "address": node.get("address", ""),
                 "peer_address": node.get("peer_address", ""),
+                "conn_mode": node.get("conn_mode", "pull"),
             })
     return endpoints
 

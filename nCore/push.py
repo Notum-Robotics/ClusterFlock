@@ -57,6 +57,11 @@ def _poll(node_id, address, token):
             downloaded=data.get("downloaded"),
             agent_type=data.get("agent_type"),
             cpu_ram_enabled=data.get("cpu_ram_enabled"),
+            auto_unload=data.get("auto_unload"),
+            spec_decode=data.get("spec_decode"),
+            spec_candidates=data.get("spec_candidates"),
+            aggressive_vram=data.get("aggressive_vram"),
+            ram_offload=data.get("ram_offload"),
         )
         # Track autoload progress from endpoints
         orch_mod.autoload_check_heartbeat(node_id, data.get("endpoints"))

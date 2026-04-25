@@ -368,6 +368,19 @@
 .endpoint-tag.sleeping { border-color: rgba(160,120,255, 0.20); color: #a078ff; opacity: .7; }
 .endpoint-tag.error  { border-color: rgba(255,51,51, 0.20); color: var(--danger); }
 
+.ep-nvfp4 {
+    font-family: var(--font-data);
+    font-size: .42rem;
+    font-weight: 700;
+    letter-spacing: .08em;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: rgba(57,255,20, 0.15);
+    border: 1px solid rgba(57,255,20, 0.45);
+    color: #39ff14;
+    flex-shrink: 0;
+}
+
 .endpoint-tag .ep-tps {
     color: var(--text-dim);
     font-size: .45rem;

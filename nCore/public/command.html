@@ -223,6 +223,15 @@
                 <span class="status-label">AUTO UNLOAD</span>
                 <button class="cf-btn" id="no-btn-autounload" data-flash data-lockout="800" style="font-size:.55rem;padding:2px 8px;">ENABLE</button>
             </div>
+            <div class="status-row">
+                <span class="status-label" title="Fill up to 99% of VRAM with context (reduced safeguards)">AGGRESSIVE VRAM</span>
+                <button class="cf-btn" id="no-btn-aggressivevram" data-flash data-lockout="800" style="font-size:.55rem;padding:2px 8px;">ENABLE</button>
+            </div>
+            <div class="status-row">
+                <span class="status-label" title="Load maximum native context; KV cache spills to system RAM if needed">RAM OFFLOAD</span>
+                <button class="cf-btn" id="no-btn-ramoffload" data-flash data-lockout="800" style="font-size:.55rem;padding:2px 8px;">ENABLE</button>
+            </div>
+
         </div>
 
         <div class="btn-row" style="margin-top:8px;">
@@ -428,6 +437,7 @@
                         html += escHtml(ep.model || '?');
                         if (tps) html += ' <span class="ep-tps">' + tps + '</span>';
                         if (ctxLabel) html += ' <span class="ep-tps">' + ctxLabel + '</span>';
+
                         html += '</span>';
                     }
                 });
@@ -683,11 +693,11 @@
         // Show/hide load section based on whether there are downloads
         document.getElementById('no-load-section').style.display = nodeDownloads.length ? '' : 'none';
 
-        // Configure section — visible for all non-local agents
+        // Configure section — visible for all agents
         var cfgSection = document.getElementById('no-configure');
+        cfgSection.style.display = '';
         var isLocal = node.conn_mode === 'local';
-        if (!isLocal) {
-            cfgSection.style.display = '';
+        {
             // CPU/RAM — only for linux agents
             var cpuRow = document.getElementById('no-cfg-cpuram');
             if (node.agent_type === 'linux') {
@@ -700,8 +710,13 @@
             // Auto unload
             var auBtn = document.getElementById('no-btn-autounload');
             auBtn.textContent = node.auto_unload ? 'DISABLE' : 'ENABLE';
-        } else {
-            cfgSection.style.display = 'none';
+            // Aggressive VRAM
+            var avBtn = document.getElementById('no-btn-aggressivevram');
+            avBtn.textContent = node.aggressive_vram ? 'DISABLE' : 'ENABLE';
+            // RAM offload
+            var roBtn = document.getElementById('no-btn-ramoffload');
+            roBtn.textContent = node.ram_offload ? 'DISABLE' : 'ENABLE';
+
         }
 
         document.getElementById('node-overlay').classList.add('open');
@@ -1197,28 +1212,38 @@
         var gpuVal = document.getElementById('hf-gpu').value;
         if (!url || !agent) { toast('Enter URL and select agent', 'warn'); return; }
 
-        // Parse HF URL → org/model
-        var match = url.match(/huggingface\.co\/([^\/]+\/[^\/\?\#]+)/);
-        if (!match) {
-            // Try plain org/model format (e.g. "FieldMouse-AI/Qwen3.5-Sovereign-Titan-9B-GGUF")
-            match = url.match(/^([^\/\s]+\/[^\/\s]+)$/);
-        }
-        if (!match) {
-            toast('Invalid URL — use huggingface.co/org/model or org/model format', 'error', 5000);
-            document.getElementById('hf-status').textContent = '[ INVALID URL — need org/model ]';
-            document.getElementById('hf-status').className = 'status-val danger';
-            return;
-        }
-        var modelPath = match[1];
-        // Strip trailing whitespace/parens from pasted URLs
-        modelPath = modelPath.replace(/[\s\(\)]+$/, '');
-        var modelId = modelPath + '/' + quant.toLowerCase();
-
-        var body = { model_id: modelId };
+        var modelId, body = {};
         if (gpuVal !== '') body.gpu_idx = parseInt(gpuVal, 10);
 
-        document.getElementById('hf-status').textContent = '[ IMPORTING... ]';
-        document.getElementById('hf-status').className = 'status-val';
+        // Detect direct blob URL: huggingface.co/org/model/blob/main/filename.gguf
+        var blobMatch = url.match(/huggingface\.co\/([^\/]+\/[^\/]+)\/(?:blob|resolve)\/[^\/]+\/([^?#]+\.gguf)/i);
+        if (blobMatch) {
+            var modelPath = blobMatch[1].replace(/[\s()]+$/, '');
+            var filename = blobMatch[2];
+            // Use org/model as model_id (no quant suffix — exact file)
+            modelId = modelPath;
+            body.model_id = modelId;
+            body.filename = filename;
+            document.getElementById('hf-status').textContent = '[ EXACT FILE: ' + filename + ' ]';
+            document.getElementById('hf-status').className = 'status-val';
+        } else {
+            // Parse HF URL → org/model
+            var match = url.match(/huggingface\.co\/([^\/]+\/[^\/\?\#]+)/);
+            if (!match) {
+                // Try plain org/model format (e.g. "FieldMouse-AI/Qwen3.5-Sovereign-Titan-9B-GGUF")
+                match = url.match(/^([^\/\s]+\/[^\/\s]+)$/);
+            }
+            if (!match) {
+                toast('Invalid URL — use huggingface.co/org/model or org/model format', 'error', 5000);
+                document.getElementById('hf-status').textContent = '[ INVALID URL — need org/model ]';
+                document.getElementById('hf-status').className = 'status-val danger';
+                return;
+            }
+            var modelPath = match[1].replace(/[\s()]+$/, '');
+            modelId = modelPath + '/' + quant.toLowerCase();
+            body.model_id = modelId;
+            document.getElementById('hf-status').textContent = '[ IMPORTING... ]';
+        }
         document.getElementById('hf-progress').style.display = 'none';
 
         fetch(BASE + '/api/v1/nodes/' + encodeURIComponent(agent) + '/download_and_load', {
@@ -1401,6 +1426,50 @@
             if (res.ok) {
                 toast('AUTO UNLOAD ' + (!current ? 'ENABLED' : 'DISABLED'), 'ok');
                 document.getElementById('no-btn-autounload').textContent = !current ? 'DISABLE' : 'ENABLE';
+            } else {
+                toast('CONFIGURE FAILED: ' + (res.data.error || 'unknown'), 'error');
+            }
+        })
+        .catch(function() { toast('CONFIGURE FAILED', 'error'); });
+    });
+
+    // ── Configure Aggressive VRAM ──
+    document.getElementById('no-btn-aggressivevram').addEventListener('click', function() {
+        if (!selectedNodeId) return;
+        var node = nodesCache.find(function(n) { return n.node_id === selectedNodeId; });
+        var current = node ? !!node.aggressive_vram : false;
+        fetch(BASE + '/api/v1/nodes/' + encodeURIComponent(selectedNodeId) + '/configure', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ aggressive_vram: !current })
+        })
+        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+        .then(function(res) {
+            if (res.ok) {
+                toast('AGGRESSIVE VRAM ' + (!current ? 'ENABLED' : 'DISABLED'), 'ok');
+                document.getElementById('no-btn-aggressivevram').textContent = !current ? 'DISABLE' : 'ENABLE';
+            } else {
+                toast('CONFIGURE FAILED: ' + (res.data.error || 'unknown'), 'error');
+            }
+        })
+        .catch(function() { toast('CONFIGURE FAILED', 'error'); });
+    });
+
+    // ── Configure RAM Offload ──
+    document.getElementById('no-btn-ramoffload').addEventListener('click', function() {
+        if (!selectedNodeId) return;
+        var node = nodesCache.find(function(n) { return n.node_id === selectedNodeId; });
+        var current = node ? !!node.ram_offload : false;
+        fetch(BASE + '/api/v1/nodes/' + encodeURIComponent(selectedNodeId) + '/configure', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ ram_offload: !current })
+        })
+        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+        .then(function(res) {
+            if (res.ok) {
+                toast('RAM OFFLOAD ' + (!current ? 'ENABLED' : 'DISABLED'), 'ok');
+                document.getElementById('no-btn-ramoffload').textContent = !current ? 'DISABLE' : 'ENABLE';
             } else {
                 toast('CONFIGURE FAILED: ' + (res.data.error || 'unknown'), 'error');
             }

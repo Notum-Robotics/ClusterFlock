@@ -35,12 +35,14 @@ models/
 .vscode/
 .idea/
 .ncore*.lock
+agent_fleet.md
 
 # Internal dev scripts
 _ABOUT.md
 _submit_mission.py
 _monitor_mission.py
 _spark_monitor.sh
+_deploy*.sh
 
 # Internal tests
 tests/

@@ -29,6 +29,12 @@ except ImportError:
 
 AGENT_DIR = Path(__file__).parent
 MODELS_DIR = AGENT_DIR / "models"
+
+# Back-compat: older runtime code imports this symbol to detect TensorRT NVFP4
+# engine directories. In the GGUF-only path this remains empty.
+def local_nvfp4_engines():
+    return []
+
 HF_API = "https://huggingface.co/api/models"
 CATALOG_CACHE = AGENT_DIR / "catalog_cache.json"
 CATALOG_TTL = 3600  # 1 hour
@@ -58,9 +64,9 @@ _BUILTIN = [
     ("deepseek-ai/DeepSeek-R1-Distill-Qwen-32B-GGUF", "q4_k_m", "DeepSeek R1 32B", 19.9, 32, 131072),
     ("deepseek-ai/DeepSeek-R1-Distill-Qwen-14B-GGUF", "q4_k_m", "DeepSeek R1 14B",  8.5, 14, 131072),
     # Gemma 3
-    ("google/gemma-3-27b-it-GGUF",    "q4_k_m",  "Gemma 3 27B",          17.2,   27, 131072),
-    ("google/gemma-3-12b-it-GGUF",    "q4_k_m",  "Gemma 3 12B",           7.3,   12, 131072),
-    ("google/gemma-3-4b-it-GGUF",     "q4_k_m",  "Gemma 3 4B",            3.0,    4, 131072),
+    ("ggml-org/gemma-3-27b-it-GGUF",  "q4_k_m",  "Gemma 3 27B",          17.2,   27, 131072),
+    ("ggml-org/gemma-3-12b-it-GGUF",  "q4_k_m",  "Gemma 3 12B",           7.3,   12, 131072),
+    ("ggml-org/gemma-3-4b-it-GGUF",   "q4_k_m",  "Gemma 3 4B",            3.0,    4, 131072),
     # Llama 3.3
     ("meta-llama/Llama-3.3-70B-Instruct-GGUF", "q4_k_m", "Llama 3.3 70B", 42.5,  70, 131072),
     # Mistral
@@ -126,51 +132,56 @@ def download_progress():
 
 # ── Model Discovery ─────────────────────────────────────────────────────────
 
-_SHARD_RE = re.compile(r'(\d{5})-of-(\d{5})')
-
-
-def _is_model_gguf(path):
-    """Return True if this GGUF file is a loadable model (not mmproj, not a non-first shard)."""
-    name = path.name
-    if name.startswith("mmproj-"):
-        return False
-    m = _SHARD_RE.search(name)
-    if m and m.group(1) != '00001':
-        return False
-    return True
-
-
 def local_models():
-    """List GGUF models already downloaded in models/ directory.
-
-    Excludes mmproj (vision projector) files and non-first shards so that
-    only actually loadable model files appear in the UI and resolution."""
+    """List GGUF models already downloaded in models/ directory."""
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     models = []
+    shard_groups = {}
+    shard_re = re.compile(r"^(?P<base>.+\.gguf)-(?P<idx>\d{5})-of-(?P<tot>\d{5})\.gguf$")
+
     for f in sorted(MODELS_DIR.rglob("*.gguf")):
-        if not _is_model_gguf(f):
-            continue
-        # For first-shard files, report total size across all shards
-        m = _SHARD_RE.search(f.name)
-        if m:
-            total_shards = int(m.group(2))
-            base = f.name[:m.start()]
-            shard_files = [s for s in f.parent.glob(f"{base}*") if _SHARD_RE.search(s.name)]
-            if len(shard_files) < total_shards:
-                continue  # incomplete sharded download — skip
-            size_gb = round(sum(s.stat().st_size for s in shard_files) / (1024**3), 1)
-        else:
-            size_gb = round(f.stat().st_size / (1024**3), 1)
         rel = f.relative_to(MODELS_DIR)
         model_id = str(rel).replace(os.sep, "/")
-        name = f.stem.replace("-", " ").replace("_", " ").title()
+        m = shard_re.match(model_id)
+
+        if not m:
+            size_gb = round(f.stat().st_size / (1024**3), 1)
+            name = f.stem.replace("-", " ").replace("_", " ").title()
+            models.append({
+                "id": model_id,
+                "name": name,
+                "path": str(f),
+                "size_gb": size_gb,
+                "downloaded": True,
+            })
+            continue
+
+        base_id = m.group("base")
+        group = shard_groups.setdefault(base_id, {
+            "id": base_id,
+            "path": None,
+            "size_bytes": 0,
+            "first_idx": None,
+        })
+
+        group["size_bytes"] += f.stat().st_size
+        idx = int(m.group("idx"))
+        if group["first_idx"] is None or idx < group["first_idx"]:
+            group["first_idx"] = idx
+            group["path"] = str(f)
+
+    for gid, g in sorted(shard_groups.items()):
+        base_name = Path(gid).name[:-5]  # strip trailing ".gguf"
+        name = base_name.replace("-", " ").replace("_", " ").title()
         models.append({
-            "id": model_id,
+            "id": gid,
             "name": name,
-            "path": str(f),
-            "size_gb": size_gb,
+            "path": g["path"],
+            "size_gb": round(g["size_bytes"] / (1024**3), 1),
             "downloaded": True,
         })
+
+    models.sort(key=lambda x: x["id"])
     return models
 
 
@@ -178,8 +189,7 @@ def _search_hf_gguf(query="GGUF", limit=50):
     """Search HuggingFace for GGUF model repos."""
     try:
         params = f"?search={query}&filter=gguf&sort=downloads&direction=-1&limit={limit}"
-        req = urllib.request.Request(f"{HF_API}{params}")
-        req.add_header("User-Agent", "ClusterFlock/0.1")
+        req = _hf_request(f"{HF_API}{params}")
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read())
     except Exception as e:
@@ -187,12 +197,20 @@ def _search_hf_gguf(query="GGUF", limit=50):
         return []
 
 
+def _hf_request(url):
+    req = urllib.request.Request(url)
+    req.add_header("User-Agent", "ClusterFlock/0.1")
+    hf_token = os.environ.get("HF_TOKEN")
+    if hf_token:
+        req.add_header("Authorization", f"Bearer {hf_token}")
+    return req
+
+
 def _hf_repo_files(repo_id):
     """List files in a HuggingFace repo, filtering for GGUF."""
     try:
         url = f"https://huggingface.co/api/models/{repo_id}"
-        req = urllib.request.Request(url)
-        req.add_header("User-Agent", "ClusterFlock/0.1")
+        req = _hf_request(url)
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read())
             siblings = data.get("siblings", [])
@@ -441,8 +459,7 @@ def _resolve_gguf_repo(hf_repo):
     # Search HuggingFace — prefer trusted orgs
     try:
         search_url = f"https://huggingface.co/api/models?search={urllib.parse.quote(model_name + ' GGUF')}&limit=20"
-        req = urllib.request.Request(search_url)
-        req.add_header("User-Agent", "ClusterFlock/0.1")
+        req = _hf_request(search_url)
         with urllib.request.urlopen(req, timeout=10) as resp:
             results = json.loads(resp.read())
         candidates = []
@@ -470,42 +487,73 @@ def _resolve_gguf_repo(hf_repo):
     return hf_repo
 
 
+def _pick_mmproj_file(files):
+    candidates = [f for f in files if f.lower().endswith(".gguf") and "mmproj" in f.lower()]
+    if not candidates:
+        return None
+
+    def rank(path):
+        name = Path(path).name.lower()
+        if "f16" in name:
+            return (0, len(path), name)
+        if "bf16" in name:
+            return (1, len(path), name)
+        if "f32" in name:
+            return (2, len(path), name)
+        return (3, len(path), name)
+
+    return sorted(candidates, key=rank)[0]
+
+
 def _download_mmproj(hf_repo, dest_dir):
-    """Download mmproj GGUF for vision models if available in the repo.
-    Handles repos with non-standard mmproj names (e.g. mmproj-ModelName.gguf).
-    Prefers F16 > BF16 > F32 > any other mmproj file."""
-    # Already have one locally? Check both root and subdirectories.
-    existing = list(Path(dest_dir).rglob("mmproj-*.gguf"))
-    if existing:
-        return
-    if not _HAS_HF_HUB:
-        return
+    """Download a multimodal projector GGUF if the repo provides one."""
     try:
-        from huggingface_hub import list_repo_files, hf_hub_download
-        files = list_repo_files(hf_repo)
-        mmproj_files = [f for f in files if f.startswith("mmproj-") and f.endswith(".gguf")]
-        if not mmproj_files:
-            return  # repo has no mmproj — not a vision model
-        # Pick best: F16 > BF16 > F32 > first available
-        chosen = mmproj_files[0]
-        for pref in ("F16", "BF16", "F32"):
-            for f in mmproj_files:
-                if pref in f:
-                    chosen = f
-                    break
-            else:
-                continue
-            break
-        log.info(f"[download] Fetching vision projector '{chosen}'...")
+        mmproj_name = None
         hf_token = os.environ.get("HF_TOKEN")
-        hf_hub_download(
-            repo_id=hf_repo,
-            filename=chosen,
-            local_dir=str(dest_dir),
-            local_dir_use_symlinks=False,
-            token=hf_token,
-        )
-        log.info(f"[download] ✓ Vision projector: {dest_dir / chosen}")
+
+        if _HAS_HF_HUB:
+            from huggingface_hub import list_repo_files, hf_hub_download
+
+            files = list_repo_files(hf_repo, token=hf_token)
+            mmproj_name = _pick_mmproj_file(files)
+            if not mmproj_name:
+                return
+
+            dest_path = dest_dir / mmproj_name
+            if dest_path.exists():
+                return
+
+            log.info(f"[download] Fetching vision projector '{mmproj_name}'...")
+            hf_hub_download(
+                repo_id=hf_repo,
+                filename=mmproj_name,
+                local_dir=str(dest_dir),
+                local_dir_use_symlinks=False,
+                token=hf_token,
+            )
+            log.info(f"[download] ✓ Vision projector: {dest_path}")
+            return
+
+        files = _hf_repo_files(hf_repo)
+        mmproj_name = _pick_mmproj_file(files)
+        if not mmproj_name:
+            return
+
+        dest_path = dest_dir / mmproj_name
+        if dest_path.exists():
+            return
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+        url = f"https://huggingface.co/{hf_repo}/resolve/main/{mmproj_name}"
+        curl_cmd = ["curl", "-L", "-o", str(dest_path), url]
+        if hf_token:
+            curl_cmd[1:1] = ["-H", f"Authorization: Bearer {hf_token}"]
+
+        log.info(f"[download] Fetching vision projector '{mmproj_name}'...")
+        r = subprocess.run(curl_cmd, timeout=1800)
+        if r.returncode != 0:
+            raise RuntimeError(f"Download failed for {url}")
+        log.info(f"[download] ✓ Vision projector: {dest_path}")
     except Exception as e:
         log.warning(f"[download] ⚠ mmproj download failed (non-fatal): {e}")
 
@@ -531,34 +579,41 @@ def download_model(hf_repo, quant="q4_k_m", filename=None):
         if dest_path.exists():
             log.info(f"[download] Already exists: {dest_path}")
             return str(dest_path)
+        # Download exact file — skip quant pattern logic below
+        _download_state.update(active=True, model=hf_repo.split("/")[-1],
+                               expected_bytes=0, dest_dir=str(dest_dir))
+        try:
+            if _HAS_HF_HUB:
+                return _download_via_hub(hf_repo, quant, filename, dest_dir)
+            else:
+                log.info("[download] huggingface_hub not installed — using curl fallback")
+                return _download_via_curl(hf_repo, quant, filename, dest_dir)
+        finally:
+            _download_state.update(active=False, model="", expected_bytes=0, dest_dir="")
+
+    if not quant:
+        quant = "q4_k_m"
 
     pattern = _gguf_pattern(quant)
     existing = list(set(dest_dir.glob(pattern)) | set(dest_dir.rglob(pattern)))
     if not existing:
         existing = list(dest_dir.rglob("*.gguf"))
-    # Filter out mmproj and non-first shards
-    existing = [f for f in existing if _is_model_gguf(f)]
     if existing:
         existing.sort(key=lambda f: f.name)
         for f in existing:
             if quant.lower() in f.name.lower() and "00001-of-" in f.name:
-                # Verify all shards are present
-                m = _SHARD_RE.search(f.name)
-                if m:
-                    total = int(m.group(2))
-                    base = f.name[:m.start()]
-                    present = len([s for s in f.parent.glob(f"{base}*") if _SHARD_RE.search(s.name)])
-                    if present < total:
-                        log.info(f"[download] Incomplete sharded download ({present}/{total} shards) — re-downloading")
-                        continue
                 log.info(f"[download] Already exists: {f}")
                 return str(f)
         for f in existing:
-            if quant.lower() in f.name.lower() and "00001-of-" not in f.name and "-of-" not in f.name:
+            if quant.lower() in f.name.lower():
                 log.info(f"[download] Already exists: {f}")
                 return str(f)
-        # No exact quant match — proceed to download the requested quant
-        log.info(f"[download] Have {len(existing)} GGUF file(s) but none match '{quant}' — downloading")
+        for f in existing:
+            if "00001-of-" in f.name:
+                log.info(f"[download] Already exists: {f}")
+                return str(f)
+        log.info(f"[download] Already exists: {existing[0]}")
+        return str(existing[0])
 
     # Estimate expected size for progress tracking
     expected = 0
@@ -631,15 +686,12 @@ def _download_via_hub(hf_repo, quant, filename, dest_dir):
         else:
             raise RuntimeError(f"Download failed for {hf_repo}/{filename}: {e}")
 
-    # Filter out mmproj files — those are handled separately
-    gguf_files = sorted(
-        (f for f in dest_dir.rglob("*.gguf") if _is_model_gguf(f)),
-        key=lambda f: f.name,
-    )
+    gguf_files = sorted(dest_dir.rglob("*.gguf"), key=lambda f: f.name)
     if not gguf_files:
-        raise RuntimeError(f"No model GGUF files found after download in {dest_dir}")
+        raise RuntimeError(f"No GGUF files found after download in {dest_dir}")
 
-    sharded = [(f, _SHARD_RE.search(f.name)) for f in gguf_files]
+    shard_pattern = re.compile(r'(\d{5})-of-(\d{5})')
+    sharded = [(f, shard_pattern.search(f.name)) for f in gguf_files]
     first_shards = [(f, m) for f, m in sharded if m and m.group(1) == '00001']
     if first_shards:
         for f, m in first_shards:
@@ -648,16 +700,12 @@ def _download_via_hub(hf_repo, quant, filename, dest_dir):
                 break
         else:
             result = first_shards[0][0]
-        # Count all shards (including non-first) for size reporting
-        all_shards = list(dest_dir.rglob("*.gguf"))
-        total_size = sum(ff.stat().st_size for ff in all_shards
-                         if not ff.name.startswith("mmproj-") and
-                         quant.lower().replace("_", "") in ff.name.lower().replace("_", "").replace("-", ""))
+        total_size = sum(ff.stat().st_size for ff in gguf_files
+                         if quant.lower().replace("_", "") in ff.name.lower().replace("_", "").replace("-", ""))
         if not total_size:
-            total_size = sum(ff.stat().st_size for ff in all_shards if not ff.name.startswith("mmproj-"))
-        shard_count = sum(1 for ff in all_shards if _SHARD_RE.search(ff.name) and not ff.name.startswith("mmproj-"))
+            total_size = sum(ff.stat().st_size for ff in gguf_files)
         size_gb = round(total_size / (1024**3), 1)
-        log.info(f"[download] ✓ {result.name} ({size_gb} GB across {shard_count} shards)")
+        log.info(f"[download] ✓ {result.name} ({size_gb} GB across {len(gguf_files)} shards)")
         return str(result)
 
     for f in gguf_files:

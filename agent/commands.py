@@ -15,8 +15,8 @@ import json
 import logging
 import os
 import re
+import threading
 import time
-import urllib.request
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -30,6 +30,7 @@ from models_hf import (local_models, download_model,
                         download_progress)
 
 _MODEL_RE = re.compile(r'^[\w./@:\-]+$')
+_SHARDED_GGUF_RE = re.compile(r'^(?P<base>.+\.gguf)-\d{5}-of-\d{5}\.gguf$')
 _CONFIG = Path(__file__).parent / "cluster.json"
 
 # Loaded models per device: device_id → {"model_id", "model_path", "port"}
@@ -41,11 +42,35 @@ _activity = {"state": "idle", "model": None, "detail": None, "started_at": None}
 # CPU/RAM inference — controlled from nCore UI, persisted in cluster.json
 _cpu_ram_enabled = False
 
+# Aggressive VRAM — reduces safeguards, fills up to ~99% VRAM with context
+_aggressive_vram_enabled = False
+
+# RAM offload — ignores VRAM budget, loads max native context, KV spills to RAM
+_ram_offload_enabled = False
+
+# Speculative decoding — draft model path per device, persisted in cluster.json
+_spec_decode = {}  # device → draft_model_path
+
 # Auto-unload: unload models after idle timeout, keep primed
 _auto_unload_enabled = False
 _AUTO_UNLOAD_SEC = 15 * 60  # 15 minutes
 _last_command_time = 0.0     # updated on every execute()
 _primed = {}                 # device → {model_id, model_path}
+
+# Per-device lock — prevents recovery loop from racing with job threads.
+# Job threads acquire before load/download_and_load.
+# check_crashed_servers() does a non-blocking acquire; if the device is
+# already locked (job in progress), recovery is skipped for that cycle.
+_device_locks: dict = {}
+_device_locks_mutex = threading.Lock()
+
+
+def _get_device_lock(device_id: str) -> threading.Lock:
+    """Return (creating if needed) the per-device operation lock."""
+    with _device_locks_mutex:
+        if device_id not in _device_locks:
+            _device_locks[device_id] = threading.Lock()
+        return _device_locks[device_id]
 
 
 def get_activity():
@@ -120,7 +145,8 @@ def execute(cmd):
         mid = cmd.get("model_id", "")
         if not mid or not _MODEL_RE.match(mid):
             raise ValueError(f"invalid model_id: {mid!r}")
-        _unload(mid)
+        if not _unload(mid):
+            raise ValueError(f"model not loaded: {mid}")
 
     elif action == "load":
         mid = cmd.get("model_id", "")
@@ -129,8 +155,9 @@ def execute(cmd):
         device = _resolve_device(cmd)
         _set_activity("loading", mid)
         try:
-            _load_model(mid, device=device,
-                        context_length=cmd.get("context_length"))
+            with _get_device_lock(device):
+                _load_model(mid, device=device,
+                            context_length=cmd.get("context_length"))
         finally:
             _set_activity("idle")
         _auto_bench(mid, device)
@@ -142,8 +169,10 @@ def execute(cmd):
         device = _resolve_device(cmd)
         _set_activity("downloading", mid)
         try:
-            _download_and_load(mid, device=device,
-                               context_length=cmd.get("context_length"))
+            with _get_device_lock(device):
+                _download_and_load(mid, device=device,
+                                   context_length=cmd.get("context_length"),
+                                   filename=cmd.get("filename"))
         finally:
             _set_activity("idle")
         loaded_mid = _devices.get(device, {}).get("model_id", mid)
@@ -176,30 +205,6 @@ def execute(cmd):
             device, port = _wake_primed(cmd.get("model"))
         if not device:
             raise ValueError("no model loaded for prompt")
-
-        # Verify the server process is actually alive before sending prompt.
-        # If it crashed, attempt a single inline recovery so the prompt can
-        # still succeed without waiting for the next heartbeat cycle.
-        if not _is_server_alive(device):
-            model_id = _devices.get(device, {}).get("model_id", "")
-            model_path = _devices.get(device, {}).get("model_path")
-            log.info(f"[prompt-recovery] Server {device} dead "
-                     f"— attempting inline reload of {model_id}")
-            try:
-                stop_server(device)
-                _set_activity("loading", model_id)
-                _load_model(model_id, device=device, model_path=model_path)
-                log.info(f"[prompt-recovery] ✓ {model_id} reloaded on {device}")
-                _restart_cooldown[device] = time.time()
-            except Exception as e:
-                log.error(f"[prompt-recovery] ✗ Failed to reload {model_id}: {e}")
-                raise ValueError(
-                    f"no model loaded for prompt (server crashed, "
-                    f"reload failed: {e})")
-            finally:
-                _set_activity("idle")
-            port = _port_for_device(device)
-
         kwargs = {}
         if cmd.get("temperature") is not None:
             kwargs["temperature"] = float(cmd["temperature"])
@@ -215,7 +220,7 @@ def execute(cmd):
         try:
             return complete(messages, max_tokens=cmd.get("max_tokens", -1),
                             port=port,
-                            generation_timeout=cmd.get("generation_timeout", 300),
+                            generation_timeout=cmd.get("generation_timeout", 1800),
                             **kwargs)
         finally:
             _set_activity("idle")
@@ -290,6 +295,30 @@ def _find_model_device(model_hint=None):
     return None, None
 
 
+def _canonical_model_id(model_id):
+    """Collapse sharded GGUF IDs to their logical base ID.
+
+    Example:
+      foo.gguf-00001-of-00002.gguf -> foo.gguf
+    """
+    if not model_id:
+        return ""
+    mid = str(model_id).replace("\\", "/")
+    m = _SHARDED_GGUF_RE.match(mid)
+    return m.group("base") if m else mid
+
+
+def _model_id_matches(target_id, loaded_id):
+    """Return True when target and loaded IDs refer to the same model."""
+    if not target_id or not loaded_id:
+        return False
+    if target_id == loaded_id:
+        return True
+    if target_id in loaded_id or loaded_id in target_id:
+        return True
+    return _canonical_model_id(target_id) == _canonical_model_id(loaded_id)
+
+
 # ── Load / Unload ────────────────────────────────────────────────────────
 
 def _load_model(model_id, *, device="gpu0", context_length=None,
@@ -304,6 +333,20 @@ def _load_model(model_id, *, device="gpu0", context_length=None,
     kwargs = {"device": device}
     if context_length:
         kwargs["ctx_size"] = context_length
+
+    # Apply load-mode flags (aggressive VRAM / RAM offload) unless a
+    # specific context_length was requested (explicit overrides auto).
+    if not context_length:
+        if _aggressive_vram_enabled:
+            kwargs["aggressive_vram"] = True
+        if _ram_offload_enabled:
+            kwargs["ram_offload"] = True
+
+    # Apply speculative decoding if configured for this device
+    draft_path = _spec_decode.get(device)
+    if draft_path and os.path.isfile(draft_path):
+        kwargs["draft_model_path"] = draft_path
+
     log.info(f"[load] Loading {model_id} on {tag}...")
 
     start_server(model_path, **kwargs)
@@ -314,25 +357,116 @@ def _load_model(model_id, *, device="gpu0", context_length=None,
         "model_path": model_path,
         "port": port,
     }
+    _liveness_interval[device] = time.time()  # prevent immediate liveness fire
     log.info(f"[load] ✓ {model_id} ready on {tag}")
 
 
 def _unload(model_id):
     """Unload a specific model (finds its device automatically)."""
+    # After agent restarts, a model may already be running but _devices can be
+    # empty until we detect it from llama-server.
+    if not _devices:
+        _detect_running_model()
+
+    target_path = _resolve_model_path(model_id)
+
     for dev, info in list(_devices.items()):
-        if info.get("model_id") == model_id:
+        loaded_id = info.get("model_id", "")
+        loaded_path = info.get("model_path", "")
+
+        if _model_id_matches(model_id, loaded_id):
+            tag = "CPU/RAM" if dev == "cpu" else dev.upper()
+            log.info(f"[unload] Stopping {loaded_id} on {tag}...")
+            stop_server(dev)
+            del _devices[dev]
+            return True
+
+        if target_path and loaded_path:
+            try:
+                if Path(target_path).resolve() == Path(loaded_path).resolve():
+                    tag = "CPU/RAM" if dev == "cpu" else dev.upper()
+                    log.info(f"[unload] Stopping {loaded_id} on {tag}...")
+                    stop_server(dev)
+                    del _devices[dev]
+                    return True
+            except Exception:
+                pass
+
+        if target_path and loaded_path:
+            tname = Path(target_path).name
+            lname = Path(loaded_path).name
+            if _model_id_matches(tname, lname):
+                tag = "CPU/RAM" if dev == "cpu" else dev.upper()
+                log.info(f"[unload] Stopping {loaded_id} on {tag}...")
+                stop_server(dev)
+                del _devices[dev]
+                return True
+
+    # Fallback partial match for compatibility
+    for dev, info in list(_devices.items()):
+        if info.get("model_id") and model_id in info["model_id"]:
             tag = "CPU/RAM" if dev == "cpu" else dev.upper()
             log.info(f"[unload] Stopping {model_id} on {tag}...")
             stop_server(dev)
             del _devices[dev]
-            return
-    # Partial match
-    for dev, info in list(_devices.items()):
-        if info.get("model_id") and model_id in info["model_id"]:
+            return True
+
+    # Live-process fallback: if bookkeeping is stale after restart, ask the
+    # running llama-server instance what model it has loaded and match that.
+    target_canon = _canonical_model_id(model_id)
+    target_path = target_path or _resolve_model_path(model_id)
+    target_name = Path(target_path).name if target_path else ""
+
+    for dev in active_devices():
+        mids = loaded_models(device=dev)
+        live_id = (mids[0].get("id", "") if mids else "")
+        live_canon = _canonical_model_id(live_id)
+        if _model_id_matches(model_id, live_id) or (target_name and _model_id_matches(target_name, live_id)):
+            tag = "CPU/RAM" if dev == "cpu" else dev.upper()
+            log.info(f"[unload] Stopping {live_id or model_id} on {tag}...")
             stop_server(dev)
-            del _devices[dev]
-            return
+            _devices.pop(dev, None)
+            return True
+        # Single-model pragmatic fallback when IDs are unavailable but server is alive.
+        if not live_id and target_canon and len(active_devices()) == 1:
+            tag = "CPU/RAM" if dev == "cpu" else dev.upper()
+            log.info(f"[unload] Stopping running server on {tag} (target={model_id})")
+            stop_server(dev)
+            _devices.pop(dev, None)
+            return True
+
+    # Sleeping model fallback: unload should also clear auto-unloaded primed models.
+    for dev, pinfo in list(_primed.items()):
+        primed_id = pinfo.get("model_id", "")
+        primed_path = pinfo.get("model_path", "")
+
+        if _model_id_matches(model_id, primed_id):
+            tag = "CPU/RAM" if dev == "cpu" else dev.upper()
+            log.info(f"[unload] Removing sleeping model {primed_id} on {tag}...")
+            del _primed[dev]
+            return True
+
+        if target_path and primed_path:
+            try:
+                if Path(target_path).resolve() == Path(primed_path).resolve():
+                    tag = "CPU/RAM" if dev == "cpu" else dev.upper()
+                    log.info(f"[unload] Removing sleeping model {primed_id} on {tag}...")
+                    del _primed[dev]
+                    return True
+            except Exception:
+                pass
+
+        if target_path and primed_path:
+            tname = Path(target_path).name
+            pname = Path(primed_path).name
+            if _model_id_matches(tname, pname):
+                tag = "CPU/RAM" if dev == "cpu" else dev.upper()
+                log.info(f"[unload] Removing sleeping model {primed_id} on {tag}...")
+                del _primed[dev]
+                return True
+
     log.info(f"[unload] {model_id} not found on any device")
+    return False
 
 
 def _unload_all():
@@ -343,7 +477,8 @@ def _unload_all():
     _devices.clear()
 
 
-def _download_and_load(model_id, *, device="gpu0", context_length=None):
+def _download_and_load(model_id, *, device="gpu0", context_length=None,
+                       filename=None):
     """Download from HuggingFace and load onto a device."""
     parts = model_id.split("/")
     if len(parts) >= 2:
@@ -352,6 +487,14 @@ def _download_and_load(model_id, *, device="gpu0", context_length=None):
     else:
         hf_repo = model_id
         quant = "q4_k_m"
+
+    # Direct filename download (from HF blob URL) — skip quant selection
+    if filename:
+        path = download_model(hf_repo, quant=None, filename=filename)
+        _set_activity("loading", model_id)
+        _load_model(model_id, device=device, context_length=context_length,
+                    model_path=path)
+        return
 
     if quant == "auto":
         from hardware import snapshot
@@ -445,8 +588,11 @@ def _handle_configure(cmd):
     Supported:
       cpu_ram_enabled (bool) — enable CPU/RAM as inference device.
       auto_unload (bool) — auto-unload models after idle timeout.
+      aggressive_vram (bool) — fill up to ~99% VRAM with context (no safeguards).
+      ram_offload (bool) — load max native context; KV cache spills to system RAM.
     """
     global _cpu_ram_enabled, _auto_unload_enabled
+    global _aggressive_vram_enabled, _ram_offload_enabled
 
     if "cpu_ram_enabled" in cmd:
         new_val = bool(cmd["cpu_ram_enabled"])
@@ -483,60 +629,183 @@ def _handle_configure(cmd):
                     log.error(f"[configure]   Failed to wake {pinfo['model_id']}: {e}")
             _primed.clear()
 
+    if "aggressive_vram" in cmd:
+        new_val = bool(cmd["aggressive_vram"])
+        old_val = _aggressive_vram_enabled
+        _aggressive_vram_enabled = new_val
+        _save_config({"aggressive_vram": new_val})
+        if new_val and not old_val:
+            log.info("[configure] ✓ Aggressive VRAM ENABLED (99% fill, reduced safeguards)")
+        elif not new_val and old_val:
+            log.info("[configure] Aggressive VRAM DISABLED")
+
+    if "ram_offload" in cmd:
+        new_val = bool(cmd["ram_offload"])
+        old_val = _ram_offload_enabled
+        _ram_offload_enabled = new_val
+        _save_config({"ram_offload": new_val})
+        if new_val and not old_val:
+            log.info("[configure] ✓ RAM offload ENABLED (max context, KV spills to RAM)")
+        elif not new_val and old_val:
+            log.info("[configure] RAM offload DISABLED")
+
+    if "spec_decode" in cmd:
+        device = cmd.get("device", "gpu0")
+        draft_path = cmd["spec_decode"]  # path string or null/False to disable
+        if draft_path:
+            _spec_decode[device] = draft_path
+            # Persist per-device spec_decode map
+            cfg = _read_config()
+            sd = cfg.get("spec_decode", {})
+            sd[device] = draft_path
+            _save_config({"spec_decode": sd})
+            log.info(f"[configure] ✓ Spec-decode ENABLED on {device}: {Path(draft_path).name}")
+            # Reload the server immediately if a model is running on this device
+            info = _devices.get(device)
+            if info:
+                log.info(f"[configure]   Reloading {info['model_id']} with draft model")
+                _load_model(info["model_id"], device=device,
+                            model_path=info["model_path"])
+                _force_bench(info["model_id"], device)
+        else:
+            _spec_decode.pop(device, None)
+            cfg = _read_config()
+            sd = cfg.get("spec_decode", {})
+            sd.pop(device, None)
+            _save_config({"spec_decode": sd})
+            log.info(f"[configure] Spec-decode DISABLED on {device}")
+            # Reload without draft model
+            info = _devices.get(device)
+            if info:
+                log.info(f"[configure]   Reloading {info['model_id']} without draft model")
+                _load_model(info["model_id"], device=device,
+                            model_path=info["model_path"])
+                _force_bench(info["model_id"], device)
+
     settings = []
     if "cpu_ram_enabled" in cmd:
         settings.append(f"cpu_ram_enabled={_cpu_ram_enabled}")
     if "auto_unload" in cmd:
         settings.append(f"auto_unload={_auto_unload_enabled}")
+    if "aggressive_vram" in cmd:
+        settings.append(f"aggressive_vram={_aggressive_vram_enabled}")
+    if "ram_offload" in cmd:
+        settings.append(f"ram_offload={_ram_offload_enabled}")
     if settings:
         log.info(f"[configure] {', '.join(settings)}")
 
 
+def spec_decode_status():
+    """Return {device: draft_model_path} for all devices with spec-decode active."""
+    return dict(_spec_decode)
+
+
+def find_compatible_draft_models(model_path, device="gpu0"):
+    """Find downloaded models that could serve as a speculative draft for model_path.
+
+    Compatibility rules:
+      - Model family must match (same base architecture/name prefix).
+      - Draft must be strictly smaller than target.
+      - Draft + target must fit in available VRAM.
+
+    Returns list of {"id", "path", "size_gb"} dicts, smallest-first.
+    """
+    if not model_path:
+        return []
+
+    target_size_mb = os.path.getsize(model_path) / (1024 * 1024)
+
+    # Get free VRAM for the device
+    try:
+        from hardware import gpu as _hw_gpu, _mem_info
+        if device == "cpu":
+            _, vram_free_mb = _mem_info()
+        else:
+            gpus = _hw_gpu()
+            idx = int(device.replace("gpu", ""))
+            vram_free_mb = gpus[idx].get("vram_free_mb", 0) if idx < len(gpus) else 0
+    except Exception:
+        vram_free_mb = 0
+
+    # Infer model family from filename: take the first 2-3 meaningful tokens
+    target_stem = Path(model_path).stem.lower()
+    # Strip quant suffix patterns like -q4_k_m, -iq2_m, -q8_0, etc.
+    family_name = re.sub(r'[-_](q\d|iq\d|bf16|f16|f32|fp\d|int\d|gguf).*$', '', target_stem)
+    # Keep first 2 dash-separated segments as family key
+    parts = [p for p in re.split(r'[-_]', family_name) if p]
+    family_key = '-'.join(parts[:3]).lower() if parts else ''
+
+    candidates = []
+    for m in local_models():
+        candidate_path = m["path"]
+        if candidate_path == model_path:
+            continue
+        candidate_size_mb = os.path.getsize(candidate_path) / (1024 * 1024)
+        if candidate_size_mb >= target_size_mb * 0.5:
+            # Draft must be meaningfully smaller (less than 50% of target size)
+            continue
+        # Family match: candidate filename must share family_key prefix
+        cand_stem = Path(candidate_path).stem.lower()
+        cand_family = re.sub(r'[-_](q\d|iq\d|bf16|f16|f32|fp\d|int\d|gguf).*$', '', cand_stem)
+        cand_parts = [p for p in re.split(r'[-_]', cand_family) if p]
+        cand_key = '-'.join(cand_parts[:3]).lower() if cand_parts else ''
+        if not family_key or not cand_key:
+            continue
+        # At least first 2 tokens must match
+        fk_parts = family_key.split('-')[:2]
+        ck_parts = cand_key.split('-')[:2]
+        if fk_parts != ck_parts:
+            continue
+        # VRAM fit check — skip if spec decode is already active on this device
+        # (we're swapping the draft, not adding on top of a clean load)
+        already_active = bool(_spec_decode.get(device))
+        if not already_active and vram_free_mb > 0 and candidate_size_mb * 1.15 > vram_free_mb:
+            continue
+        candidates.append({"id": m["id"], "path": candidate_path,
+                           "size_gb": round(candidate_size_mb / 1024, 2)})
+
+    candidates.sort(key=lambda c: c["size_gb"])
+    return candidates
+
+
 def init_settings():
     """Load saved settings from cluster.json on startup."""
-    global _cpu_ram_enabled, _auto_unload_enabled, _last_command_time
+    global _cpu_ram_enabled, _auto_unload_enabled, _last_command_time, _spec_decode
+    global _aggressive_vram_enabled, _ram_offload_enabled
     cfg = _read_config()
     _cpu_ram_enabled = cfg.get("cpu_ram_enabled", False)
     _auto_unload_enabled = cfg.get("auto_unload", False)
+    _aggressive_vram_enabled = cfg.get("aggressive_vram", False)
+    _ram_offload_enabled = cfg.get("ram_offload", False)
+    _spec_decode = cfg.get("spec_decode", {})
     _last_command_time = time.time()  # reset on startup
     if _cpu_ram_enabled:
         log.info("[config] CPU/RAM device enabled (from saved config)")
     if _auto_unload_enabled:
         log.info("[config] Auto-unload enabled (15 min idle)")
-
-
-# ── Server liveness helper ───────────────────────────────────────────────
-
-def _is_server_alive(device):
-    """Check if the llama-server process for a device is still running."""
-    alive = active_devices()
-    return device in alive
-
-
-def _server_is_busy(port, host="127.0.0.1"):
-    """Check if the llama-server has an active inference request via /slots.
-
-    Returns True if any slot has is_processing=True, meaning the server
-    is legitimately busy (not stuck).  Returns False on any error so we
-    fall through to the liveness probe.
-    """
-    try:
-        url = f"http://{host}:{port}/slots"
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            slots = json.loads(resp.read())
-            return any(s.get("is_processing") for s in slots)
-    except Exception:
-        return False
+    if _aggressive_vram_enabled:
+        log.info("[config] Aggressive VRAM enabled (from saved config)")
+    if _ram_offload_enabled:
+        log.info("[config] RAM offload enabled (from saved config)")
+    for dev, dp in _spec_decode.items():
+        log.info(f"[config] Spec-decode enabled on {dev}: {Path(dp).name}")
 
 
 # ── Crashed-server auto-restart ──────────────────────────────────────────
 
 _restart_cooldown = {}  # device → last_attempt_time
-_restart_failures = {}  # device → consecutive failure count
 _liveness_interval = {}  # device → last_liveness_check_time
 _LIVENESS_CHECK_SEC = 120  # run inference liveness check every 2 min
-_MAX_RESTART_FAILURES = 5  # give up after this many consecutive failures
+
+
+def _touch_watchdog_health():
+    """Touch the watchdog health file to prevent watchdog kill during long ops."""
+    hf = os.environ.get("CLUSTERFLOCK_HEALTH_FILE")
+    if hf:
+        try:
+            Path(hf).touch()
+        except OSError:
+            pass
 
 def check_crashed_servers():
     """Detect and auto-restart servers that crashed or are stuck.
@@ -572,11 +841,6 @@ def check_crashed_servers():
             if now - last_check >= _LIVENESS_CHECK_SEC:
                 _liveness_interval[dev] = now
                 port = info.get("port") or _port_for_device(dev)
-                # Skip liveness probe if server is actively generating —
-                # the probe would queue behind the real request and time
-                # out, falsely triggering a restart.
-                if _server_is_busy(port):
-                    continue
                 if not inference_liveness_check(port, timeout=30):
                     need_restart = True
                     reason = "stuck (inference unresponsive)"
@@ -588,34 +852,31 @@ def check_crashed_servers():
         last = _restart_cooldown.get(dev, 0)
         if now - last < 30:
             continue
+
+        # Skip if a job thread is currently loading/downloading on this device
+        lock = _get_device_lock(dev)
+        if not lock.acquire(blocking=False):
+            log.debug(f"[recovery] {dev} busy (job in progress) — deferring restart")
+            continue
         _restart_cooldown[dev] = now
 
-        fail_count = _restart_failures.get(dev, 0)
-        if fail_count >= _MAX_RESTART_FAILURES:
-            log.error(f"[recovery] Server {dev} {reason} — giving up after "
-                      f"{fail_count} consecutive reload failures, removing {model_id}")
-            _devices.pop(dev, None)
-            _restart_failures.pop(dev, None)
-            continue
-
-        log.info(f"[recovery] Server {dev} {reason} — reloading {model_id} "
-                 f"(attempt {fail_count + 1}/{_MAX_RESTART_FAILURES})...")
+        log.info(f"[recovery] Server {dev} {reason} — reloading {model_id}...")
         try:
+            _touch_watchdog_health()  # prevent watchdog kill during reload
             # Force-kill the stuck process before reloading
             stop_server(dev)
             _set_activity("loading", model_id)
             _load_model(model_id, device=dev, model_path=model_path)
             log.info(f"[recovery] ✓ {model_id} reloaded on {dev}")
             _liveness_interval[dev] = time.time()  # reset liveness timer
-            _restart_failures.pop(dev, None)  # reset on success
             _auto_bench(model_id, dev)
         except Exception as e:
-            _restart_failures[dev] = fail_count + 1
-            log.error(f"[recovery] ✗ Failed to reload {model_id} "
-                      f"(failure {fail_count + 1}/{_MAX_RESTART_FAILURES}): {e}")
-            # Keep _devices entry so we retry on next heartbeat
+            log.error(f"[recovery] ✗ Failed to reload {model_id}: {e}")
+            # Remove stale entry so we don't keep retrying forever
+            _devices.pop(dev, None)
         finally:
             _set_activity("idle")
+            lock.release()
 
 
 # ── Auto-benchmark ───────────────────────────────────────────────────────
@@ -630,6 +891,22 @@ def _auto_bench(model_id, device):
         perf = benchmark(port=port)
         save_bench(model_id, perf, device=device)
         log.info(f"[benchmark] {perf['tokens_per_sec']} tok/s")
+    except Exception as e:
+        log.error(f"[benchmark] failed: {e}")
+    finally:
+        _set_activity("idle")
+
+
+def _force_bench(model_id, device):
+    """Benchmark unconditionally (e.g. after spec decode change)."""
+    if not model_id:
+        return
+    _set_activity("benchmarking", model_id)
+    try:
+        port = _port_for_device(device)
+        perf = benchmark(port=port)
+        save_bench(model_id, perf, device=device)
+        log.info(f"[benchmark] {perf['tokens_per_sec']} tok/s (post spec-decode)")
     except Exception as e:
         log.error(f"[benchmark] failed: {e}")
     finally:
@@ -677,6 +954,16 @@ def _resolve_model_path(model_id):
 def auto_unload_enabled():
     """Whether auto-unload is currently enabled."""
     return _auto_unload_enabled
+
+
+def aggressive_vram_enabled():
+    """Whether aggressive VRAM mode is currently enabled."""
+    return _aggressive_vram_enabled
+
+
+def ram_offload_enabled():
+    """Whether RAM offload mode is currently enabled."""
+    return _ram_offload_enabled
 
 
 def primed_models():

@@ -263,6 +263,26 @@
             line-height: 1.6;
         }
         .orch-trace.open .orch-body { display: block; }
+
+        /* Streaming cursor on in-progress assistant bubble */
+        .chat-msg.assistant.streaming .msg-body::after {
+            content: '▋';
+            display: inline-block;
+            animation: blink 0.7s step-start infinite;
+            color: var(--accent);
+            margin-left: 1px;
+        }
+        @keyframes blink { 50% { opacity: 0; } }
+
+        /* Thinking status line — shows dots and Rn markers during fanout */
+        .cf-thinking-status {
+            font-family: var(--font-data);
+            font-size: .55rem;
+            letter-spacing: .06em;
+            color: var(--text-dim);
+            padding: 2px 0 4px 0;
+            word-break: break-all;
+        }
         .orch-phase {
             padding: 3px 0;
             display: flex;
@@ -1052,108 +1072,104 @@
 
         // Orchestration trace for assistant messages
         if (role === 'assistant' && meta) {
-            var trace = document.createElement('div');
-            trace.className = 'orch-trace';
-
-            // Parse event_log into phases if available
-            var log = meta.event_log || [];
-            var dispatched = [], responses = [], evaluated = [], other = [];
-            var t0 = log.length > 0 ? log[0].t : 0;
-            for (var li = 0; li < log.length; li++) {
-                var ev = log[li];
-                var msg = ev.msg || '';
-                if (msg.indexOf('dispatched to ') === 0 || msg.indexOf('re-use round') === 0) {
-                    var parts = msg.replace(/^(re-use round \d+: )?dispatched to /, '').split(' on ');
-                    dispatched.push({ model: parts[0] || '?', host: parts[1] || '?', reuse: msg.indexOf('re-use') >= 0 });
-                } else if (msg.indexOf('response from ') === 0) {
-                    var rm = msg.match(/response from (.+?) on (.+?) \((\d+) chars\)/);
-                    if (rm) responses.push({ model: rm[1], host: rm[2], chars: parseInt(rm[3]), t: ev.t - t0 });
-                } else if (msg.indexOf('showrunner evaluated') === 0) {
-                    evaluated.push(msg.replace('showrunner evaluated response from ', ''));
-                } else {
-                    other.push(msg);
-                }
-            }
-            var elapsed = log.length > 1 ? (log[log.length - 1].t - t0).toFixed(1) : '?';
-            var respondedMap = {};
-            for (var ri = 0; ri < responses.length; ri++) respondedMap[responses[ri].model + '@' + responses[ri].host] = responses[ri];
-
-            // Toggle header
-            var reuseRounds = meta.reuse_rounds || 1;
-            var hasLog = log.length > 0;
-            var toggleLabel = hasLog
-                ? (dispatched.length + ' dispatched \u00b7 ' + responses.length + ' responded' + (reuseRounds > 1 ? ' \u00b7 ' + reuseRounds + ' rounds' : '') + ' \u00b7 ' + elapsed + 's')
-                : ((meta.endpoints_queried || '?') + ' queried \u00b7 ' + (meta.endpoints_responded || '?') + ' responded');
-
-            var traceHtml = '<div class="orch-toggle" data-flash data-nbeep="select">';
-            traceHtml += '<span>ORCHESTRATION</span><span>' + toggleLabel + '</span></div>';
-            traceHtml += '<div class="orch-body">';
-
-            if (hasLog) {
-                // Phase 1: Fan-out
-                traceHtml += '<div class="orch-phase"><div style="font-size:.45rem;letter-spacing:.1em;color:var(--accent);margin-bottom:3px;"><i class="ph ph-broadcast"></i> FAN-OUT' + (reuseRounds > 1 ? ' (' + reuseRounds + ' rounds)' : '') + '</div>';
-                for (var di = 0; di < dispatched.length; di++) {
-                    var ep = dispatched[di];
-                    var key = ep.model + '@' + ep.host;
-                    var resp = respondedMap[key];
-                    var dotCls = resp ? 'accent' : 'amber';
-                    var charInfo = resp ? resp.chars + ' chars @ ' + resp.t.toFixed(1) + 's' : 'no response';
-                    var reuseTag = ep.reuse ? ' <span style="color:var(--amber);font-size:.42rem;">RE-USE</span>' : '';
-                    traceHtml += '<div style="display:flex;align-items:center;gap:6px;padding:1px 0;font-size:.5rem;color:var(--text-dim);">';
-                    traceHtml += '<span style="width:5px;height:5px;border-radius:50%;background:var(--' + dotCls + ');flex-shrink:0;"></span>';
-                    traceHtml += '<span style="color:var(--text);">' + escHtml(ep.model) + '</span>';
-                    traceHtml += '<span>@ ' + escHtml(ep.host) + '</span>' + reuseTag;
-                    traceHtml += '<span style="color:rgba(0,229,255,0.6);margin-left:auto;white-space:nowrap;">' + charInfo + '</span>';
-                    traceHtml += '</div>';
-                }
-                traceHtml += '</div>';
-
-                // Phase 2: Evaluation
-                traceHtml += '<div class="orch-phase" style="margin-top:6px;"><div style="font-size:.45rem;letter-spacing:.1em;color:var(--accent);margin-bottom:3px;"><i class="ph ph-magnifying-glass"></i> EVALUATION</div>';
-                if (evaluated.length > 0) {
-                    for (var ei = 0; ei < evaluated.length; ei++) {
-                        traceHtml += '<div style="font-size:.5rem;color:var(--text-dim);padding:1px 0;"><span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--accent);margin-right:6px;"></span>Showrunner reviewed <span style="color:var(--text);">' + escHtml(evaluated[ei]) + '</span></div>';
-                    }
-                } else {
-                    traceHtml += '<div style="font-size:.5rem;color:var(--text-dim);padding:1px 0;"><span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--border);margin-right:6px;"></span>No intermediate evaluation</div>';
-                }
-                traceHtml += '</div>';
-
-                // Phase 3: Synthesis
-                traceHtml += '<div class="orch-phase" style="margin-top:6px;"><div style="font-size:.45rem;letter-spacing:.1em;color:var(--accent);margin-bottom:3px;"><i class="ph ph-brain"></i> SYNTHESIS</div>';
-                traceHtml += '<div style="font-size:.5rem;color:var(--text-dim);padding:1px 0;"><span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--accent);margin-right:6px;"></span>';
-                traceHtml += '<span style="color:var(--text);">' + escHtml(meta.showrunner || '?') + '</span>';
-                if (meta.showrunner_host) traceHtml += ' <span>@ ' + escHtml(meta.showrunner_host) + '</span>';
-                traceHtml += ' <span style="color:rgba(0,229,255,0.6);margin-left:6px;">synthesized final answer</span></div>';
-                traceHtml += '</div>';
-
-                // Summary
-                traceHtml += '<div style="font-size:.5rem;color:var(--text-dim);padding-top:6px;border-top:1px solid var(--border);margin-top:6px;display:flex;gap:12px;flex-wrap:wrap;">';
-                traceHtml += '<span><span style="color:var(--accent);">' + dispatched.length + '</span> dispatched</span>';
-                traceHtml += '<span><span style="color:var(--accent);">' + responses.length + '</span> responded</span>';
-                if (reuseRounds > 1) traceHtml += '<span><span style="color:var(--accent);">' + reuseRounds + '</span> rounds</span>';
-                traceHtml += '<span><span style="color:var(--accent);">' + evaluated.length + '</span> evaluated</span>';
-                traceHtml += '<span>total <span style="color:var(--accent);">' + elapsed + 's</span></span>';
-                traceHtml += '</div>';
-            } else {
-                // Fallback: basic info
-                if (meta.endpoints_queried) traceHtml += '<div class="orch-phase"><span class="op-label">Endpoints queried</span><span class="op-time">[ ' + meta.endpoints_queried + ' ]</span></div>';
-                if (meta.endpoints_responded != null) traceHtml += '<div class="orch-phase"><span class="op-label">Endpoints responded</span><span class="op-time">[ ' + meta.endpoints_responded + ' ]</span></div>';
-                if (meta.showrunner) traceHtml += '<div class="orch-phase"><span class="op-label">Showrunner</span><span class="op-time">[ ' + escHtml(meta.showrunner) + ' ]</span></div>';
-            }
-            traceHtml += '</div>';
-            trace.innerHTML = traceHtml;
-
-            trace.querySelector('.orch-toggle').addEventListener('click', function() {
-                trace.classList.toggle('open');
-            });
-
-            el.appendChild(trace);
+            appendTrace(el, meta);
         }
 
         msgs.appendChild(el);
         msgs.scrollTop = msgs.scrollHeight;
         return el;
+    }
+
+    function appendTrace(el, meta) {
+        if (!meta) return;
+        var trace = document.createElement('div');
+        trace.className = 'orch-trace';
+
+        var log = meta.event_log || [];
+        var dispatched = [], responses = [], evaluated = [], other = [];
+        var t0 = log.length > 0 ? log[0].t : 0;
+        for (var li = 0; li < log.length; li++) {
+            var ev = log[li];
+            var msg = ev.msg || '';
+            if (msg.indexOf('dispatched to ') === 0 || msg.indexOf('re-use round') === 0) {
+                var dparts = msg.replace(/^(re-use round \d+: )?dispatched to /, '').split(' on ');
+                dispatched.push({ model: dparts[0] || '?', host: dparts[1] || '?', reuse: msg.indexOf('re-use') >= 0 });
+            } else if (msg.indexOf('response from ') === 0) {
+                var rm = msg.match(/response from (.+?) on (.+?) \((\d+) chars\)/);
+                if (rm) responses.push({ model: rm[1], host: rm[2], chars: parseInt(rm[3]), t: ev.t - t0 });
+            } else if (msg.indexOf('showrunner evaluated') === 0) {
+                evaluated.push(msg.replace('showrunner evaluated response from ', ''));
+            }
+        }
+        var elapsed = log.length > 1 ? (log[log.length - 1].t - t0).toFixed(1) : '?';
+        var respondedMap = {};
+        for (var ri = 0; ri < responses.length; ri++) respondedMap[responses[ri].model + '@' + responses[ri].host] = responses[ri];
+
+        var reuseRounds = meta.reuse_rounds || 1;
+        var hasLog = log.length > 0;
+        var toggleLabel = hasLog
+            ? (dispatched.length + ' dispatched \u00b7 ' + responses.length + ' responded' + (reuseRounds > 1 ? ' \u00b7 ' + reuseRounds + ' rounds' : '') + ' \u00b7 ' + elapsed + 's')
+            : ((meta.endpoints_queried || '?') + ' queried \u00b7 ' + (meta.endpoints_responded || '?') + ' responded');
+
+        var traceHtml = '<div class="orch-toggle" data-flash data-nbeep="select">';
+        traceHtml += '<span>ORCHESTRATION</span><span>' + toggleLabel + '</span></div>';
+        traceHtml += '<div class="orch-body">';
+
+        if (hasLog) {
+            traceHtml += '<div class="orch-phase"><div style="font-size:.45rem;letter-spacing:.1em;color:var(--accent);margin-bottom:3px;"><i class="ph ph-broadcast"></i> FAN-OUT' + (reuseRounds > 1 ? ' (' + reuseRounds + ' rounds)' : '') + '</div>';
+            for (var di = 0; di < dispatched.length; di++) {
+                var dep = dispatched[di];
+                var key = dep.model + '@' + dep.host;
+                var resp = respondedMap[key];
+                var dotCls = resp ? 'accent' : 'amber';
+                var charInfo = resp ? resp.chars + ' chars @ ' + resp.t.toFixed(1) + 's' : 'no response';
+                var reuseTag = dep.reuse ? ' <span style="color:var(--amber);font-size:.42rem;">RE-USE</span>' : '';
+                traceHtml += '<div style="display:flex;align-items:center;gap:6px;padding:1px 0;font-size:.5rem;color:var(--text-dim);">';
+                traceHtml += '<span style="width:5px;height:5px;border-radius:50%;background:var(--' + dotCls + ');flex-shrink:0;"></span>';
+                traceHtml += '<span style="color:var(--text);">' + escHtml(dep.model) + '</span>';
+                traceHtml += '<span>@ ' + escHtml(dep.host) + '</span>' + reuseTag;
+                traceHtml += '<span style="color:rgba(0,229,255,0.6);margin-left:auto;white-space:nowrap;">' + charInfo + '</span>';
+                traceHtml += '</div>';
+            }
+            traceHtml += '</div>';
+
+            traceHtml += '<div class="orch-phase" style="margin-top:6px;"><div style="font-size:.45rem;letter-spacing:.1em;color:var(--accent);margin-bottom:3px;"><i class="ph ph-magnifying-glass"></i> EVALUATION</div>';
+            if (evaluated.length > 0) {
+                for (var ei = 0; ei < evaluated.length; ei++) {
+                    traceHtml += '<div style="font-size:.5rem;color:var(--text-dim);padding:1px 0;"><span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--accent);margin-right:6px;"></span>Showrunner reviewed <span style="color:var(--text);">' + escHtml(evaluated[ei]) + '</span></div>';
+                }
+            } else {
+                traceHtml += '<div style="font-size:.5rem;color:var(--text-dim);padding:1px 0;"><span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--border);margin-right:6px;"></span>No intermediate evaluation</div>';
+            }
+            traceHtml += '</div>';
+
+            traceHtml += '<div class="orch-phase" style="margin-top:6px;"><div style="font-size:.45rem;letter-spacing:.1em;color:var(--accent);margin-bottom:3px;"><i class="ph ph-brain"></i> SYNTHESIS</div>';
+            traceHtml += '<div style="font-size:.5rem;color:var(--text-dim);padding:1px 0;"><span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--accent);margin-right:6px;"></span>';
+            traceHtml += '<span style="color:var(--text);">' + escHtml(meta.showrunner || '?') + '</span>';
+            if (meta.showrunner_host) traceHtml += ' <span>@ ' + escHtml(meta.showrunner_host) + '</span>';
+            traceHtml += ' <span style="color:rgba(0,229,255,0.6);margin-left:6px;">synthesized final answer</span></div>';
+            traceHtml += '</div>';
+
+            traceHtml += '<div style="font-size:.5rem;color:var(--text-dim);padding-top:6px;border-top:1px solid var(--border);margin-top:6px;display:flex;gap:12px;flex-wrap:wrap;">';
+            traceHtml += '<span><span style="color:var(--accent);">' + dispatched.length + '</span> dispatched</span>';
+            traceHtml += '<span><span style="color:var(--accent);">' + responses.length + '</span> responded</span>';
+            if (reuseRounds > 1) traceHtml += '<span><span style="color:var(--accent);">' + reuseRounds + '</span> rounds</span>';
+            traceHtml += '<span><span style="color:var(--accent);">' + evaluated.length + '</span> evaluated</span>';
+            traceHtml += '<span>total <span style="color:var(--accent);">' + elapsed + 's</span></span>';
+            traceHtml += '</div>';
+        } else {
+            if (meta.endpoints_queried) traceHtml += '<div class="orch-phase"><span class="op-label">Endpoints queried</span><span class="op-time">[ ' + meta.endpoints_queried + ' ]</span></div>';
+            if (meta.endpoints_responded != null) traceHtml += '<div class="orch-phase"><span class="op-label">Endpoints responded</span><span class="op-time">[ ' + meta.endpoints_responded + ' ]</span></div>';
+            if (meta.showrunner) traceHtml += '<div class="orch-phase"><span class="op-label">Showrunner</span><span class="op-time">[ ' + escHtml(meta.showrunner) + ' ]</span></div>';
+        }
+        traceHtml += '</div>';
+        trace.innerHTML = traceHtml;
+
+        trace.querySelector('.orch-toggle').addEventListener('click', function() {
+            trace.classList.toggle('open');
+        });
+
+        el.appendChild(trace);
     }
 
     // ── Send Message ──
@@ -1314,37 +1330,166 @@
             }
         }
 
-        var payload = { messages: messages };
+        var payload = { messages: messages, stream: true };
         if (currentConvId) payload._conversation_id = currentConvId;
+        if (globalMaxTokens && globalMaxTokens > 0) payload.max_tokens = globalMaxTokens;
+
+        // ── Streaming fetch ──────────────────────────────────────────────
+        var assistantEl = null;    // bubble element, created on first status/token
+        var bodyEl = null;         // .msg-body inside the bubble
+        var statusEl = null;       // .cf-thinking-status status line (thinking/Rn)
+        var accContent = '';       // accumulated real response content
+        var thinkingHidden = false; // have we hidden the spinner yet?
+
+        function _renderBody(text) {
+            var html = escHtml(text);
+            html = html.replace(/```(\w*)\n([\s\S]*?)```/g, function(_, lang, code) {
+                return '<pre><code>' + code + '</code></pre>';
+            });
+            html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+            html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+            html = html.replace(/\n/g, '<br>');
+            return html;
+        }
+
+        function _ensureAssistantBubble() {
+            if (assistantEl) return;
+            var msgs = document.getElementById('chat-messages');
+            var emptyState = msgs.querySelector('.status-val');
+            if (emptyState) emptyState.remove();
+            assistantEl = document.createElement('div');
+            assistantEl.className = 'chat-msg assistant streaming';
+            assistantEl.innerHTML =
+                '<span class="corner corner-tl">⌜</span><span class="corner corner-tr">⌝</span>' +
+                '<span class="corner corner-bl">⌞</span><span class="corner corner-br">⌟</span>';
+            // Status line (thinking dots / Rn markers)
+            statusEl = document.createElement('div');
+            statusEl.className = 'cf-thinking-status';
+            assistantEl.appendChild(statusEl);
+            bodyEl = document.createElement('div');
+            bodyEl.className = 'msg-body';
+            assistantEl.appendChild(bodyEl);
+            msgs.appendChild(assistantEl);
+        }
+
+        function _hideThinkingSpinner() {
+            if (thinkingHidden) return;
+            thinkingHidden = true;
+            document.getElementById('thinking').classList.remove('active');
+            stopThinkingTimer();
+        }
+
+        function _onStatus(text) {
+            // Status-only event from _cf_status — shown in the status line, never in content
+            _ensureAssistantBubble();
+            _hideThinkingSpinner();
+            statusEl.textContent += text;
+            document.getElementById('chat-messages').scrollTop =
+                document.getElementById('chat-messages').scrollHeight;
+        }
+
+        function _onToken(delta) {
+            // Real synthesis content — hide status line on first token
+            if (statusEl && statusEl.parentNode) {
+                statusEl.remove();
+                statusEl = null;
+            }
+            _hideThinkingSpinner();
+            accContent += delta;
+            _ensureAssistantBubble();
+            bodyEl.innerHTML = _renderBody(accContent);
+            var msgs = document.getElementById('chat-messages');
+            msgs.scrollTop = msgs.scrollHeight;
+        }
+
+        function _onDone(meta) {
+            _hideThinkingSpinner();
+            // Remove status line if still visible (e.g. no synthesis content arrived)
+            if (statusEl && statusEl.parentNode) { statusEl.remove(); statusEl = null; }
+            sending = false;
+
+            if (!assistantEl) {
+                // Nothing was rendered (empty response) — show error toast
+                toast('EMPTY RESPONSE', 'warn', 4000);
+                return;
+            }
+
+            assistantEl.classList.remove('streaming');
+
+            // Add model label now that we have meta
+            if (meta) {
+                var label = document.createElement('div');
+                label.className = 'msg-model';
+                var parts = [];
+                if (meta.showrunner) parts.push(meta.showrunner);
+                if (meta.endpoints_responded != null) parts.push(meta.endpoints_responded + '/' + (meta.endpoints_queried || '?') + ' ENDPOINTS');
+                label.textContent = parts.join(' · ') || 'CLUSTERFLOCK';
+                assistantEl.insertBefore(label, bodyEl);
+
+                // Orchestration trace (reuse appendMessage logic inline)
+                appendTrace(assistantEl, meta);
+            }
+
+            if (typeof nbeep === 'function') nbeep('chat_complete');
+        }
 
         fetch(OAPI_BASE + '/v1/chat/completions', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(payload)
         })
-        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
-        .then(function(res) {
-            thinking.classList.remove('active');
-            stopThinkingTimer();
-            sending = false;
-
-            if (res.ok && res.data.choices && res.data.choices.length) {
-                var choice = res.data.choices[0];
-                var content = choice.message ? choice.message.content : '';
-                var meta = res.data._clusterflock || {};
-                appendMessage('assistant', content, meta);
-                if (res.data._conversation_id) currentConvId = res.data._conversation_id;
-                if (typeof nbeep === 'function') nbeep('chat_complete');
-            } else {
-                var errMsg = (res.data.error && res.data.error.message) || res.data.error || 'Unknown error';
-                toast('SEND FAILED — ' + errMsg, 'error', 5000);
+        .then(function(r) {
+            if (!r.ok || !r.body) {
+                return r.json().then(function(d) {
+                    throw new Error((d.error && d.error.message) || d.error || ('HTTP ' + r.status));
+                });
             }
+
+            var reader = r.body.getReader();
+            var decoder = new TextDecoder();
+            var buf = '';
+            var lastMeta = null;
+
+            function pump() {
+                return reader.read().then(function(chunk) {
+                    if (chunk.done) {
+                        _onDone(lastMeta);
+                        return;
+                    }
+                    buf += decoder.decode(chunk.value, {stream: true});
+                    var lines = buf.split('\n');
+                    buf = lines.pop(); // keep incomplete line
+                    for (var i = 0; i < lines.length; i++) {
+                        var line = lines[i].trim();
+                        if (!line || !line.startsWith('data:')) continue;
+                        var data = line.slice(5).trim();
+                        if (data === '[DONE]') { _onDone(lastMeta); return; }
+                        try {
+                            var obj = JSON.parse(data);
+                            // Capture conversation id
+                            if (obj._conversation_id) currentConvId = obj._conversation_id;
+                            // Capture meta from first chunk that has it
+                            if (obj._clusterflock) lastMeta = obj._clusterflock;
+                            // Status events (_cf_status) go to the status line, not content
+                            if (obj._cf_status) { _onStatus(obj._cf_status); continue; }
+                            var choices = obj.choices || [];
+                            for (var ci = 0; ci < choices.length; ci++) {
+                                var delta = (choices[ci].delta || {}).content || '';
+                                if (delta) _onToken(delta);
+                            }
+                        } catch(e) {}
+                    }
+                    return pump();
+                });
+            }
+            return pump();
         })
         .catch(function(err) {
+            var thinking = document.getElementById('thinking');
             thinking.classList.remove('active');
             stopThinkingTimer();
             sending = false;
-            toast('SEND FAILED — connection error', 'error', 4000);
+            toast('SEND FAILED — ' + (err.message || 'connection error'), 'error', 5000);
         });
     }
 

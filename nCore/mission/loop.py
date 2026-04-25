@@ -101,8 +101,8 @@ from .persistence import persist_missions
 
 # ── Constants ────────────────────────────────────────────────────────────
 
-_MAX_ROUNDS = 400
-_WALL_TIMEOUT = 9200
+_MAX_ROUNDS = 10_000_000
+_WALL_TIMEOUT = 0  # disabled — missions run indefinitely
 _FLOCK_REFRESH = 120
 _PERSIST_INTERVAL = 60
 
@@ -121,9 +121,9 @@ _SPIN_LOOP_BAIL_THRESHOLD = 8
 # Showrunner failover: re-elect after N consecutive SR errors
 _SR_FAILOVER_THRESHOLD = 3
 
-# Progress-gated timeout: bail if zero tasks completed after N rounds or N seconds
-_ZERO_PROGRESS_MAX_ROUNDS = 50
-_ZERO_PROGRESS_MAX_SECONDS = 1800  # 30 minutes
+# Progress-gated timeout: disabled — missions run indefinitely
+_ZERO_PROGRESS_MAX_ROUNDS = 0
+_ZERO_PROGRESS_MAX_SECONDS = 0
 
 
 # ── Elect or override Showrunner ─────────────────────────────────────────
@@ -323,12 +323,6 @@ def _mission_loop(mission):
                 break
 
             elapsed = time.time() - start_time
-            if elapsed > _WALL_TIMEOUT:
-                mission.log_event("WARN", f"Wall-clock timeout ({_WALL_TIMEOUT}s)")
-                mission.status_message = "Timeout — completing with current work"
-                _advance_phase(mission, "completing")
-                _phase_completing(mission)
-                return
 
             now = time.time()
             if now - last_flock_refresh > _FLOCK_REFRESH:
@@ -432,34 +426,7 @@ def _mission_loop(mission):
                         "Flock agents have been dispatched to investigate and fix the failures. "
                         "Move on to other work or wait for their results.")
 
-            # Progress-gated timeout: no tasks done after threshold → bail
-            plan = getattr(mission, "plan", None)
-            tasks_done = 0
-            if plan and plan.tasks:
-                tasks_done = sum(1 for t in plan.tasks if t.status == "done")
-            if tasks_done == 0 and (
-                round_num >= _ZERO_PROGRESS_MAX_ROUNDS
-                or elapsed >= _ZERO_PROGRESS_MAX_SECONDS
-            ):
-                trigger = (f"round {round_num}" if round_num >= _ZERO_PROGRESS_MAX_ROUNDS
-                           else f"{elapsed:.0f}s elapsed")
-                # Check if SR has done any real work (round_trips > 1 means at
-                # least one successful SR exchange even without plan tasks)
-                if mission.round_trips > 1:
-                    mission.log_event("AUTO_BAIL",
-                        f"Zero-progress timeout: 0 plan tasks completed after {trigger}, "
-                        f"forcing completion with existing work")
-                    mission.status_message = f"No progress after {trigger} — completing"
-                    _advance_phase(mission, "completing")
-                    _phase_completing(mission)
-                else:
-                    mission.log_event("FAILED",
-                        f"Zero-progress timeout: no work completed after {trigger}")
-                    mission.status = "failed"
-                    mission.status_message = f"Mission failed: no work after {trigger}"
-                return
-
-            user_parts.append(f"Round {round_num}/{_MAX_ROUNDS}. "
+            user_parts.append(f"Round {round_num}. "
                               f"Elapsed: {elapsed:.0f}s. "
                               f"Continue working on the mission.")
 

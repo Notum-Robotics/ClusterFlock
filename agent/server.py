@@ -252,22 +252,51 @@ def _gguf_context_length(model_path):
     return _gguf_metadata(model_path).get('context_length')
 
 
-# Minimum VRAM (MB) to keep free after model + KV cache allocation.
-# Covers CUDA scratch buffers, attention intermediates, MoE expert routing,
-# and OS/driver overhead.
-_MIN_FREE_VRAM_MB = 2048
+_CTX_HARD_CAP = 262144  # 256K absolute max
 
 
-def _auto_context_size(model_path, device="gpu0", cache_type="q4_0"):
-    """Pick the maximum context size that fits in VRAM/RAM with safe headroom.
+def _auto_context_size(model_path, device="gpu0", cache_type="q4_0",
+                       aggressive=False, ram_offload=False):
+    """Pick the maximum context size that fits in VRAM/RAM.
 
-    Strategy: parse GGUF architecture to compute precise KV cache cost per token,
-    then calculate the max context that fits while preserving enough free memory
-    for runtime scratch buffers and CUDA intermediates.
+    Normal mode (aggressive=False, ram_offload=False):
+      5% headroom + 1.2× model-weight overhead — conservative, prevents OOM.
+
+    Aggressive VRAM (aggressive=True):
+      1% headroom + 1.05× model-weight overhead — squeezes up to ~99% of
+      available VRAM into context.  Disabled by default; use when you know
+      the GPU has headroom and want maximum context.
+
+    RAM offload (ram_offload=True):
+      Ignores VRAM budget entirely — sets context to the model's native
+      maximum (capped at 262K).  llama.cpp will store model weights on the
+      GPU and spill the KV cache into system RAM when VRAM is exhausted.
+      Use when you have fast system RAM (e.g. DGX Spark unified memory,
+      or a machine with >64 GB RAM) and need the full context window.
+
+    Both flags can be combined: max native context with 99% VRAM fill for
+    model weights (KV overflow goes to RAM).
     """
     from hardware import gpu as hw_gpu
 
     model_size_mb = os.path.getsize(model_path) / (1024 * 1024)
+
+    # Parse GGUF for native context + precise KV cache estimation
+    meta = _gguf_metadata(model_path)
+    n_layers = meta.get('block_count', 0)
+    n_kv_heads = meta.get('head_count_kv', 0)
+    n_heads = meta.get('head_count', 0)
+    embed_dim = meta.get('embedding_length', 0)
+    native_ctx = meta.get('context_length')
+
+    # RAM offload: bypass VRAM budget — use full native context.
+    # llama.cpp will spill KV cache to system RAM when VRAM runs out.
+    if ram_offload:
+        ctx = min(native_ctx or _CTX_HARD_CAP, _CTX_HARD_CAP)
+        ctx = max(2048, (ctx // 1024) * 1024)
+        log.info(f"[server] RAM offload mode: context={ctx} tokens "
+                 f"(native={native_ctx or 'unknown'}, KV will spill to system RAM)")
+        return ctx
 
     # Get VRAM for the target device
     gpus = hw_gpu()
@@ -278,18 +307,19 @@ def _auto_context_size(model_path, device="gpu0", cache_type="q4_0"):
         from hardware import _mem_info
         _, free_mb = _mem_info()
 
-    # Reserve: model weights × 1.3 (covers weight loading overhead, compute
-    # graph allocation, and CUDA context) + 15% of remaining for runtime
-    # scratch buffers (attention intermediates, MoE expert routing, etc.)
-    available_mb = (free_mb - model_size_mb * 1.3) * 0.85
+    # Reserve: model weights overhead + headroom
+    # Normal:     1.20× overhead, 5% headroom → conservative, avoids OOM
+    # Aggressive: 1.05× overhead, 1% headroom → fills ~99% of VRAM
+    if aggressive:
+        weight_overhead = 1.05
+        headroom = 0.99
+        log.info(f"[server] Aggressive VRAM mode: overhead={weight_overhead}×, "
+                 f"headroom={headroom*100:.0f}%")
+    else:
+        weight_overhead = 1.20
+        headroom = 0.95
 
-    # Parse GGUF for precise KV cache estimation
-    meta = _gguf_metadata(model_path)
-    n_layers = meta.get('block_count', 0)
-    n_kv_heads = meta.get('head_count_kv', 0)
-    n_heads = meta.get('head_count', 0)
-    embed_dim = meta.get('embedding_length', 0)
-    native_ctx = meta.get('context_length')
+    available_mb = (free_mb - model_size_mb * weight_overhead) * headroom
 
     # Bytes per element based on KV cache quantization
     kv_bytes = {"f16": 2.0, "f32": 4.0, "q8_0": 1.0, "q4_0": 0.5, "q4_1": 0.5}
@@ -305,7 +335,6 @@ def _auto_context_size(model_path, device="gpu0", cache_type="q4_0"):
                  f"head_dim={head_dim}, {bpe}B/elem → {kv_per_token:.0f} B/token")
     else:
         # Fallback: estimate from model file size (larger models = more KV)
-        # ~0.5 KB/token for 7B-class, ~2 KB/token for 70B-class at f16
         est_params_b = model_size_mb / 600  # rough: Q4 ≈ 600 MB/B
         kv_per_token = max(256, est_params_b * 100) * bpe / 2.0
         kv_per_token_mb = kv_per_token / (1024 * 1024)
@@ -318,23 +347,16 @@ def _auto_context_size(model_path, device="gpu0", cache_type="q4_0"):
     else:
         max_ctx = 8192
 
-    # Enforce minimum free VRAM floor after KV allocation
-    if kv_per_token_mb > 0 and available_mb > 0:
-        kv_total_mb = max_ctx * kv_per_token_mb
-        leftover_mb = available_mb - kv_total_mb
-        if leftover_mb < _MIN_FREE_VRAM_MB:
-            # Reduce context to guarantee minimum free headroom
-            usable_mb = max(0, available_mb - _MIN_FREE_VRAM_MB)
-            max_ctx = int(usable_mb / kv_per_token_mb)
-
     # Round down to nearest 1024 for cleanliness
     ctx = max(2048, (max_ctx // 1024) * 1024)
 
-    # Cap at model's native context length
+    # Cap at model's native context length and hard cap
     if native_ctx and ctx > native_ctx:
         ctx = native_ctx
+    ctx = min(ctx, _CTX_HARD_CAP)
 
-    log.info(f"[server] Auto context: {ctx} tokens "
+    mode_tag = "aggressive" if aggressive else "normal"
+    log.info(f"[server] Auto context [{mode_tag}]: {ctx} tokens "
              f"(VRAM free: {free_mb:.0f} MB, model: {model_size_mb:.0f} MB, "
              f"KV/tok: {kv_per_token:.0f}B, available: {available_mb:.0f} MB, "
              f"max fit: {max_ctx}, native max: {native_ctx or 'unknown'})")
@@ -345,33 +367,25 @@ def _auto_context_size(model_path, device="gpu0", cache_type="q4_0"):
 
 def _find_mmproj(model_path):
     """Find a multimodal projector file next to the model GGUF.
-    Looks for mmproj-*.gguf in the same directory and parent directories
-    (up to MODELS_DIR boundary). Prefers F16 > BF16 > F32.
+    Looks for mmproj-*.gguf in the same directory (prefers F16 > BF16 > F32).
     Returns path string or None."""
     model_dir = Path(model_path).parent
-    # Search current dir, then walk up to MODELS_DIR
-    search_dirs = [model_dir]
-    d = model_dir.parent
-    while d != d.parent and d >= MODELS_DIR:
-        search_dirs.append(d)
-        d = d.parent
-
-    for sdir in search_dirs:
-        candidates = sorted(sdir.glob("mmproj-*.gguf"))
-        if not candidates:
-            continue
-        for pref in ("F16", "BF16", "F32"):
-            for c in candidates:
-                if pref in c.name:
-                    return str(c)
-        return str(candidates[0])
-    return None
+    candidates = sorted(model_dir.glob("mmproj-*.gguf"))
+    if not candidates:
+        return None
+    # Prefer F16 for best speed/quality tradeoff
+    for pref in ("F16", "BF16", "F32"):
+        for c in candidates:
+            if pref in c.name:
+                return str(c)
+    return str(candidates[0])
 
 
 def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
                  n_gpu_layers=9999, parallel=None, threads=None,
                  flash_attn="on", cache_type_k=None, cache_type_v=None,
-                 host="0.0.0.0", extra_args=None,
+                 host="0.0.0.0", extra_args=None, draft_model_path=None,
+                 aggressive_vram=False, ram_offload=False,
                  _retry_count=0, _max_retries=5):
     """Start a llama-server instance pinned to a specific device.
 
@@ -379,6 +393,9 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
       macOS:  f16 KV cache, auto context from memory, Metal offload.
       Linux GPU: q4_0 KV cache, 131072 context, CUDA_VISIBLE_DEVICES.
       Linux CPU: no GPU offload, f16 KV cache, 4 threads.
+
+    aggressive_vram: reduce safeguards and squeeze up to ~99% VRAM into context.
+    ram_offload: load maximum native context; KV cache overflows to system RAM.
     """
     if port is None:
         port = _port_for_device(device)
@@ -393,6 +410,9 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
 
     is_cpu = (device == "cpu")
 
+    from hardware import is_dgx_spark
+    _is_spark = (not _IS_DARWIN and not is_cpu and is_dgx_spark())
+
     # Platform-aware defaults
     if is_cpu:
         n_gpu_layers = 0
@@ -403,7 +423,10 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
         if cache_type_v is None:
             cache_type_v = "f16"
         if ctx_size is None:
-            ctx_size = 32768
+            ctx_size = _auto_context_size(model_path, device,
+                                          cache_type=cache_type_k,
+                                          aggressive=aggressive_vram,
+                                          ram_offload=ram_offload)
     elif _IS_DARWIN:
         if threads is None:
             threads = max(1, (os.cpu_count() or 4) // 2)
@@ -412,25 +435,40 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
         if cache_type_v is None:
             cache_type_v = "f16"
         if ctx_size is None:
-            ctx_size = _auto_context_size(model_path, device, cache_type=cache_type_k)
+            ctx_size = _auto_context_size(model_path, device,
+                                          cache_type=cache_type_k,
+                                          aggressive=aggressive_vram,
+                                          ram_offload=ram_offload)
     else:
-        # Linux GPU
+        # Linux GPU — use all physical cores; CPU handles tokenization,
+        # draft model eval, and prefill staging alongside the CUDA backend.
         if threads is None:
-            threads = max(1, (os.cpu_count() or 4) // 2)
+            threads = max(1, os.cpu_count() or 4)
         if cache_type_k is None:
             cache_type_k = "q4_0"
         if cache_type_v is None:
             cache_type_v = "q4_0"
         if ctx_size is None:
-            ctx_size = _auto_context_size(model_path, device, cache_type=cache_type_k)
+            ctx_size = _auto_context_size(model_path, device,
+                                          cache_type=cache_type_k,
+                                          aggressive=aggressive_vram,
+                                          ram_offload=ram_offload)
+        if _is_spark:
+            # DGX Spark (GB10): unified memory — set KV cache to f16 for
+            # full bandwidth utilisation (q4_0 default is fine too, but f16
+            # lets CUDA graphs replay without dequant overhead on Blackwell).
+            pass  # ctx_size already set by _auto_context_size above
 
     # Auto-select parallel slots based on context size so each slot
     # gets a useful context window (at least 65K per slot).
     if parallel is None:
         if ctx_size >= 262144:
-            parallel = 1   # full 262K per slot
+            parallel = 1   # single slot owns full KV pool — preserves full 256K context
         elif ctx_size >= 131072:
-            parallel = 2   # 65K+ per slot
+            # Linux GPU: single slot owns the full KV pool — prevents CUDA graph
+            # replay failures when KV tensor pointers shift during long generation.
+            # macOS Metal: two slots (CUDA graphs not involved).
+            parallel = 1 if (not _IS_DARWIN and not is_cpu) else 2
         else:
             parallel = 4
 
@@ -449,6 +487,24 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
         "--metrics",
         "--cont-batching",
     ]
+
+    # Larger ubatch + full thread count for Linux GPU — better prefill throughput on CUDA
+    if not _IS_DARWIN and not is_cpu:
+        cmd.extend(["--threads-batch", str(threads)])
+        if _is_spark:
+            # Blackwell GB10: large batch for prefill; no-mmap + mlock forces
+            # entire model into physical RAM immediately, hitting peak 273 GB/s
+            # bandwidth and avoiding first-token stutter on Grace interconnect.
+            cmd.extend(["--batch-size", "4096"])
+            cmd.extend(["--no-mmap"])
+            cmd.extend(["--mlock"])
+        else:
+            cmd.extend(["--ubatch-size", "1024"])
+
+    # Speculative decoding draft model
+    if draft_model_path and os.path.isfile(draft_model_path):
+        cmd.extend(["--model-draft", str(draft_model_path)])
+        log.info(f"[server]   Draft model: {Path(draft_model_path).name}")
 
     # Auto-detect multimodal projector
     mmproj = _find_mmproj(model_path)
@@ -489,8 +545,14 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
     log.info(f"[server]   Model: {model_path}")
     log.info(f"[server]   Context: {ctx_size}, GPU layers: {n_gpu_layers}")
     log.info(f"[server]   Flash Attention: {flash_attn}, KV: {cache_type_k}")
+    if aggressive_vram:
+        log.info(f"[server]   ⚡ Aggressive VRAM: safeguards reduced (99% fill target)")
+    if ram_offload:
+        log.info(f"[server]   💾 RAM offload: KV cache will spill to system RAM if needed")
     if is_cpu:
         log.info(f"[server]   CPU-only mode ({threads} threads, system RAM)")
+    if _is_spark:
+        log.info(f"[server]   DGX Spark mode: --batch-size 4096 --no-mmap --mlock")
     if mmproj:
         log.info(f"[server]   Vision: {Path(mmproj).name}")
 
@@ -510,7 +572,8 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
     load_timeout = max(120, int(model_size_gb * per_gb))
     log.info(f"[server]   Load timeout: {load_timeout}s (~{model_size_gb:.1f} GB)")
 
-    if not _wait_for_server(port, host, timeout=load_timeout, proc=proc):
+    probe_host = "127.0.0.1" if host == "0.0.0.0" else host
+    if not _wait_for_server(port, probe_host, timeout=load_timeout, proc=proc):
         if proc.poll() is not None:
             _, stderr = proc.communicate(timeout=5)
             err_text = stderr.decode(errors='replace')[-500:] if stderr else ""
@@ -529,6 +592,9 @@ def start_server(model_path, *, device="gpu0", port=None, ctx_size=None,
                                 cache_type_k=cache_type_k,
                                 cache_type_v=cache_type_v,
                                 host=host, extra_args=extra_args,
+                                draft_model_path=draft_model_path,
+                                aggressive_vram=aggressive_vram,
+                                ram_offload=ram_offload,
                                 _retry_count=_retry_count + 1,
                                 _max_retries=_max_retries)
         raise RuntimeError(f"llama-server [{tag}] failed to start after "
@@ -647,7 +713,7 @@ def _health_check(port, host="127.0.0.1"):
         return False
 
 
-def inference_liveness_check(port, host="127.0.0.1", timeout=30):
+def inference_liveness_check(port, host="127.0.0.1", timeout=60):
     """Send a tiny inference request to verify the server can actually generate.
 
     Returns True if it responds within *timeout* seconds, False if it
@@ -745,7 +811,7 @@ def api_call(method, path, body=None, port=DEFAULT_PORT, host="127.0.0.1",
 def complete(messages, model=None, *, max_tokens=-1, temperature=0.7,
              top_p=None, frequency_penalty=None, presence_penalty=None,
              stop=None,
-             port=DEFAULT_PORT, host="127.0.0.1", generation_timeout=300):
+             port=DEFAULT_PORT, host="127.0.0.1", generation_timeout=1800):
     """Chat completion against a specific server port.
 
     Returns full OpenAI-compatible response dict with tokens_per_sec added.

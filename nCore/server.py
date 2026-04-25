@@ -305,6 +305,10 @@ class Handler(BaseHTTPRequestHandler):
             activity=body.get("activity"),
             auto_unload=body.get("auto_unload"),
             peer_address=peer_ip,
+            spec_decode=body.get("spec_decode"),
+            spec_candidates=body.get("spec_candidates"),
+            aggressive_vram=body.get("aggressive_vram"),
+            ram_offload=body.get("ram_offload"),
         )
         # Track autoload progress from endpoints
         orch_mod.autoload_check_heartbeat(node_id, body.get("endpoints"))
@@ -328,7 +332,11 @@ class Handler(BaseHTTPRequestHandler):
                     cpu_ram_enabled=body.get("cpu_ram_enabled"),
                     activity=body.get("activity"),
                     auto_unload=body.get("auto_unload"),
-                    peer_address=peer_ip)
+                    peer_address=peer_ip,
+                    spec_decode=body.get("spec_decode"),
+                    spec_candidates=body.get("spec_candidates"),
+                    aggressive_vram=body.get("aggressive_vram"),
+                    ram_offload=body.get("ram_offload"))
             _log(f"auto-readmit {node_id} ({hostname})")
 
         # Drain any pending orchestrator commands for this node
@@ -694,6 +702,42 @@ class Handler(BaseHTTPRequestHandler):
             _log(f"unload      {nid} ← {model_id}")
             orch_mod.add_pending_op_direct(nid, cmd)
             self._json(200, {"ok": True, "node_id": nid, "model_id": model_id})
+        except urllib.error.HTTPError as e:
+            # Compatibility fallback: if agent cannot match a specific model ID,
+            # retry with unload_all to guarantee VRAM release.
+            err_text = ""
+            try:
+                err_text = e.read().decode(errors="replace")
+            except Exception:
+                pass
+
+            if e.code == 400 and "model not loaded" in err_text.lower():
+                try:
+                    fallback_cmd = {"action": "unload_all"}
+                    fdata = json.dumps(fallback_cmd).encode()
+                    freq = urllib.request.Request(
+                        f"{address}/api/v1/command",
+                        data=fdata,
+                        headers={"Content-Type": "application/json",
+                                 "Authorization": f"Bearer {token}"},
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(freq, timeout=30) as resp:
+                        resp.read()
+                    _log(f"unload      {nid} ← {model_id} (fallback unload_all)")
+                    orch_mod.add_pending_op_direct(nid, fallback_cmd)
+                    return self._json(200, {
+                        "ok": True,
+                        "node_id": nid,
+                        "model_id": model_id,
+                        "fallback": "unload_all",
+                    })
+                except Exception as fe:
+                    _log(f"unload      {nid} ← {model_id} FAIL fallback {fe}")
+                    return self._json(502, {"error": str(fe)})
+
+            _log(f"unload      {nid} ← {model_id} FAIL HTTP {e.code}: {err_text or e.reason}")
+            self._json(502, {"error": err_text or str(e)})
         except Exception as e:
             _log(f"unload      {nid} ← {model_id} FAIL {e}")
             self._json(502, {"error": str(e)})
@@ -720,6 +764,14 @@ class Handler(BaseHTTPRequestHandler):
             cmd["cpu_ram_enabled"] = bool(body["cpu_ram_enabled"])
         if "auto_unload" in body:
             cmd["auto_unload"] = bool(body["auto_unload"])
+        if "aggressive_vram" in body:
+            cmd["aggressive_vram"] = bool(body["aggressive_vram"])
+        if "ram_offload" in body:
+            cmd["ram_offload"] = bool(body["ram_offload"])
+        if "spec_decode" in body:
+            cmd["spec_decode"] = body["spec_decode"]  # path string or null
+            if "device" in body:
+                cmd["device"] = body["device"]
 
         address = node.get("address")
         token = node.get("orchestrator_token")
@@ -815,6 +867,10 @@ class Handler(BaseHTTPRequestHandler):
         ctx = body.get("context_length")
         if ctx is not None:
             cmd["context_length"] = ctx
+        # Pass explicit filename for direct blob URL downloads
+        filename = body.get("filename")
+        if filename:
+            cmd["filename"] = filename
         address = node.get("address")
         token = node.get("orchestrator_token")
         if not address or not token:

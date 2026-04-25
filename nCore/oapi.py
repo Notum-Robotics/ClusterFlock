@@ -24,6 +24,8 @@ import re
 import secrets
 import threading
 import time
+import urllib.request
+import urllib.error
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 log = logging.getLogger(__name__)
@@ -157,6 +159,243 @@ def _extract_content(result):
     if not content:
         content = result.get("content", "")
     return content, ""
+
+
+# ── Local endpoint helpers ────────────────────────────────────────────────
+
+def _is_local_ep(ep):
+    """True if the endpoint's llama-server is reachable on localhost."""
+    cm = ep.get("conn_mode", "")
+    if cm == "local":
+        return True
+    if cm in ("pull", "") and ep.get("peer_address", "") in ("127.0.0.1", "::1"):
+        return True
+    return False
+
+
+def _local_llama_port(ep):
+    """Return the direct llama-server port for a local endpoint."""
+    device = ep.get("device", "gpu0")
+    if device == "cpu":
+        return 8090
+    try:
+        return 8080 + int(device.replace("gpu", ""))
+    except (ValueError, TypeError):
+        return 8080
+
+
+def _elect_local_showrunner_ep():
+    """Elect the best local endpoint for streaming showrunner synthesis.
+    Returns full endpoint dict (with device/port info) or None."""
+    endpoints = _collect_ready_endpoints()
+    local_eps = [ep for ep in endpoints if _is_local_ep(ep)]
+    if not local_eps:
+        return None
+    return max(local_eps, key=lambda ep: _composite_score(
+        ep["toks_per_sec"], ep["model"], ep["context_length"]
+    ))
+
+
+def _build_synthesis_messages(sr_context_length, original_messages, collected, sr_thoughts=None):
+    """Build the synthesis prompt for the showrunner.
+    Returns a truncated message list ready to send."""
+    responses_text = ""
+    for i, c in enumerate(collected, 1):
+        ep = c["endpoint"]
+        responses_text += f"\n--- Endpoint {i}: {ep['model']} ({ep['hostname']}) ---\n"
+        content = _strip_think_tags(c["content"])
+        if len(content) > 4000:
+            content = content[:4000] + "\n[...truncated...]"
+        responses_text += content + "\n"
+
+    thoughts_text = ""
+    if sr_thoughts:
+        thoughts_text = "\n--- Your earlier evaluations ---\n"
+        for i, t in enumerate(sr_thoughts, 1):
+            if t:
+                thoughts_text += f"{i}. {t[:500]}\n"
+
+    synth_messages = [{"role": "system", "content": _SYNTH_SYSTEM}]
+
+    # Include original conversation context; strip media (showrunner can't see images)
+    for m in original_messages:
+        if m.get("role") == "system":
+            synth_messages[0]["content"] += f"\n\nOriginal system context: {_content_text(m['content'])}"
+        else:
+            synth_messages.append({"role": m["role"], "content": _content_text(m.get("content", ""))})
+
+    if collected:
+        synth_messages.append({
+            "role": "user",
+            "content": (
+                f"I previously asked the question above. Here are {len(collected)} responses "
+                f"from different AI endpoints in the cluster:\n"
+                f"{responses_text}\n"
+                f"{thoughts_text}\n"
+                "Now synthesize the best possible final answer to my original question. "
+                "Respond directly — do not reference the endpoints or this synthesis process."
+            ),
+        })
+    else:
+        synth_messages.append({
+            "role": "user",
+            "content": (
+                "No other endpoints responded within the timeout. "
+                "Please answer my original question directly."
+            ),
+        })
+
+    return _truncate_messages_for_context(synth_messages, sr_context_length)
+
+
+def _write_sse_error(handler, model, msg):
+    """Write a terminal SSE error chunk when headers are already committed."""
+    chunk = {
+        "id": "chatcmpl-" + secrets.token_hex(6),
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{"index": 0, "delta": {"content": f"\n[Error: {msg}]"},
+                     "finish_reason": "stop"}],
+    }
+    try:
+        handler.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+        handler.wfile.write(b"data: [DONE]\n\n")
+        handler.wfile.flush()
+    except (OSError, BrokenPipeError):
+        pass
+
+
+def _stream_local_ep(handler, ep, messages, max_tokens, sampling_params, conv_id,
+                     mode_meta=None, headers_sent=False, tools_params=None):
+    """Stream directly from a local endpoint's llama-server and proxy SSE to the client.
+
+    headers_sent=False (default): send SSE response headers before streaming.
+      Returns (pre_error_or_None, collected_content); pre_error non-None means
+      failure before any bytes were written (caller may send a JSON 503).
+    headers_sent=True: headers already committed by caller (fanout keepalive path).
+      Never returns a pre_error; on connection failure writes an error SSE chunk.
+    """
+    port = _local_llama_port(ep)
+    # llama-server rejects null content with HTTP 400; replace with empty string.
+    # OpenAI spec allows content=null on assistant messages that carry tool_calls.
+    def _sanitize(msgs):
+        result = []
+        for m in msgs:
+            if "content" in m and m["content"] is None:
+                m = {**m, "content": ""}
+            result.append(m)
+        return result
+
+    req_body = {
+        "model": ep["model"],
+        "messages": _sanitize(messages),
+        "stream": True,
+    }
+    if max_tokens and max_tokens > 0:
+        req_body["max_tokens"] = max_tokens
+    if sampling_params:
+        for k, v in sampling_params.items():
+            if k in _FORWARDED_PARAMS:
+                req_body[k] = v
+    if tools_params:
+        req_body.update(tools_params)
+
+    url = f"http://127.0.0.1:{port}/v1/chat/completions"
+    raw = json.dumps(req_body).encode()
+    req = urllib.request.Request(url, data=raw,
+                                 headers={"Content-Type": "application/json"})
+
+    # 503 = llama-server slot busy (--parallel 1 and another request in-flight).
+    # Retry up to _MAX_BUSY_RETRIES times with a longer delay so concurrent
+    # requests queue up gracefully rather than failing immediately.
+    _MAX_CONNECT_RETRIES = 2   # for connection-level errors (ECONNREFUSED, timeout)
+    _MAX_BUSY_RETRIES = 8      # for 5xx (slot busy) — up to ~24s of polling
+    _RETRY_DELAY = 2.0         # seconds between connection-error retries
+    _BUSY_RETRY_DELAY = 3.0    # seconds between 5xx retries
+
+    last_err = None
+    resp = None
+    busy_attempts = 0
+    for attempt in range(max(_MAX_CONNECT_RETRIES, _MAX_BUSY_RETRIES)):
+        try:
+            resp = urllib.request.urlopen(req, timeout=300)
+            last_err = None
+            break
+        except urllib.error.HTTPError as e:
+            last_err = e
+            if e.code < 500:
+                break  # 4xx = client/request error — don't retry
+            # 5xx (e.g. 503 slot busy) — keep polling until slot frees up
+            busy_attempts += 1
+            if busy_attempts < _MAX_BUSY_RETRIES:
+                req = urllib.request.Request(url, data=raw,
+                                             headers={"Content-Type": "application/json"})
+                time.sleep(_BUSY_RETRY_DELAY)
+            else:
+                break
+        except Exception as e:
+            last_err = e
+            if attempt < _MAX_CONNECT_RETRIES - 1:
+                # Rebuild the request (body already consumed on first attempt)
+                req = urllib.request.Request(url, data=raw,
+                                             headers={"Content-Type": "application/json"})
+                time.sleep(_RETRY_DELAY)
+            else:
+                break
+
+    if last_err is not None:
+        if headers_sent:
+            _write_sse_error(handler, ep["model"], f"llama-server port {port} unreachable: {last_err}")
+            return None, ""
+        return f"llama-server port {port} unreachable: {last_err}", ""
+
+    if not headers_sent:
+        # Connection established — commit to streaming; headers go out now
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/event-stream")
+        handler.send_header("Cache-Control", "no-cache")
+        handler._cors_headers()
+        handler.end_headers()
+
+    collected = []
+    first_chunk = True
+    try:
+        for raw_line in resp:
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if not line or not line.startswith("data:"):
+                continue
+            data_str = line[5:].strip()
+            if data_str == "[DONE]":
+                handler.wfile.write(b"data: [DONE]\n\n")
+                handler.wfile.flush()
+                break
+            try:
+                chunk = json.loads(data_str)
+                chunk["model"] = ep["model"]
+                if first_chunk:
+                    first_chunk = False
+                    if conv_id:
+                        chunk["_conversation_id"] = conv_id
+                    if mode_meta:
+                        chunk["_clusterflock"] = mode_meta
+                for choice in chunk.get("choices", []):
+                    c = choice.get("delta", {}).get("content") or ""
+                    if c:
+                        collected.append(c)
+                handler.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+                handler.wfile.flush()
+            except (json.JSONDecodeError, OSError):
+                pass
+    except (OSError, BrokenPipeError):
+        pass
+    finally:
+        try:
+            resp.close()
+        except Exception:
+            pass
+
+    return None, "".join(collected)
 
 
 # ── Showrunner state ─────────────────────────────────────────────────────
@@ -426,6 +665,237 @@ def _build_response(content, model_label, meta_extra=None):
     return response
 
 
+# ── Streaming process functions ──────────────────────────────────────────
+#
+# These handle stream=True requests.  Each function:
+#   - Returns (pre_error_or_None, collected_content).
+#   - pre_error is non-None ONLY if the failure happened before SSE headers
+#     were sent (caller must then send a JSON error response instead).
+#   - On success (or post-header failure) pre_error is None.
+
+def _process_speed_stream(handler, messages, max_tokens, sampling_params, conv_id, tools_params=None):
+    """Speed mode streaming: forward stream from the fastest local endpoint."""
+    endpoints = _collect_ready_endpoints()
+    if not endpoints:
+        return "no ready endpoints in cluster", ""
+
+    local_eps = [ep for ep in endpoints if _is_local_ep(ep)]
+    if not local_eps:
+        return "speed mode streaming requires a local agent; no local endpoints available", ""
+
+    required_ctx = _estimate_prompt_tokens(messages)
+    ep = ranking.select_fastest(local_eps, required_context=required_ctx)
+    if not ep:
+        ep = max(local_eps, key=lambda e: e["toks_per_sec"])
+
+    _log(f"stream speed {ep['model']} on {ep['hostname']} port {_local_llama_port(ep)}")
+    ep_messages = _truncate_messages_for_context(messages, ep["context_length"])
+    meta = {
+        "mode": "speed",
+        "endpoints_queried": 1,
+        "endpoints_responded": 1,
+        "showrunner": ep["model"],
+        "showrunner_host": ep["hostname"],
+    }
+    return _stream_local_ep(handler, ep, ep_messages, max_tokens, sampling_params, conv_id, mode_meta=meta, tools_params=tools_params)
+
+
+def _process_manual_stream(handler, messages, max_tokens, sampling_params, conv_id, tools_params=None):
+    """Manual mode streaming: forward stream from the user-selected local endpoint."""
+    with _lock:
+        target_model = _oapi_manual_model
+
+    if not target_model:
+        return "manual mode: no model selected — choose one in OAPI settings", ""
+
+    endpoints = _collect_ready_endpoints()
+    ep = ranking.select_manual(endpoints, target_model)
+    if not ep:
+        return f"manual mode: model '{target_model}' not loaded or not ready", ""
+
+    if not _is_local_ep(ep):
+        return (
+            f"manual mode streaming requires a local agent; "
+            f"'{ep['model']}' on {ep['hostname']} is a remote endpoint", ""
+        )
+
+    _log(f"stream manual {ep['model']} on {ep['hostname']} port {_local_llama_port(ep)}")
+    ep_messages = _truncate_messages_for_context(messages, ep["context_length"])
+    meta = {
+        "mode": "manual",
+        "endpoints_queried": 1,
+        "endpoints_responded": 1,
+        "showrunner": ep["model"],
+        "showrunner_host": ep["hostname"],
+    }
+    return _stream_local_ep(handler, ep, ep_messages, max_tokens, sampling_params, conv_id, mode_meta=meta, tools_params=tools_params)
+
+
+_KEEPALIVE_DOT_INTERVAL = 5.0   # seconds between dots during fanout collection
+
+
+def _process_fanout_stream(handler, messages, max_tokens, sampling_params, conv_id, tools_params=None):
+    """Fanout mode streaming: collect from all endpoints, then stream synthesis
+    from the local showrunner once the thinking window expires.
+
+    While waiting for endpoints, streams 'Thinking...' followed by one dot every
+    5 seconds so the client connection stays alive.
+    """
+    sr_ep = _elect_local_showrunner_ep()
+    if not sr_ep:
+        return "fanout streaming requires a local agent for showrunner; none available", ""
+
+    endpoints = _collect_ready_endpoints()
+    if not endpoints:
+        return "no ready endpoints in cluster", ""
+
+    # Exclude the showrunner from fanout dispatch so it is idle and ready
+    # for synthesis when the thinking window expires (avoids --parallel=1 contention).
+    sr_node_id = sr_ep["node_id"]
+    sr_device  = sr_ep.get("device", "gpu0")
+    fanout_endpoints = [
+        ep for ep in endpoints
+        if not (ep["node_id"] == sr_node_id and ep.get("device", "gpu0") == sr_device)
+    ]
+    # If excluding the SR leaves nothing to query, skip fanout entirely —
+    # sending the SR's slot to both fanout and synthesis causes 503 contention
+    # with --parallel 1.  We'll just go straight to synthesis below.
+    skip_fanout = not fanout_endpoints
+
+    # ── Commit SSE headers immediately so the client doesn't time out ────
+    handler.send_response(200)
+    handler.send_header("Content-Type", "text/event-stream")
+    handler.send_header("Cache-Control", "no-cache")
+    handler._cors_headers()
+    handler.end_headers()
+
+    keepalive_id = "chatcmpl-" + secrets.token_hex(6)
+    keepalive_created = int(time.time())
+
+    def _send_status(text):
+        """Send a status-only SSE chunk via _cf_status (never touches response content)."""
+        chunk = {
+            "id": keepalive_id,
+            "object": "chat.completion.chunk",
+            "created": keepalive_created,
+            "model": "clusterflock",
+            "_cf_status": text,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": None}],
+        }
+        if conv_id:
+            chunk["_conversation_id"] = conv_id
+        try:
+            handler.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+            handler.wfile.flush()
+        except (OSError, BrokenPipeError):
+            pass
+
+    _send_status("Thinking")
+    last_dot_time = time.time()
+
+    event_log = []
+    _ev = lambda msg: event_log.append({"t": time.time(), "msg": msg})
+
+    thinking_power = _oapi_thinking_power
+    sr_port = _local_llama_port(sr_ep)
+    _ev(f"showrunner: {sr_ep['model']} on {sr_ep['hostname']} (local, port {sr_port})")
+    _ev(f"endpoints: {len(fanout_endpoints)} fanout (SR excluded), thinking_power: {thinking_power}s")
+
+    collected = []
+    deadline = time.time() + thinking_power
+    reuse_round = 0
+    total_dispatched = 0
+
+    # ── Collection loop (same logic as non-streaming fanout, no SR eval calls) ──
+    if skip_fanout:
+        _ev("single-node cluster: skipping fanout, going straight to SR synthesis")
+    else:
+        while True:
+            reuse_round += 1
+            fanout_tasks = {}
+            for ep in fanout_endpoints:
+                ep_messages = _truncate_messages_for_context(messages, ep["context_length"])
+                task_id = _send_to_endpoint(
+                    ep["node_id"], ep["model"], ep_messages, "oapi",
+                    max_tokens=max_tokens, sampling_params=sampling_params,
+                )
+                fanout_tasks[task_id] = ep
+                total_dispatched += 1
+                if reuse_round == 1:
+                    _ev(f"dispatched to {ep['model']} on {ep['hostname']}")
+                else:
+                    _ev(f"re-use round {reuse_round}: dispatched to {ep['model']} on {ep['hostname']}")
+
+            done_tasks = set()
+            while time.time() < deadline and len(done_tasks) < len(fanout_tasks):
+                # Send keepalive dot every _KEEPALIVE_DOT_INTERVAL seconds
+                now = time.time()
+                if now - last_dot_time >= _KEEPALIVE_DOT_INTERVAL:
+                    _send_status(".")
+                    last_dot_time = now
+
+                for task_id, ep_info in fanout_tasks.items():
+                    if task_id in done_tasks:
+                        continue
+                    task = orch_mod.get_task(task_id)
+                    if task and task["status"] == "done":
+                        done_tasks.add(task_id)
+                        if task["results"]:
+                            content, ep_err = _extract_content(task["results"][0])
+                            if ep_err:
+                                _ev(f"error from {ep_info['model']}: {ep_err}")
+                            if content:
+                                collected.append({
+                                    "endpoint": ep_info,
+                                    "content": content,
+                                    "received_at": time.time(),
+                                    "round": reuse_round,
+                                })
+                                _ev(f"response from {ep_info['model']} ({len(content)} chars)")
+                                _send_status(f" R{len(collected)}")
+                                last_dot_time = time.time()  # reset dot timer after Rn
+                time.sleep(0.5)
+
+            remaining = deadline - time.time()
+            if remaining < _REUSE_MIN_GAP:
+                break
+
+            # Dot before announcing re-use round
+            now = time.time()
+            if now - last_dot_time >= _KEEPALIVE_DOT_INTERVAL:
+                _send_status(".")
+                last_dot_time = now
+            _ev(f"round {reuse_round} complete — {remaining:.0f}s remaining, re-using endpoints")
+
+        _ev(f"collected {len(collected)} responses from {total_dispatched} dispatches over {reuse_round} round(s)")
+
+        # ── Drain window: give llama-server a moment to finish any in-flight work ──
+        _send_status(" ⟳")
+        time.sleep(1.5)
+
+    # ── Stream synthesis from local showrunner (headers already sent) ────
+    _ev(f"streaming synthesis via {sr_ep['model']} port {sr_port}")
+    # When tools are present, skip the synthesis prompt — the SR must receive
+    # the original messages directly so it can emit proper tool_calls output.
+    # Suggestion-node responses are discarded; the SR acts as the sole responder.
+    if tools_params:
+        synth_messages = _truncate_messages_for_context(messages, sr_ep["context_length"])
+    else:
+        synth_messages = _build_synthesis_messages(sr_ep["context_length"], messages, collected)
+    meta = {
+        "mode": "fanout",
+        "endpoints_queried": total_dispatched,
+        "endpoints_responded": len(collected),
+        "reuse_rounds": reuse_round,
+        "thinking_power": thinking_power,
+        "showrunner": sr_ep["model"],
+        "showrunner_host": sr_ep["hostname"],
+        "event_log": event_log,
+    }
+    return _stream_local_ep(handler, sr_ep, synth_messages, 0, None, conv_id,
+                            mode_meta=meta, headers_sent=True, tools_params=tools_params)
+
+
 # ── Speed mode ───────────────────────────────────────────────────────────
 
 def _process_speed(messages, max_tokens=0, sampling_params=None):
@@ -685,51 +1155,9 @@ def _showrunner_evaluate(sr, response_content, ep_info, original_messages):
 def _showrunner_synthesize(sr, original_messages, collected, sr_thoughts, event_log):
     """Ask showrunner to produce final synthesized answer.
     Returns (content, error_string)."""
-
-    # Build the synthesis prompt
-    responses_text = ""
-    for i, c in enumerate(collected, 1):
-        ep = c["endpoint"]
-        responses_text += f"\n--- Endpoint {i}: {ep['model']} ({ep['hostname']}) ---\n"
-        # Strip thinking and truncate very long responses to fit in context
-        content = _strip_think_tags(c["content"])
-        if len(content) > 4000:
-            content = content[:4000] + "\n[...truncated...]"
-        responses_text += content + "\n"
-
-    thoughts_text = ""
-    if sr_thoughts:
-        thoughts_text = "\n--- Your earlier evaluations ---\n"
-        for i, t in enumerate(sr_thoughts, 1):
-            if t:
-                thoughts_text += f"{i}. {t[:500]}\n"
-
-    # Build the full message list: original conversation + synthesis request
-    synth_messages = [{"role": "system", "content": _SYNTH_SYSTEM}]
-
-    # Include original conversation context (system + history)
-    # Strip media from synthesis prompt — showrunner can't see images
-    for m in original_messages:
-        if m.get("role") == "system":
-            synth_messages[0]["content"] += f"\n\nOriginal system context: {_content_text(m['content'])}"
-        else:
-            synth_messages.append({"role": m["role"], "content": _content_text(m.get("content", ""))})
-
-    # Add synthesis request
-    synth_messages.append({
-        "role": "user",
-        "content": (
-            f"I previously asked the question above. Here are {len(collected)} responses "
-            f"from different AI endpoints in the cluster:\n"
-            f"{responses_text}\n"
-            f"{thoughts_text}\n"
-            "Now synthesize the best possible final answer to my original question. "
-            "Respond directly — do not reference the endpoints or this synthesis process."
-        ),
-    })
-
-    # Truncate for showrunner's context
-    synth_messages = _truncate_messages_for_context(synth_messages, sr["context_length"])
+    synth_messages = _build_synthesis_messages(
+        sr["context_length"], original_messages, collected, sr_thoughts
+    )
 
     task_id = _send_to_endpoint(sr["node_id"], sr["model"], synth_messages, "oapi-synth")
     result = _wait_for_result(task_id, timeout=_SYNTHESIS_TIMEOUT)
@@ -946,10 +1374,14 @@ class OAPIHandler(BaseHTTPRequestHandler):
 
         # Validate messages structure
         for m in messages:
-            if "role" not in m or "content" not in m:
+            if "role" not in m:
+                return self._json(400, {"error": "each message must have role"})
+            # content may be absent on assistant messages that carry tool_calls
+            role = m.get("role")
+            if "content" not in m and not (role == "assistant" and "tool_calls" in m):
                 return self._json(400, {"error": "each message must have role and content"})
             # Validate multimodal content array structure
-            c = m["content"]
+            c = m.get("content")
             if isinstance(c, list):
                 for part in c:
                     if not isinstance(part, dict) or "type" not in part:
@@ -988,7 +1420,7 @@ class OAPIHandler(BaseHTTPRequestHandler):
                     turn_content = "[image] " + user_text if user_text else "[image]"
                 _add_turn(conv_id, "user", turn_content)
 
-                # Process — forward max_tokens and sampling params from request body
+                # Forward max_tokens and sampling params from request body
                 req_max_tokens = 0
                 try:
                     mt = body.get("max_tokens")
@@ -1003,32 +1435,54 @@ class OAPIHandler(BaseHTTPRequestHandler):
                     if v is not None:
                         sampling_params[p] = v
 
-                response, err = _process_chat_completion(
-                    messages, conv_id, max_tokens=req_max_tokens,
-                    sampling_params=sampling_params or None,
-                )
+                effective_max = req_max_tokens if req_max_tokens and req_max_tokens > 0 else _oapi_max_tokens
+                sp = sampling_params or None
 
-                if err:
-                    _status["requests_failed"] += 1
-                    return self._json(503, {"error": {"message": err, "type": "server_error"}})
+                # Extract tool-calling parameters to pass through to llama-server
+                tools_params = {}
+                if body.get("tools"):
+                    tools_params["tools"] = body["tools"]
+                if body.get("tool_choice") is not None:
+                    tools_params["tool_choice"] = body["tool_choice"]
+                tools_params = tools_params or None
 
-                # Store assistant turn
-                assistant_content = response["choices"][0]["message"]["content"]
-                _add_turn(conv_id, "assistant", assistant_content, meta={
-                    "endpoints_queried": response["_clusterflock"]["endpoints_queried"],
-                    "endpoints_responded": response["_clusterflock"]["endpoints_responded"],
-                    "showrunner": response["_clusterflock"]["showrunner"],
-                })
-
-                # Add conversation_id to response for UI tracking
-                response["_conversation_id"] = conv_id
-
-                _status["requests_completed"] += 1
-
-                # If client requested streaming, wrap response in SSE format
                 if body.get("stream"):
-                    self._stream_response(response, conv_id)
+                    # ── Real streaming path ───────────────────────────────
+                    _maximize_image_detail(messages)
+                    mode = get_oapi_mode()
+                    pre_err, content = self._dispatch_stream(
+                        mode, messages, effective_max, sp, conv_id, tools_params=tools_params
+                    )
+                    if pre_err:
+                        # Failure before SSE headers were sent — return JSON error
+                        _status["requests_failed"] += 1
+                        return self._json(503, {"error": {"message": pre_err, "type": "server_error"}})
+                    _add_turn(conv_id, "assistant", content,
+                              meta={"mode": mode, "streaming": True})
+                    _status["requests_completed"] += 1
+
                 else:
+                    # ── Non-streaming path ────────────────────────────────
+                    response, err = _process_chat_completion(
+                        messages, conv_id, max_tokens=req_max_tokens,
+                        sampling_params=sp, tools_params=tools_params,
+                    )
+
+                    if err:
+                        _status["requests_failed"] += 1
+                        return self._json(503, {"error": {"message": err, "type": "server_error"}})
+
+                    # Store assistant turn
+                    assistant_content = response["choices"][0]["message"]["content"]
+                    _add_turn(conv_id, "assistant", assistant_content, meta={
+                        "endpoints_queried": response["_clusterflock"]["endpoints_queried"],
+                        "endpoints_responded": response["_clusterflock"]["endpoints_responded"],
+                        "showrunner": response["_clusterflock"]["showrunner"],
+                    })
+
+                    # Add conversation_id to response for UI tracking
+                    response["_conversation_id"] = conv_id
+                    _status["requests_completed"] += 1
                     self._json(200, response)
 
         finally:
@@ -1163,6 +1617,17 @@ class OAPIHandler(BaseHTTPRequestHandler):
         self._json(200, conv)
 
     # ── Streaming (SSE) ────────────────────────────────────────────────
+
+    def _dispatch_stream(self, mode, messages, max_tokens, sampling_params, conv_id, tools_params=None):
+        """Route to the mode-specific real streaming handler.
+        Returns (pre_error_or_None, collected_content).
+        pre_error is non-None only if failure happened before SSE headers were sent.
+        """
+        if mode == "speed":
+            return _process_speed_stream(self, messages, max_tokens, sampling_params, conv_id, tools_params=tools_params)
+        if mode == "manual":
+            return _process_manual_stream(self, messages, max_tokens, sampling_params, conv_id, tools_params=tools_params)
+        return _process_fanout_stream(self, messages, max_tokens, sampling_params, conv_id, tools_params=tools_params)
 
     def _stream_response(self, response, conv_id):
         """Wrap a completed response in SSE format for clients that set stream=true."""

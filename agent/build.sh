@@ -120,6 +120,41 @@ build_variant() {
                 -DCMAKE_CUDA_COMPILER="$CUDA_PATH/bin/nvcc"
             )
             ;;
+        cuda13-spark)
+            # DGX Spark / GB10 Blackwell — peak performance build
+            # Targets sm_121-real (no PTX bloat), enables MXFP4, CUDA graphs,
+            # FA for all quants, and Grace Neoverse-V2 CPU optimizations.
+            DEST="$BUILD_ROOT/cuda13"
+            mkdir -p "$DEST"
+            local CUDA_PATH=""
+            for p in /usr/local/cuda-13.0 /usr/local/cuda-13 /usr/local/cuda /opt/cuda; do
+                if [ -d "$p" ] && "$p/bin/nvcc" --version 2>/dev/null | grep -q "release 13\|V13"; then
+                    CUDA_PATH="$p"; break
+                fi
+            done
+            if [ -z "$CUDA_PATH" ]; then
+                echo "  CUDA 13 toolkit not found — skipping"
+                return 1
+            fi
+            echo "  CUDA toolkit: $CUDA_PATH (Blackwell GB10 build)"
+            # Use Ninja if available for faster builds on the 72-core Grace CPU
+            if command -v ninja &>/dev/null; then
+                CMAKE_ARGS+=(-G Ninja)
+                echo "  Generator: Ninja"
+            fi
+            CMAKE_ARGS+=(
+                -DGGML_CUDA=ON
+                -DCMAKE_CUDA_ARCHITECTURES="121-real"
+                -DGGML_CUDA_FA=ON
+                -DGGML_CUDA_FA_ALL_QUANTS=ON
+                -DGGML_CUDA_GRAPHS=ON
+                -DGGML_CUDA_MXFP4=ON
+                -DGGML_NATIVE=ON
+                -DGGML_CUDA_FORCE_MM_Q_8_0=ON
+                -DLLAMA_CURL=ON
+                -DCMAKE_CUDA_COMPILER="$CUDA_PATH/bin/nvcc"
+            )
+            ;;
         cuda12)
             DEST="$BUILD_ROOT/cuda12"
             mkdir -p "$DEST"
@@ -199,11 +234,16 @@ build_variant() {
     cmake "${CMAKE_ARGS[@]}"
 
     echo "  Building with $JOBS jobs..."
-    cmake --build "$BDIR" --config Release -j "$JOBS" --target llama-server
+    if cmake --build "$BDIR" --config Release -j "$JOBS" --target llama-server; then
+        : # success
+    else
+        # Ninja puts the binary in bin/ already; plain make may differ
+        echo "  cmake --build exited non-zero — checking for binary anyway"
+    fi
 
-    # Find the built binary
+    # Find the built binary (support both bin/ and root build dir)
     local BIN=""
-    for candidate in "$BDIR/bin/llama-server" "$BDIR/bin/Release/llama-server"; do
+    for candidate in "$BDIR/bin/llama-server" "$BDIR/bin/Release/llama-server" "$BDIR/llama-server"; do
         if [ -f "$candidate" ]; then BIN="$candidate"; break; fi
     done
     if [ -z "$BIN" ]; then
@@ -214,9 +254,17 @@ build_variant() {
     cp "$BIN" "$DEST/"
     chmod +x "$DEST/llama-server"
 
-    # Bundle shared libs on Linux
+    # Bundle ALL shared libs from the build bin/ dir (includes new libs like
+    # libllama-common, libmtmd that appeared in recent llama.cpp releases)
     if [[ "$(uname -s)" != "Darwin" ]]; then
         echo "  Bundling shared libraries..."
+        local BIN_DIR
+        BIN_DIR="$(dirname "$BIN")"
+        # Copy all .so* files built alongside the binary
+        find "$BIN_DIR" -name 'lib*.so*' | while read -r lib; do
+            cp -L "$lib" "$DEST/" 2>/dev/null || true
+        done
+        # Also bundle external runtime deps (libgomp, libstdc++, libcublas, etc.)
         bundle_libs_linux "$DEST/llama-server" "$DEST"
     fi
 
@@ -239,10 +287,28 @@ if [ "$TARGETS" = "auto" ]; then
     if [[ "$(uname -s)" == "Darwin" ]]; then
         build_variant metal
     else
-        build_variant cuda13 || echo "  (cuda13 skipped)"
-        build_variant cuda12 || echo "  (cuda12 skipped)"
-        build_variant cuda11 || echo "  (cuda11 skipped)"
-        build_variant cpu
+        # Auto-detect DGX Spark (GB10 Blackwell) and use peak-performance build
+        IS_SPARK=false
+        if command -v nvidia-smi &>/dev/null; then
+            GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || true)
+            if echo "$GPU_NAME" | grep -qi "gb10\|dgx spark"; then
+                IS_SPARK=true
+            fi
+            # Unified memory (N/A VRAM) is another Spark indicator
+            VRAM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader 2>/dev/null | head -1 || true)
+            if [ "$VRAM" = "[N/A]" ]; then
+                IS_SPARK=true
+            fi
+        fi
+        if $IS_SPARK; then
+            echo "  Detected DGX Spark / Blackwell GB10 — using peak-performance build"
+            build_variant cuda13-spark || echo "  (cuda13-spark failed)"
+        else
+            build_variant cuda13 || echo "  (cuda13 skipped)"
+            build_variant cuda12 || echo "  (cuda12 skipped)"
+            build_variant cuda11 || echo "  (cuda11 skipped)"
+            build_variant cpu
+        fi
     fi
 elif [ "$TARGETS" = "all" ]; then
     # Force all Linux variants

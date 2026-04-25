@@ -58,7 +58,8 @@ def register(node_id, hostname, hardware=None, token=None,
 def heartbeat(node_id, hostname, metrics=None, endpoints=None, hardware=None,
               agent_version=None, downloaded=None, agent_type=None,
               cpu_ram_enabled=None, activity=None, auto_unload=None,
-              peer_address=None):
+              peer_address=None, spec_decode=None, spec_candidates=None,
+              aggressive_vram=None, ram_offload=None):
     """Process a heartbeat from a node. Returns False if node unknown."""
     with _lock:
         node = _nodes.get(node_id)
@@ -87,6 +88,14 @@ def heartbeat(node_id, hostname, metrics=None, endpoints=None, hardware=None,
             node["activity"] = activity
         if auto_unload is not None:
             node["auto_unload"] = auto_unload
+        if spec_decode is not None:
+            node["spec_decode"] = spec_decode
+        if spec_candidates is not None:
+            node["spec_candidates"] = spec_candidates
+        if aggressive_vram is not None:
+            node["aggressive_vram"] = aggressive_vram
+        if ram_offload is not None:
+            node["ram_offload"] = ram_offload
         return True
 
 
